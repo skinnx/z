@@ -2,20 +2,21 @@
  * BYOK model access: build language models from user-configured providers,
  * chain them into per-lane fallbacks, list models live and account usage.
  */
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createOpenAI } from "@ai-sdk/openai";
+import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
+import { createGoogleGenerativeAI, google } from "@ai-sdk/google";
+import { createOpenAI, openai } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
   LoadAPIKeyError,
   NoSuchModelError,
   type LanguageModelV4,
+  type LanguageModelV4Content,
   type LanguageModelV4StreamPart,
   type LanguageModelV4Usage,
 } from "@ai-sdk/provider";
-import { createXai } from "@ai-sdk/xai";
-import { generateText } from "ai";
+import { createXai, xai } from "@ai-sdk/xai";
+import { generateText, type ToolSet } from "ai";
 import type { z } from "zod";
 import type { Lane, ModelRef, ProviderInput, ProviderKind, Routing } from "./contract.ts";
 
@@ -52,7 +53,15 @@ export function baseURLFor(p: Pick<ProviderConfig, "kind" | "baseURL">): string 
 
 const trimSlash = (url: string) => url.replace(/\/+$/, "");
 
-export function createLanguageModel(p: ProviderConfig, modelId: string): LanguageModelV4 {
+export type ModelOptions = {
+  /**
+   * Turn on search that runs inside the provider's API where it is a request option rather than
+   * a tool (OpenRouter's web plugin). Tool-based native search comes from `nativeSearchTools`.
+   */
+  webSearch?: boolean;
+};
+
+export function createLanguageModel(p: ProviderConfig, modelId: string, opts: ModelOptions = {}): LanguageModelV4 {
   const baseURL = baseURLFor(p);
   const apiKey = p.apiKey ?? undefined;
   const headers = p.headers;
@@ -66,9 +75,79 @@ export function createLanguageModel(p: ProviderConfig, modelId: string): Languag
     case "xai":
       return createXai({ baseURL, apiKey, headers })(modelId);
     case "openrouter":
+      if (opts.webSearch) return openRouterWithWebSearch(p.id, baseURL, apiKey, headers, modelId);
+      return createOpenAICompatible({ name: p.id, baseURL, apiKey, headers, includeUsage: true }).chatModel(modelId);
     case "ollama":
     case "openai-compatible":
       return createOpenAICompatible({ name: p.id, baseURL, apiKey, headers, includeUsage: true }).chatModel(modelId);
+  }
+}
+
+/**
+ * OpenRouter's `web` plugin searches before the model answers and returns `url_citation`
+ * annotations, which openai-compatible does not map; they are surfaced here as source parts.
+ * Only the first request of a tool loop searches (later ones already carry tool results).
+ * Unverified without an OpenRouter key: shapes follow OpenRouter's web search docs.
+ */
+function openRouterWithWebSearch(
+  name: string,
+  baseURL: string,
+  apiKey: string | undefined,
+  headers: Record<string, string> | undefined,
+  modelId: string,
+): LanguageModelV4 {
+  const model = createOpenAICompatible({
+    name,
+    baseURL,
+    apiKey,
+    headers,
+    includeUsage: true,
+    transformRequestBody: (args) =>
+      (args.messages as { role: string }[] | undefined)?.some((m) => m.role === "tool")
+        ? args
+        : { ...args, plugins: [{ id: "web", max_results: 5 }] },
+  }).chatModel(modelId);
+  return {
+    specificationVersion: "v4",
+    provider: model.provider,
+    modelId: model.modelId,
+    supportedUrls: model.supportedUrls,
+    doGenerate: async (options) => {
+      const result = await model.doGenerate(options);
+      type Body = { choices?: { message?: { annotations?: { type: string; url_citation?: { url: string; title?: string } }[] } }[] };
+      const annotations = (result.response?.body as Body | undefined)?.choices?.[0]?.message?.annotations ?? [];
+      const citations = annotations.flatMap((a, i): LanguageModelV4Content[] =>
+        a.type === "url_citation" && a.url_citation?.url
+          ? [{ type: "source", sourceType: "url", id: `openrouter-${i}`, url: a.url_citation.url, ...(a.url_citation.title ? { title: a.url_citation.title } : {}) }]
+          : [],
+      );
+      return citations.length ? { ...result, content: [...result.content, ...citations] } : result;
+    },
+    doStream: (options) => model.doStream(options),
+  };
+}
+
+/**
+ * Provider-executed web search for a provider kind, as AI SDK tools. Keys differ per provider so a
+ * chain mixing providers can carry all of them; each provider drops the others' tools with a warning.
+ * Read-only by nature: searching and page reads happen on the provider's side.
+ * Unverified without keys: built from the provider packages' typings.
+ */
+export function nativeSearchTools(kind: ProviderKind): ToolSet {
+  switch (kind) {
+    case "anthropic":
+      return { anthropic_web_search: anthropic.tools.webSearch_20250305({ maxUses: 3 }) };
+    case "openai":
+      // Needs the Responses API, which is what `createOpenAI()(id)` returns.
+      return { openai_web_search: openai.tools.webSearch({ searchContextSize: "low" }) };
+    case "google":
+      // Gemini before 3 can't combine it with function tools; the provider then keeps only search.
+      return { google_search: google.tools.googleSearch({}) };
+    case "xai":
+      // Grok's own grounding: the web and X posts.
+      return { xai_web_search: xai.tools.webSearch(), xai_x_search: xai.tools.xSearch() };
+    default:
+      return {};
   }
 }
 
@@ -108,7 +187,7 @@ export class ModelUnavailableError extends Error {
 
 export type ModelCall = { ref: ModelRef; usage: UsageReport };
 
-export type ChainOptions = {
+export type ChainOptions = ModelOptions & {
   /** Background work (agent, briefing) respects provider budgets. */
   background?: boolean;
   /** Called after every successful model call with the ref that served it. */
@@ -173,7 +252,7 @@ export function createModelResolver(deps: ModelResolverDeps) {
           const { providerId, modelId } = parseModelRef(ref);
           const p = provider(providerId);
           if (opts.background) checkBudget(p);
-          return await run(createLanguageModel(p, modelId), p, modelId, ref);
+          return await run(createLanguageModel(p, modelId, opts), p, modelId, ref);
         } catch (error) {
           lastError = error;
           if (!isFallbackError(error)) throw error;
@@ -207,13 +286,25 @@ export function createModelResolver(deps: ModelResolverDeps) {
     };
   }
 
+  const laneRefs = (routing: Routing, lane: Lane): ModelRef[] =>
+    routing[lane]?.length ? routing[lane]! : lane === "fast" ? (routing.agent ?? []) : [];
+
   /** The fallback chain for a lane; `fast` falls back to `agent` when empty. */
   function forLane(routing: Routing, lane: Lane, opts: ChainOptions = {}): LanguageModelV4 {
-    const refs = routing[lane]?.length ? routing[lane]! : lane === "fast" ? (routing.agent ?? []) : [];
-    return chain(refs, opts);
+    return chain(laneRefs(routing, lane), opts);
   }
 
-  return { resolveModel, chain, forLane };
+  /** Native search tools for every enabled provider in a lane's chain that has one. */
+  function searchTools(routing: Routing, lane: Lane): ToolSet {
+    const tools: ToolSet = {};
+    for (const ref of laneRefs(routing, lane)) {
+      const p = deps.providers().find((x) => x.id === parseModelRef(ref).providerId);
+      if (p?.enabled) Object.assign(tools, nativeSearchTools(p.kind));
+    }
+    return tools;
+  }
+
+  return { resolveModel, chain, forLane, searchTools };
 }
 
 export class NoModelConfiguredError extends Error {

@@ -221,14 +221,22 @@ export type InboundMessage = {
   addressed: boolean;
   /** The post/message being replied to: what "is this true?" refers to. */
   context?: { author: string; text: string; url?: string; images?: string[] }[];
-  /** Image URLs attached to the message itself (fetchable by the server). */
+  /**
+   * Image URLs attached to the message itself (fetchable by the server). Adapters for platforms
+   * whose files need auth to download (Slack) pass `data:` URLs instead.
+   */
   images?: string[];
   receivedAt: string;
 };
 
 export type Source = { title: string; url: string };
-/** `sources` are rendered by the adapter in the platform's link style, after `text`. */
-export type OutboundReply = { text: string; replyTo: string; sources?: Source[] };
+/** The bot's call on a claim it was asked to check. */
+export type Verdict = "true" | "false" | "misleading" | "unverified";
+/**
+ * `text` already leads with the verdict when there is one. `sources` are pages a tool actually
+ * returned or read (never model-invented URLs); adapters render them after `text` in the platform's link style.
+ */
+export type OutboundReply = { text: string; replyTo: string; verdict?: Verdict; sources?: Source[] };
 
 // ─── Plugins: the extension point ───────────────────────────────────────────
 
