@@ -50,6 +50,8 @@ export type ZTool<I = any, O = unknown> = {
   /** Never offered to channel bots, which strangers can reach (e.g. tools over the owner's memory). */
   ownerOnly?: boolean;
   execute: (input: I, ctx: ToolContext) => Promise<O>;
+  /** What the model sees instead of the raw output, e.g. an image part for vision models (AI SDK `toModelOutput`). */
+  toModelOutput?(options: { output: O }): unknown;
 };
 
 export type BriefingContext = Omit<ToolContext, "signal"> & { since: Date; timezone: string };
