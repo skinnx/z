@@ -22,6 +22,8 @@ export const keys = {
   channels: ["channels"] as const,
   plugins: ["plugins"] as const,
   threads: ["threads"] as const,
+  notices: ["notices"] as const,
+  memories: ["memories"] as const,
   thread: (id: string) => ["thread", id] as const,
 };
 

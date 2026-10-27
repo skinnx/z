@@ -1,4 +1,4 @@
-import { Blocks, House, KeyRound, ListChecks, MessageSquare, RadioTower, Settings, type LucideIcon } from "lucide-react";
+import { Blocks, Brain, House, KeyRound, ListChecks, MessageSquare, RadioTower, Settings, type LucideIcon } from "lucide-react";
 import type { Dict } from "../i18n.ts";
 
 export type NavItem = { to: string; label: keyof Dict & `nav_${string}`; icon: LucideIcon; primary: boolean };
@@ -9,6 +9,7 @@ export const NAV: NavItem[] = [
   { to: "/chat", label: "nav_chat", icon: MessageSquare, primary: true },
   { to: "/tasks", label: "nav_tasks", icon: ListChecks, primary: true },
   { to: "/models", label: "nav_models", icon: KeyRound, primary: true },
+  { to: "/memory", label: "nav_memory", icon: Brain, primary: false },
   { to: "/channels", label: "nav_channels", icon: RadioTower, primary: false },
   { to: "/plugins", label: "nav_plugins", icon: Blocks, primary: false },
   { to: "/settings", label: "nav_settings", icon: Settings, primary: false },

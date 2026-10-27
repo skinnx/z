@@ -1,4 +1,4 @@
-import type { BriefItem, ChannelKind, Lane, Risk, TaskStatus } from "@z/core";
+import type { BriefItem, ChannelKind, Lane, Notice, Risk, TaskStatus } from "@z/core";
 import {
   AtSign,
   Ban,
@@ -17,8 +17,10 @@ import {
   MessageSquare,
   Newspaper,
   PenLine,
+  Radar,
   Reply,
   Send,
+  ShieldAlert,
   Sunrise,
   TrendingUp,
   Webhook,
@@ -45,6 +47,13 @@ export const laneIcon: Record<Lane, LucideIcon> = {
   briefing: Sunrise,
   bot: AtSign,
   fast: Zap,
+};
+
+export const noticeKindIcon: Record<Notice["kind"], LucideIcon> = {
+  approval: ShieldAlert,
+  watch: Radar,
+  task: CircleCheck,
+  briefing: Sunrise,
 };
 
 export const briefKindIcon: Record<BriefItem["kind"], LucideIcon> = {
