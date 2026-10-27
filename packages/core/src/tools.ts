@@ -16,6 +16,8 @@ export type BuildToolsOptions = {
   only?: string[] | null;
   /** Expose only read-risk tools, and never anything that would need approval. */
   readOnly?: boolean;
+  /** Expose only tools marked `public` (no access to the owner's own data). */
+  publicOnly?: boolean;
   log?: (text: string) => void;
   onCall?: (report: ToolCallReport) => void;
 };
@@ -58,6 +60,7 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
     const needsApproval = approvalFor(info.name, info.risk, options.policy);
     if (needsApproval === null) continue;
     if (options.readOnly && (info.risk !== "read" || needsApproval)) continue;
+    if (options.publicOnly && !info.tool.public) continue;
 
     const settings = settingsById.get(info.pluginId) ?? {};
     const log = (text: string) => options.log?.(`[${info.name}] ${text}`);

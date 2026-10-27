@@ -39,6 +39,11 @@ export type ToolContext = {
 export type ZTool<I = any, O = unknown> = {
   description: string;
   risk: Risk;
+  /**
+   * Reads only public knowledge (web search, reference lookups), never the owner's own data.
+   * The summonable bot answers strangers, so it only gets read tools marked public.
+   */
+  public?: boolean;
   inputSchema: z.ZodType<I>;
   /** One line shown on the approval card, e.g. `Post "…" to #general`. */
   summarize?: (input: I) => string;
