@@ -161,7 +161,13 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
     throw new Error(`Invalid URL: ${raw}`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error(`Only http(s) URLs are allowed`);
-  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  await resolvePublicHost(url.hostname);
+  return url;
+}
+
+/** Addresses `hostname` resolves to; throws if it names a private host or any address is private. */
+export async function resolvePublicHost(hostname: string): Promise<string[]> {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) {
     throw new Error(`Refusing to fetch private host ${host}`);
   }
@@ -169,7 +175,7 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
     throw new Error(`Refusing to fetch private host ${host}`);
   }
-  return url;
+  return addresses;
 }
 
 /** fetch that re-checks every redirect hop against the SSRF guard. */
