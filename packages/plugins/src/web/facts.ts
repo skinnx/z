@@ -42,7 +42,7 @@ const Lang = z
   .string()
   .regex(/^[a-z]{2,3}(-[a-z]+)?$/)
   .default("en")
-  .describe("Wikipedia language code matching the claim's language, e.g. en, vi, fr");
+  .describe("Language of the claim, e.g. en, vi");
 
 // ─── Wikipedia ──────────────────────────────────────────────────────────────
 
@@ -131,26 +131,28 @@ export const wikipedia = defineTool({
   risk: "read",
   public: true,
   inputSchema: z.object({
-    query: z.string().min(1).max(300).describe("Search terms or an exact article title"),
-    focus: z.string().max(300).optional().describe("What you need from the article, e.g. the specific claim being checked"),
+    query: z.string().min(1).max(300).describe("Search terms or an article title"),
+    focus: z.string().max(300).optional().describe("The specific claim or detail you need"),
     lang: Lang,
-    maxChars: z.number().int().min(500).max(12_000).default(2000),
   }),
-  execute: async ({ query, focus, lang, maxChars }, ctx) => {
-    const hits = await wikipediaSearch(ctx, query, lang, 5);
-    const exact = hits.find((h) => h.title.toLowerCase() === query.trim().toLowerCase());
-    const best = exact ?? hits[0];
-    const article = best ? await wikipediaExtract(ctx, best.title, lang) : null;
-    return {
-      article: article
-        ? { title: article.title, url: article.url, lastEdited: article.touched, text: focusText(article.text, focus ?? query, maxChars) }
-        : null,
-      otherResults: hits
-        .filter((h) => h !== best)
-        .map((h) => ({ title: h.title, url: h.url, ...(h.description ? { description: h.description } : {}) })),
-    };
-  },
+  execute: ({ query, focus, lang }, ctx) => lookUp(ctx, query, focus ?? query, lang, 2000),
 });
+
+/** Search Wikipedia and read the best hit, focused on what the question needs. */
+export async function lookUp(ctx: ToolContext, query: string, focus: string, lang: string, maxChars: number) {
+  const hits = await wikipediaSearch(ctx, query, lang, 5);
+  const exact = hits.find((h) => h.title.toLowerCase() === query.trim().toLowerCase());
+  const best = exact ?? hits[0];
+  const article = best ? await wikipediaExtract(ctx, best.title, lang) : null;
+  return {
+    article: article
+      ? { title: article.title, url: article.url, lastEdited: article.touched, text: focusText(article.text, focus, maxChars) }
+      : null,
+    otherResults: hits
+      .filter((h) => h !== best)
+      .map((h) => ({ title: h.title, url: h.url, ...(h.description ? { description: h.description } : {}) })),
+  };
+}
 
 // ─── Wikidata ───────────────────────────────────────────────────────────────
 
@@ -230,15 +232,10 @@ export const wikidata = defineTool({
   risk: "read",
   public: true,
   inputSchema: z.object({
-    query: z.string().min(1).max(200).describe("Name of the entity, e.g. 'Mount Everest' or 'Vietnam'"),
+    query: z.string().min(1).max(200).describe("Entity name, e.g. Mount Everest"),
     lang: Lang,
-    properties: z
-      .array(z.string().regex(/^P\d+$/))
-      .max(20)
-      .optional()
-      .describe("Only these property ids (e.g. P1082 population); omit for the most common statements"),
   }),
-  execute: async ({ query, lang, properties }, ctx) => {
+  execute: async ({ query, lang }, ctx) => {
     const url = new URL(WIKIDATA);
     for (const [k, v] of Object.entries({ action: "wbsearchentities", search: query, language: lang, uselang: lang, type: "item", limit: "3", format: "json" })) {
       url.searchParams.set(k, v);
@@ -249,11 +246,11 @@ export const wikidata = defineTool({
 
     const entity = (await entities(ctx, [top.id], "labels|descriptions|claims|sitelinks", lang))[top.id];
     const claims = Object.entries(entity?.claims ?? {})
-      .filter(([pid]) => (properties ? properties.includes(pid) : !NOISE.has(pid)))
+      .filter(([pid]) => !NOISE.has(pid))
       // Identifiers (external ids, media, URLs) are noise for fact checking.
       .map(([pid, list]) => [pid, list.filter((c) => c.rank !== "deprecated" && ["wikibase-entityid", "time", "quantity", "monolingualtext", "globecoordinate"].includes(c.mainsnak.datavalue?.type ?? ""))] as const)
       .filter(([, list]) => list.length > 0)
-      .slice(0, properties ? 20 : 30);
+      .slice(0, 30);
 
     const ids = new Set<string>();
     for (const [pid, list] of claims) {
@@ -311,10 +308,10 @@ export const hackerNews = defineTool({
   public: true,
   inputSchema: z.object({
     query: z.string().min(1).max(200),
-    recent: z.boolean().default(false).describe("Sort by date instead of relevance, for breaking news"),
-    limit: z.number().int().min(1).max(20).default(8),
+    recent: z.boolean().default(false).describe("Newest first, for breaking news"),
   }),
-  execute: async ({ query, recent, limit }, ctx) => {
+  execute: async ({ query, recent }, ctx) => {
+    const limit = 8;
     const url = new URL(`https://hn.algolia.com/api/v1/${recent ? "search_by_date" : "search"}`);
     url.searchParams.set("query", query);
     url.searchParams.set("tags", "story");
