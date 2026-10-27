@@ -114,15 +114,10 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (channel_id, key)
   );
   `,
-  // ── Proactive: watch tasks (mode + de-dup fingerprints + last finding) ──
+  // ─── Reach & delivery: notices, Web Push devices ──────────────────────────
+  // IF NOT EXISTS: other branches may create `notices` too; the shape follows the Notice contract.
   `
-  ALTER TABLE tasks ADD COLUMN mode TEXT NOT NULL DEFAULT 'do';
-  ALTER TABLE tasks ADD COLUMN watch TEXT;          -- JSON Task["watch"]
-  ALTER TABLE tasks ADD COLUMN fingerprints TEXT;   -- JSON string[] already notified
-  `,
-  // ── Proactive: notices (in-app inbox; push/owner-channel delivery hooks into notify()) ──
-  `
-  CREATE TABLE notices (
+  CREATE TABLE IF NOT EXISTS notices (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     title TEXT NOT NULL,
@@ -132,11 +127,25 @@ const MIGRATIONS: string[] = [
     read INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );
-  CREATE INDEX notices_created ON notices(created_at);
+  CREATE INDEX IF NOT EXISTS notices_created ON notices(created_at);
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    keys TEXT NOT NULL,       -- sealed JSON { p256dh, auth }
+    device TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
   `,
-  // ── Proactive: long-term memory ──
+  // ─── End reach & delivery ─────────────────────────────────────────────────
+  // ─── Proactive: watch tasks (mode + de-dup fingerprints + last finding) ───
   `
-  CREATE TABLE memories (
+  ALTER TABLE tasks ADD COLUMN mode TEXT NOT NULL DEFAULT 'do';
+  ALTER TABLE tasks ADD COLUMN watch TEXT;          -- JSON Task["watch"]
+  ALTER TABLE tasks ADD COLUMN fingerprints TEXT;   -- JSON string[] seen by earlier checks
+  `,
+  // ─── Proactive: long-term memory ──────────────────────────────────────────
+  `
+  CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     text TEXT NOT NULL,
     source TEXT NOT NULL,     -- user | agent
@@ -144,6 +153,7 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  // ─── End proactive ────────────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

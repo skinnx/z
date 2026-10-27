@@ -10,14 +10,17 @@ import { createChannels } from "./channels.ts";
 import { createSealer } from "./crypto.ts";
 import { openDatabase } from "./db.ts";
 import { loadEnv } from "./env.ts";
+import { startDelivery } from "./notify.ts";
+import { createPairing } from "./owner.ts";
 import { createPluginRegistry, loadPlugins } from "./plugins.ts";
 import { memoryPlugin } from "./plugins/memory.ts";
+import { createPush } from "./push.ts";
 import { channelRoutes } from "./routes/channels.ts";
 import { chatRoutes } from "./routes/chat.ts";
 import { configRoutes } from "./routes/config.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { memoryRoutes } from "./routes/memory.ts";
-import { noticeRoutes } from "./routes/notices.ts";
+import { reachRoutes } from "./routes/reach.ts";
 import { workRoutes } from "./routes/work.ts";
 import { createRuntime } from "./runtime.ts";
 import { mountWeb } from "./static.ts";
@@ -29,7 +32,12 @@ const env = loadEnv();
 const store = createStore(openDatabase(env.dataDir), createSealer(env.masterKey));
 const plugins = createPluginRegistry(await loadPlugins(env.plugins, [memoryPlugin(store)]), store);
 const rt = createRuntime(env, store, plugins, createBus());
-const services: Services = { rt, tasks: createTasks(rt), briefings: createBriefings(rt), channels: createChannels(rt) };
+const tasks = createTasks(rt);
+const pairing = createPairing();
+const push = createPush(rt);
+const channels = createChannels(rt, tasks, pairing);
+startDelivery(rt, push, channels);
+const services: Services = { rt, tasks, briefings: createBriefings(rt), channels, push, pairing };
 
 const app = new Hono();
 
@@ -43,7 +51,7 @@ app.onError((error, c) => {
 const api = new Hono();
 api.use("*", auth(env.token));
 api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
-for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, eventRoutes, noticeRoutes, memoryRoutes]) api.route("/", routes(services));
+for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes]) api.route("/", routes(services));
 api.all("*", (c) => c.json({ error: "Not found" }, 404));
 
 app.route("/api", api);

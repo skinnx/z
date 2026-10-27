@@ -16,6 +16,7 @@ import {
 } from "@z/core";
 import type { ModelMessage } from "ai";
 import type { z } from "zod";
+import { clip, notify } from "./notify.ts";
 import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
 
@@ -90,7 +91,8 @@ export function createTasks(rt: Runtime) {
           store.approvals.insert(approval);
           events.push({ type: "approval", at: approval.createdAt, approvalId: approval.id });
           bus.emit({ type: "approval", approval });
-          rt.notify({ kind: "approval", title: `Approve? ${task.title}`, body: approval.summary, path: "/", approvalId: approval.id });
+          const title = store.tasks.get(id)?.title ?? task.title;
+          notify({ kind: "approval", title: `Approval needed · ${clip(title, 80)}`, body: approval.summary, path: "/", approvalId: approval.id });
         }
         store.tasks.appendEvents(id, events);
         update(id, { status: "waiting" });
@@ -126,9 +128,7 @@ export function createTasks(rt: Runtime) {
       const previous = store.tasks.get(id)?.watch?.lastFinding ?? null;
       const lastFinding = decision.notify ? { title: decision.title, body: decision.body, at: checkedAt } : previous;
       store.tasks.recordWatch(id, { lastCheckAt: checkedAt, lastFinding }, outcome.fingerprints, MAX_FINGERPRINTS);
-      if (decision.notify) {
-        rt.notify({ kind: "watch", title: decision.title, body: decision.body, path: `/tasks?task=${encodeURIComponent(id)}` });
-      }
+      if (decision.notify) notify({ kind: "watch", title: clip(decision.title, 120), body: clip(decision.body, 1000), path: `/tasks?task=${id}` });
       finish(task, { ...(decision.notify ? { result: decision.body } : {}), error: null }, "done");
     } catch (error) {
       finish(task, { error: error instanceof Error ? error.message : String(error) }, "failed");
@@ -138,19 +138,18 @@ export function createTasks(rt: Runtime) {
     }
   }
 
-  /** One-shot tasks end (and tell the owner); recurring ones go back to `scheduled`. */
+  /** One-shot tasks end and tell the owner; recurring ones go back to `scheduled`. */
   function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed") {
     if (task.schedule) {
       update(task.id, { ...patch, status: "scheduled", nextRunAt: nextRunAt(task.schedule, timezone()) });
       return;
     }
     const done = update(task.id, { ...patch, status, nextRunAt: null });
-    if (!done) return;
-    rt.notify({
+    notify({
       kind: "task",
-      title: `${status === "done" ? "Done" : "Failed"}: ${done.title}`,
-      body: (status === "done" ? done.result : done.error) ?? "",
-      path: `/tasks?task=${encodeURIComponent(task.id)}`,
+      title: `${status === "done" ? "Done" : "Failed"} · ${clip(done?.title ?? task.title, 80)}`,
+      body: clip((status === "done" ? patch.result : patch.error) || "", 300),
+      path: `/tasks?task=${task.id}`,
     });
   }
 
@@ -169,10 +168,7 @@ export function createTasks(rt: Runtime) {
   }
 
   function expireApprovals(taskId: string) {
-    for (const approval of store.approvals.expireForTask(taskId)) {
-      bus.emit({ type: "approval", approval });
-      rt.notices.markRead(store.notices.unreadForApproval(approval.id));
-    }
+    for (const approval of store.approvals.expireForTask(taskId)) bus.emit({ type: "approval", approval });
   }
 
   function stop(id: string) {
@@ -250,7 +246,6 @@ export function createTasks(rt: Runtime) {
 
       const decided = store.approvals.decide(approvalId, decision.approve ? "approved" : "denied", decision.note ?? null);
       bus.emit({ type: "approval", approval: decided });
-      rt.notices.markRead(store.notices.unreadForApproval(approvalId));
       if (decision.remember) remember(decided, decision.approve);
 
       const task = store.tasks.get(approval.taskId);
