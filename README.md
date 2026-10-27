@@ -47,7 +47,7 @@ or `docker build -t z . && docker run -p 8787:8787 -v z-data:/data z`.
 
 ```
 packages/core      shared contract (contract.ts), plugin API (plugin.ts), agent/bot/briefing/chat runtime
-packages/plugins   built-in plugins: web, rss, github, clock, channel adapters
+packages/plugins   built-in plugins: web, browser, rss, github, clock, channel adapters
 apps/server        Hono + node:sqlite: API, scheduler, secrets vault, channel runtime
 apps/web           React 19 + Base UI + Tailwind v4 + lucide
 ```
@@ -65,6 +65,26 @@ Every tool declares a risk:
 | `external` | post publicly, send a message, open an issue | always asks |
 
 Change the policy per tool under **Settings**. Bots answering in channels only ever get `read` tools, so strangers can't make z act on your behalf.
+
+## Browser
+
+The **Browser** plugin gives the agent a real headless Chromium (JavaScript, logins, forms) through [playwright-core](https://playwright.dev), an optional dependency:
+
+```sh
+pnpm install                       # includes playwright-core unless optional deps are skipped
+npx playwright install chromium    # or set "Chrome/Chromium executable path" in the plugin settings
+```
+
+Without it the plugin shows as unavailable with these instructions. To drive a Chrome you already run, start it with `--remote-debugging-port=9222` and set the CDP URL; z opens its own isolated context there and only disconnects when done.
+
+| Tool | Risk | |
+| --- | --- | --- |
+| `open`, `read` | `read` | Page text with numbered elements (`[12] button "Sign in"`); `read` can scope to a selector or element, or `find` lines |
+| `screenshot` | `read` | Viewport PNG, handed to vision models |
+| `click`, `type`, `select` | `write` | Approval cards name the element and site: `Click "Place order" on shop.example.com` |
+| `submit` | `external` | Type (optionally) and press Enter — sends data to the site |
+
+All browser traffic goes through a local guard proxy that applies `fetch_page`'s SSRF rules to every navigation, redirect hop, subresource and WebSocket, so pages can't reach localhost, your LAN or cloud metadata. Password fields are masked in snapshots and approval cards. The browser starts on first use and closes after 5 idle minutes.
 
 ## Writing a plugin
 
