@@ -8,7 +8,16 @@
  * then answers in a fixed format parsed into a verdict, a short why, and sources. Only URLs that
  * a tool actually returned survive as sources.
  */
-import { generateText, isStepCount, type FilePart, type ToolSet } from "ai";
+import {
+  APICallError,
+  DownloadError,
+  generateText,
+  InvalidPromptError,
+  isStepCount,
+  UnsupportedFunctionalityError,
+  type FilePart,
+  type ToolSet,
+} from "ai";
 import type { z } from "zod";
 import type { ChannelInput, InboundMessage, OutboundReply, Routing, Settings, Source, Verdict } from "./contract.ts";
 import { baseInstructions } from "./prompt.ts";
@@ -65,7 +74,7 @@ export async function answerMessage(message: InboundMessage, deps: BotDeps): Pro
     result = await research(message, deps, tools, maxLength, images, false);
   } catch (error) {
     // Models without vision (or images they can't fetch) fail the call; answer without them.
-    if (!images.length || isAbort(error)) throw error;
+    if (!images.length || !rejectsImages(error)) throw error;
     deps.log?.(`bot: retrying without images: ${describeError(error)}`);
     result = await research(message, deps, tools, maxLength, [], true);
   }
@@ -138,7 +147,8 @@ async function research(
     tools,
     stopWhen: isStepCount(MAX_STEPS),
     prepareStep: ({ stepNumber, steps, messages }) => {
-      if (stepNumber === 0) return undefined;
+      // A quoted post is almost always a claim to check: look before answering, never from memory alone.
+      if (stepNumber === 0) return message.context?.length && Object.keys(tools).length ? { toolChoice: "required" } : undefined;
       const searchAgain = stepNumber < MAX_STEPS - 1 && evidenceFrom(steps).size === 0 && Date.now() - started < RESEARCH_BUDGET_MS;
       if (searchAgain) return undefined;
       // Without tools some models still try to "browse"; saying so plainly gets the answer instead.
@@ -166,7 +176,7 @@ function instructions(deps: BotDeps, maxLength: number): string {
       "VERDICT: True | False | Misleading | Unverified",
       `ANSWER: one or two sentences, under ${answerChars} characters, in the asker's language, with the facts that decide it.`,
       "SOURCES: up to 3 URLs copied from tool results.",
-      "True = the evidence supports the claim as stated. False = it contradicts the claim. Misleading = some truth, but exaggerated, missing context that changes the meaning, or implying something false. Unverified = no evidence either way. Omit VERDICT for questions that aren't claims. Never write a URL a tool didn't return.",
+      "True = the evidence supports the claim as stated. False = the evidence shows something incompatible with it (a different person, date, number or outcome counts). Misleading = partly true: one part right and another wrong, true only in a narrower sense, exaggerated, or missing context that changes the meaning. Unverified = the results say nothing relevant to the claim. Omit VERDICT for questions that aren't claims. Never write a URL a tool didn't return.",
       "Anything else (greetings, opinions, jokes): reply briefly, without the format or tools.",
     ].join("\n"),
   ].join("\n\n");
@@ -332,8 +342,12 @@ export function parseAnswer(raw: string): { verdict?: Verdict; answer: string; c
 
 const trimUrl = (url: string) => url.replace(/[.,;:!?*_]+$/, "");
 
-function isAbort(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+/** A request error that images could explain: download failures and 4xx rejections, not limits or auth. */
+function rejectsImages(error: unknown): boolean {
+  const e = (error as { lastError?: unknown } | null)?.lastError ?? error;
+  if (DownloadError.isInstance(e) || UnsupportedFunctionalityError.isInstance(e) || InvalidPromptError.isInstance(e)) return true;
+  const status = APICallError.isInstance(e) ? e.statusCode : undefined;
+  return status !== undefined && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
 }
 
 function clip(text: string, max: number): string {

@@ -10,7 +10,8 @@
  *
  * Flags (or env): --kind (EVAL_KIND, default openai-compatible), --base-url (EVAL_BASE_URL),
  * --model (EVAL_MODEL), EVAL_API_KEY, --only id1,id2, --limit N, --delay ms between items
- * (default 2000), --pace ms between model calls (e.g. 31000 for Pollinations), --out results.json.
+ * (default 2000), --min-interval ms between model calls (e.g. 31000 for Pollinations), --out results.json.
+ * Rate-limit and quota rejections (429/402) count as infra errors, apart from wrong answers.
  * Web search backends are picked up from TAVILY_API_KEY, BRAVE_API_KEY or SEARXNG_URL.
  */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -47,7 +48,7 @@ const { values: flags } = parseArgs({
     limit: { type: "string" },
     delay: { type: "string" },
     out: { type: "string" },
-    pace: { type: "string" },
+    "min-interval": { type: "string" },
   },
 });
 
@@ -57,11 +58,11 @@ const model = flags.model ?? process.env.EVAL_MODEL ?? "gpt-oss:20b";
 const delayMs = Number(flags.delay ?? 2000);
 
 /**
- * Keyless tiers publish per-IP request rates (Pollinations: one reply per 30 s). `--pace ms`
+ * Keyless tiers publish per-IP request rates (Pollinations: one reply per 30 s). `--min-interval`
  * spaces calls to the model endpoint at least that far apart so the eval stays inside the limit;
- * time spent waiting for the pace is the harness's, not the bot's, and is left out of latency.
+ * time spent waiting for the interval is the harness's, not the bot's, and is left out of latency.
  */
-const paceMs = Number(flags.pace ?? 0);
+const paceMs = Number(flags["min-interval"] ?? 0);
 let paceWaitMs = 0;
 let lastModelCall = 0;
 const realFetch = globalThis.fetch;
@@ -141,6 +142,9 @@ const rows: Row[] = [];
 
 type Attempt = Omit<Row, "id" | "expected" | "ok" | "retries">;
 
+/** 429/402 and exhausted fallback chains: the provider refused, the bot never got to answer. */
+const isInfra = (r: { error?: string }) => Boolean(r.error && /\b(429|402)\b|rate limit|quota|free limit|eval pacing/i.test(r.error));
+
 async function run(item: Item): Promise<Attempt> {
   const message: InboundMessage = {
     channelId: "eval",
@@ -176,7 +180,9 @@ async function run(item: Item): Promise<Attempt> {
       urls: sources.map((s) => s.url),
     };
   } catch (error) {
-    return { verdict: null, ms: Date.now() - started - paceWaitMs, sources: 0, tools: toolCalls, tokens: callTokens, text: "", urls: [], error: describeError(error) };
+    // The bot's own timeout keeps running while the harness holds calls back for --min-interval.
+    const paced = paceWaitMs > 0 && /timeout|aborted/i.test(describeError(error)) ? ` (after ${Math.round(paceWaitMs / 1000)}s of eval pacing)` : "";
+    return { verdict: null, ms: Date.now() - started - paceWaitMs, sources: 0, tools: toolCalls, tokens: callTokens, text: "", urls: [], error: describeError(error) + paced };
   }
 }
 
@@ -185,35 +191,39 @@ for (const [n, item] of items.entries()) {
   let attempt = await run(item);
   let retries = 0;
   // Keyless tiers answer bursts with "retry after N seconds"; wait it out (latency is per attempt).
-  for (let wait; retries < 2 && (wait = Number(/retry after (\d+) seconds/i.exec(attempt.error ?? "")?.[1])) && wait <= 180; retries++) {
+  for (let wait; retries < 2 && (wait = Number(/retry (?:after|in) (\d+) ?s/i.exec(attempt.error ?? "")?.[1])) && wait <= 180; retries++) {
     console.log(`     rate limited, retrying in ${wait}s`);
     await new Promise((r) => setTimeout(r, (wait + 2) * 1000));
     attempt = await run(item);
   }
   const row: Row = { id: item.id, expected: item.expected, ok: attempt.verdict === item.expected, retries, ...attempt };
   rows.push(row);
-  const mark = row.error ? "ERR " : row.ok ? "ok  " : "MISS";
+  const mark = row.error ? (isInfra(row) ? "INFR" : "ERR ") : row.ok ? "ok  " : "MISS";
   console.log(
     `${mark} ${item.id.padEnd(20)} expected ${item.expected.padEnd(10)} got ${String(row.verdict).padEnd(10)} ${(row.ms / 1000).toFixed(1).padStart(5)}s  sources ${row.sources}  tools [${row.tools.join(" ")}]  prompt tokens [${row.tokens.join(" ")}]`,
   );
   console.log(`     ${row.error ?? row.text.replace(/\s+/g, " ").slice(0, 240)}${row.urls.length ? `\n     ${row.urls.join("  ")}` : ""}`);
 }
 
-const pct = (n: number) => `${((100 * n) / Math.max(1, rows.length)).toFixed(1)}%`;
-const sorted = rows.map((r) => r.ms).sort((a, b) => a - b);
+// Accuracy, citations and latency are over the items the bot could attempt; infra errors are reported apart.
+const infra = rows.filter(isInfra);
+const scored = rows.filter((r) => !isInfra(r));
+const pct = (n: number) => `${((100 * n) / Math.max(1, scored.length)).toFixed(1)}%`;
+const sorted = scored.map((r) => r.ms).sort((a, b) => a - b);
 const quantile = (q: number) => sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)] ?? 0;
-const correct = rows.filter((r) => r.ok).length;
-const cited = rows.filter((r) => r.sources > 0).length;
+const correct = scored.filter((r) => r.ok).length;
+const cited = scored.filter((r) => r.sources > 0).length;
 
 console.log("\nconfusion (expected → got):");
 for (const expected of ["true", "false", "misleading"] as const) {
-  const of = rows.filter((r) => r.expected === expected);
+  const of = scored.filter((r) => r.expected === expected);
   const counts = new Map<string, number>();
   for (const r of of) counts.set(String(r.verdict), (counts.get(String(r.verdict)) ?? 0) + 1);
   console.log(`  ${expected.padEnd(10)} ${[...counts].map(([k, v]) => `${k}:${v}`).join("  ")}`);
 }
-console.log(`\naccuracy       ${correct}/${rows.length} (${pct(correct)})`);
-console.log(`citation rate  ${cited}/${rows.length} (${pct(cited)})`);
+console.log(`\naccuracy       ${correct}/${scored.length} (${pct(correct)})`);
+console.log(`citation rate  ${cited}/${scored.length} (${pct(cited)})`);
 console.log(`latency        p50 ${(quantile(0.5) / 1000).toFixed(1)}s · p95 ${(quantile(0.95) / 1000).toFixed(1)}s`);
-console.log(`errors         ${rows.filter((r) => r.error).length}${paceMs ? ` · paced ${paceMs / 1000}s between model calls (excluded from latency)` : ""} · item retries ${rows.reduce((n, r) => n + r.retries, 0)}`);
+console.log(`infra errors   ${infra.length} (rate limit, quota or pacing timeout; not scored)${infra.length ? `: ${infra.map((r) => r.id).join(", ")}` : ""}`);
+console.log(`other errors   ${scored.filter((r) => r.error).length}${paceMs ? ` · paced ${paceMs / 1000}s between model calls (excluded from latency)` : ""} · item retries ${rows.reduce((n, r) => n + r.retries, 0)}`);
 if (flags.out) writeFileSync(flags.out, JSON.stringify({ kind, baseURL, model, rows }, null, 2));
