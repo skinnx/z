@@ -2,10 +2,26 @@
 
 An open-source, self-hosted AI agent that brings your own keys.
 
-- **Proactive** — a morning briefing, tasks you delegate that keep running while you're away (once or on a schedule), and it asks before it acts.
-- **Summonable** — mention it in Telegram, Slack, Discord, X or any webhook ("@z is this true?") and it answers with the thread's context.
+- **Proactive** — a morning briefing with suggested next steps, tasks you delegate that keep running while you're away (once or on a schedule), standing *watches* that only speak up when something new matters, and long-term memory you can read and edit. It asks before it acts — and reaches you to ask, by push or in your own chat app.
+- **Summonable** — mention it in Telegram, Slack, Discord, X or any webhook ("@z is this true?") and it researches, gives a verdict and links the sources it actually read.
 - **BYOK, properly** — any provider (OpenAI, Anthropic, Google, xAI, OpenRouter, Ollama, any OpenAI-compatible endpoint). Keys are encrypted on your server and never sent back to the browser. Each job (chat, agent, briefing, bot, fast) has its own ordered fallback chain of models, with usage and an optional monthly budget per provider.
 - **Extensible** — tools, briefing sources and channel adapters are plain TypeScript plugins.
+
+## Compared with Claude Duet and the Grok bot
+
+| | Claude Duet | Grok on X | z |
+| --- | --- | --- | --- |
+| Models | Claude only | Grok only | Any provider, per-job fallback chains, local models |
+| Where it lives | Anthropic's app | X | Your server; web app is an installable PWA |
+| Asking before acting | In the Duet app | — | Push notification with Approve/Deny, or buttons in your Telegram/Discord/Slack, per-tool policy |
+| Proactive work | Morning summary, tasks | — | Briefing with suggestions and proposed tasks, scheduled tasks, watches with de-duplication |
+| Memory | Built in | — | Built in, visible and editable, never exposed to channel bots |
+| Browser | In its VM | — | Headless Chromium plugin; clicks/typing need approval; SSRF-guarded proxy |
+| Sensitive data | Refuses card numbers | — | Blocks card numbers, IBANs, private keys and API keys from leaving via write/external tools |
+| "Is this true?" | — | On X, with live search | On X, Telegram, Discord, Slack and webhooks; verdict + validated sources; provider-native search when your key has it |
+| Extending it | — | — | TypeScript plugins: tools, briefing sources, channel adapters |
+
+Measured, not claimed: `pnpm eval:factcheck` reported 75.9% verdict accuracy and a 100% citation rate on its 30 claims with keyless gpt-oss-20b (Pollinations), p50 16 s. Duet and Grok weren't run on the same set.
 
 ## Run
 
@@ -73,7 +89,7 @@ Reply to a post with "@z is this true?" and z researches before it answers: the 
 
 `pnpm eval:factcheck` runs the real bot path over `scripts/factcheck.jsonl` (30 labeled claims, some in Vietnamese) and prints accuracy, citation rate and p50/p95 latency. It defaults to keyless LLM7 `gpt-oss:20b`; see the script header for flags.
 
-### Reach me
+## Reach me
 
 z asks wherever you are, not only in its own tab. Approvals, finished one-shot tasks and briefings become notices that are:
 
