@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, safeEqual, sha256Hex, sleep, truncate } from "../util.ts";
-import { config, pressed, shouldDispatch, untilAuthorized, type Action } from "./shared.ts";
+import { config, imageDataUrl, pressed, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
 
 type TgUser = { id: number; is_bot: boolean; first_name: string; last_name?: string; username?: string };
 type TgEntity = { type: string; offset: number; length: number; user?: TgUser };
@@ -15,6 +15,9 @@ export type TgMessage = {
   caption?: string;
   entities?: TgEntity[];
   caption_entities?: TgEntity[];
+  /** One entry per available size, smallest first. */
+  photo?: { file_id: string; width: number; height: number }[];
+  document?: { file_id: string; mime_type?: string };
   reply_to_message?: TgMessage;
   /** Part of the replied-to message the user explicitly quoted. */
   quote?: { text: string };
@@ -32,6 +35,13 @@ const threadOf = (m: TgMessage) => (m.message_thread_id ? `${m.chat.id}:${m.mess
 
 function messageUrl(m: TgMessage): string | undefined {
   return m.chat.username ? `https://t.me/${m.chat.username}/${m.message_id}` : undefined;
+}
+
+/** The file id of a message's picture: the largest photo size up to ~1600px, or an image document. */
+export function imageFileId(m: TgMessage): string | null {
+  if (m.photo?.length) return (m.photo.filter((p) => Math.max(p.width, p.height) <= 1600).at(-1) ?? m.photo[0]!).file_id;
+  if (m.document?.mime_type?.startsWith("image/")) return m.document.file_id;
+  return null;
 }
 
 /** Pure mapping from a Telegram update to an InboundMessage; null when it should be ignored. */
@@ -64,7 +74,10 @@ export function telegramToInbound(
     author: { id: String(m.from.id), name: displayName(m.from) },
     text,
     addressed,
-    ...(parent && parentText ? { context: [{ author: displayName(parent.from), text: parentText, ...(url ? { url } : {}) }] } : {}),
+    // A replied-to photo without a caption is still what "is this true?" is about.
+    ...(parent && (parentText || imageFileId(parent))
+      ? { context: [{ author: displayName(parent.from), text: parentText ?? "", ...(url ? { url } : {}) }] }
+      : {}),
     receivedAt: new Date(m.date * 1000).toISOString(),
   };
 }
@@ -148,9 +161,29 @@ async function handleUpdate(runtime: ChannelRuntime, update: TgUpdate): Promise<
   const bot = await getBot(runtime);
   const message = telegramToInbound(update, { channelId: runtime.channel.id, bot, handle: runtime.handle });
   if (!message || !shouldDispatch(message, runtime)) return;
+  const m = update.message!;
+  const own = await fileImage(runtime, imageFileId(m));
+  if (own) message.images = [own];
+  const parentImage = m.reply_to_message && message.context?.[0] ? await fileImage(runtime, imageFileId(m.reply_to_message)) : null;
+  if (parentImage) message.context![0]!.images = [parentImage];
   const reply = await runtime.dispatch(message);
-  if (reply) await sendReply(runtime, update.message!, reply);
+  if (reply) await sendReply(runtime, m, reply);
 }
+
+/** File URLs carry the bot token, so the image is downloaded here and handed on as a data URL. */
+async function fileImage(runtime: ChannelRuntime, fileId: string | null): Promise<string | null> {
+  if (!fileId) return null;
+  try {
+    const file = await call<{ file_path?: string }>(runtime, "getFile", { file_id: fileId });
+    if (!file.file_path) return null;
+    return await imageDataUrl(runtime, `https://api.telegram.org/file/bot${config(runtime, "botToken")}/${file.file_path}`);
+  } catch (error) {
+    runtime.log(`telegram: could not load image: ${errorMessage(error)}`);
+    return null;
+  }
+}
+
+const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 async function handleAction(runtime: ChannelRuntime, action: NonNullable<ReturnType<typeof telegramAction>>) {
   const { ack, final } = await pressed(runtime, action.actionId, action.from);
@@ -168,7 +201,10 @@ async function handleAction(runtime: ChannelRuntime, action: NonNullable<ReturnT
 async function sendReply(runtime: ChannelRuntime, m: TgMessage, reply: OutboundReply): Promise<void> {
   await call(runtime, "sendMessage", {
     chat_id: m.chat.id,
-    text: truncate(reply.text, 4096),
+    // HTML so sources are titled links; Telegram counts the limit after parsing, so this is conservative.
+    text: withSources(reply, 4096, (s) => `<a href="${escapeHtml(s.url).replace(/"/g, "&quot;")}">${escapeHtml(s.title)}</a>`, escapeHtml),
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
     ...(m.message_thread_id ? { message_thread_id: m.message_thread_id } : {}),
     // reply_parameters supersedes the older reply_to_message_id (Bot API 7.0).
     reply_parameters: { message_id: Number(reply.replyTo) || m.message_id, allow_sending_without_reply: true },

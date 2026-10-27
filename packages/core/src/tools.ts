@@ -17,8 +17,11 @@ export type BuildToolsOptions = {
   only?: string[] | null;
   /** Expose only read-risk tools, and never anything that would need approval. */
   readOnly?: boolean;
-  /** Strangers can reach this run (channel bots): drop `ownerOnly` tools. */
-  public?: boolean;
+  /**
+   * Strangers can reach this run (channel bots): expose only tools marked `public`,
+   * and never `ownerOnly` ones even if a plugin marks both.
+   */
+  publicOnly?: boolean;
   log?: (text: string) => void;
   onCall?: (report: ToolCallReport) => void;
 };
@@ -61,7 +64,7 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
     const needsApproval = approvalFor(info.name, info.risk, options.policy, info.tool.defaultPolicy);
     if (needsApproval === null) continue;
     if (options.readOnly && (info.risk !== "read" || needsApproval)) continue;
-    if (options.public && info.tool.ownerOnly) continue;
+    if (options.publicOnly && (!info.tool.public || info.tool.ownerOnly)) continue;
     const guarded = info.risk !== "read";
 
     const settings = settingsById.get(info.pluginId) ?? {};
