@@ -10,7 +10,7 @@
  *
  * Flags (or env): --kind (EVAL_KIND, default openai-compatible), --base-url (EVAL_BASE_URL),
  * --model (EVAL_MODEL), EVAL_API_KEY, --only id1,id2, --limit N, --delay ms between items
- * (default 2000; the keyless endpoints are rate limited), --out results.json.
+ * (default 2000), --pace ms between model calls (e.g. 31000 for Pollinations), --out results.json.
  * Web search backends are picked up from TAVILY_API_KEY, BRAVE_API_KEY or SEARXNG_URL.
  */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -47,6 +47,7 @@ const { values: flags } = parseArgs({
     limit: { type: "string" },
     delay: { type: "string" },
     out: { type: "string" },
+    pace: { type: "string" },
   },
 });
 
@@ -54,6 +55,28 @@ const kind = ProviderKind.parse(flags.kind ?? process.env.EVAL_KIND ?? "openai-c
 const baseURL = flags["base-url"] ?? process.env.EVAL_BASE_URL ?? (kind === "openai-compatible" ? "https://api.llm7.io/v1" : undefined);
 const model = flags.model ?? process.env.EVAL_MODEL ?? "gpt-oss:20b";
 const delayMs = Number(flags.delay ?? 2000);
+
+/**
+ * Keyless tiers publish per-IP request rates (Pollinations: one reply per 30 s). `--pace ms`
+ * spaces calls to the model endpoint at least that far apart so the eval stays inside the limit;
+ * time spent waiting for the pace is the harness's, not the bot's, and is left out of latency.
+ */
+const paceMs = Number(flags.pace ?? 0);
+let paceWaitMs = 0;
+let lastModelCall = 0;
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = String(input instanceof Request ? input.url : input);
+  if (paceMs && baseURL && url.startsWith(baseURL)) {
+    const wait = lastModelCall + paceMs - Date.now();
+    if (wait > 0) {
+      paceWaitMs += wait;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    lastModelCall = Date.now();
+  }
+  return realFetch(input, init);
+};
 
 const provider: ProviderConfig = {
   id: "eval",
@@ -97,7 +120,8 @@ if (flags.only) items = items.filter((i) => flags.only!.split(",").includes(i.id
 if (flags.limit) items = items.slice(0, Number(flags.limit));
 
 console.log(`fact-check eval: ${items.length} claims · ${kind} ${baseURL ?? ""} ${model}`);
-console.log(`tools: ${plugins.flatMap((p) => Object.keys(p.plugin.tools ?? {}).map((t) => `${p.plugin.id}_${t}`)).join(", ")}\n`);
+const botTools = plugins.flatMap((p) => Object.entries(p.plugin.tools ?? {}).filter(([, t]) => t.risk === "read" && t.public).map(([t]) => `${p.plugin.id}_${t}`));
+console.log(`bot tools: ${botTools.join(", ")}\n`);
 
 type Row = {
   id: string;
@@ -130,6 +154,7 @@ async function run(item: Item): Promise<Attempt> {
   };
   toolCalls = [];
   callTokens = [];
+  paceWaitMs = 0;
   const started = Date.now();
   try {
     const answer = await answerMessage(message, {
@@ -143,7 +168,7 @@ async function run(item: Item): Promise<Attempt> {
     const sources = answer?.reply.sources ?? [];
     return {
       verdict: answer?.reply.verdict ?? null,
-      ms: Date.now() - started,
+      ms: Date.now() - started - paceWaitMs,
       sources: sources.length,
       tools: toolCalls,
       tokens: callTokens,
@@ -151,7 +176,7 @@ async function run(item: Item): Promise<Attempt> {
       urls: sources.map((s) => s.url),
     };
   } catch (error) {
-    return { verdict: null, ms: Date.now() - started, sources: 0, tools: toolCalls, tokens: callTokens, text: "", urls: [], error: describeError(error) };
+    return { verdict: null, ms: Date.now() - started - paceWaitMs, sources: 0, tools: toolCalls, tokens: callTokens, text: "", urls: [], error: describeError(error) };
   }
 }
 
@@ -190,5 +215,5 @@ for (const expected of ["true", "false", "misleading"] as const) {
 console.log(`\naccuracy       ${correct}/${rows.length} (${pct(correct)})`);
 console.log(`citation rate  ${cited}/${rows.length} (${pct(cited)})`);
 console.log(`latency        p50 ${(quantile(0.5) / 1000).toFixed(1)}s · p95 ${(quantile(0.95) / 1000).toFixed(1)}s`);
-console.log(`errors         ${rows.filter((r) => r.error).length} · rate-limit retries ${rows.reduce((n, r) => n + r.retries, 0)}`);
+console.log(`errors         ${rows.filter((r) => r.error).length}${paceMs ? ` · paced ${paceMs / 1000}s between model calls (excluded from latency)` : ""} · item retries ${rows.reduce((n, r) => n + r.retries, 0)}`);
 if (flags.out) writeFileSync(flags.out, JSON.stringify({ kind, baseURL, model, rows }, null, 2));

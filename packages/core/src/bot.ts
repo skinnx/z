@@ -8,7 +8,7 @@
  * then answers in a fixed format parsed into a verdict, a short why, and sources. Only URLs that
  * a tool actually returned survive as sources.
  */
-import { generateText, isStepCount, type ImagePart, type ToolSet } from "ai";
+import { generateText, isStepCount, type FilePart, type ToolSet } from "ai";
 import type { z } from "zod";
 import type { ChannelInput, InboundMessage, OutboundReply, Routing, Settings, Source, Verdict } from "./contract.ts";
 import { baseInstructions } from "./prompt.ts";
@@ -119,9 +119,9 @@ async function research(
   imagesDropped: boolean,
 ) {
   const started = Date.now();
-  const imageParts: ImagePart[] = images.flatMap((url) => {
+  const imageParts: FilePart[] = images.flatMap((url) => {
     try {
-      return [{ type: "image", image: new URL(url) }];
+      return [{ type: "file", data: new URL(url), mediaType: "image" }];
     } catch {
       return [];
     }
@@ -137,10 +137,15 @@ async function research(
     messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...imageParts] }],
     tools,
     stopWhen: isStepCount(MAX_STEPS),
-    prepareStep: ({ stepNumber, steps }) => {
+    prepareStep: ({ stepNumber, steps, messages }) => {
       if (stepNumber === 0) return undefined;
       const searchAgain = stepNumber < MAX_STEPS - 1 && evidenceFrom(steps).size === 0 && Date.now() - started < RESEARCH_BUDGET_MS;
-      return searchAgain ? undefined : { activeTools: [] };
+      if (searchAgain) return undefined;
+      // Without tools some models still try to "browse"; saying so plainly gets the answer instead.
+      return {
+        activeTools: [],
+        messages: [...messages, { role: "user", content: "Now reply in the required format using only the tool results above. Do not call any tools." }],
+      };
     },
     maxRetries: 1,
     abortSignal: AbortSignal.timeout(TIMEOUT_MS),
