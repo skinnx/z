@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage } from "@z/core";
 import { backoff, errorMessage, sleep } from "../util.ts";
-import { config } from "./shared.ts";
+import { config, untilAuthorized } from "./shared.ts";
 
 const API = "https://api.x.com/2";
 
@@ -113,24 +113,23 @@ async function xApi<T>(runtime: ChannelRuntime, path: string, init: RequestInit 
 
 type MentionsPage = { data?: Tweet[]; includes?: Includes; meta?: { newest_id?: string; next_token?: string } };
 
-async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void> {
+async function whoAmI(runtime: ChannelRuntime, signal: AbortSignal): Promise<XUser> {
+  const { data } = await xApi<{ data: XUser }>(runtime, "/users/me", {}, signal);
+  const userId = config(runtime, "userId");
+  return userId && userId !== data.data.id ? { ...data.data, id: userId } : data.data;
+}
+
+async function poll(runtime: ChannelRuntime, me: XUser, signal: AbortSignal): Promise<void> {
   const pollMs = Math.max(15, Number(config(runtime, "pollSeconds")) || 60) * 1000;
-  let me: XUser | null = null;
-  let sinceId: string | null = null;
-  let baselined = false;
   // Cursor keys are per bot account, so swapping the token does not reuse another account's cursor.
-  const key = (name: string) => `${name}:${me!.id}`;
+  const key = (name: string) => `${name}:${me.id}`;
+  let sinceId = runtime.state.get(key("sinceId"));
+  let baselined = runtime.state.get(key("baselined")) === "1";
+  let healthy = true;
   let attempt = 0;
   while (!signal.aborted) {
     let waitMs = pollMs;
     try {
-      if (!me) {
-        const { data } = await xApi<{ data: XUser }>(runtime, "/users/me", {}, signal);
-        const userId = config(runtime, "userId");
-        me = userId && userId !== data.data.id ? { ...data.data, id: userId } : data.data;
-        sinceId = runtime.state.get(key("sinceId"));
-        baselined = runtime.state.get(key("baselined")) === "1";
-      }
       const tweets: Tweet[] = [];
       const includes: Required<Includes> = { tweets: [], users: [] };
       let newest: string | undefined;
@@ -158,7 +157,6 @@ async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void>
         // First run ever: only record where the timeline is, so old mentions are not answered.
         baselined = true;
         runtime.state.set(key("baselined"), "1");
-        runtime.status("ok", `Watching mentions of @${me.username}`);
       } else {
         // The timeline is newest first; answer in the order people asked, advancing the cursor
         // after each so a restart mid-batch resumes after the last answered mention.
@@ -174,8 +172,11 @@ async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void>
         runtime.state.set(key("sinceId"), sinceId);
       }
       attempt = 0;
+      if (!healthy) runtime.status("ok", `Watching mentions of @${me.username}`);
+      healthy = true;
     } catch (error) {
       if (signal.aborted) return;
+      healthy = false;
       runtime.status("error", errorMessage(error));
       const rate = error instanceof XError ? error.waitMs : 0;
       const auth = error instanceof XError && (error.status === 401 || error.status === 403);
@@ -224,7 +225,13 @@ export const xAdapter: ChannelAdapter = {
       return () => {};
     }
     const controller = new AbortController();
-    void poll(runtime, controller.signal);
+    const { signal } = controller;
+    let me: XUser | undefined;
+    const auth = await untilAuthorized(runtime, async () => (me = await whoAmI(runtime, signal)), signal);
+    if (auth.first) runtime.status("ok", `Watching mentions of @${me!.username}`);
+    void auth.ready.then((ok) => {
+      if (ok) return poll(runtime, me!, signal);
+    });
     return () => controller.abort();
   },
 };

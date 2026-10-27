@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, sleep, truncate } from "../util.ts";
-import { config, shouldDispatch } from "./shared.ts";
+import { config, shouldDispatch, untilAuthorized } from "./shared.ts";
 
 const API = "https://discord.com/api/v10";
 const GATEWAY = "wss://gateway.discord.gg";
@@ -83,6 +83,16 @@ async function postReply(runtime: ChannelRuntime, m: DMessage, reply: OutboundRe
     throw new Error(`Discord POST message: ${res.status} ${detail}`);
   }
   throw new Error("Discord POST message: rate limited");
+}
+
+async function checkToken(runtime: ChannelRuntime, signal: AbortSignal): Promise<void> {
+  const res = await runtime.fetch(`${API}/users/@me`, {
+    headers: { authorization: `Bot ${config(runtime, "botToken")}` },
+    signal,
+  });
+  if (res.ok) return;
+  const detail = ((await res.json().catch(() => ({}))) as { message?: string }).message ?? res.statusText;
+  throw new Error(res.status === 401 ? `Discord rejected the bot token (${detail})` : `Discord GET /users/@me: ${res.status} ${detail}`);
 }
 
 type Session = { id: string; resumeUrl: string };
@@ -192,15 +202,20 @@ export const discordAdapter: ChannelAdapter = {
         ws.addEventListener("error", () => {});
       });
 
+    const auth = await untilAuthorized(runtime, () => checkToken(runtime, signal), signal);
     void (async () => {
+      if (!(await auth.ready)) return;
       let attempt = 0;
       while (!signal.aborted) {
         const closed = await connect();
         if (signal.aborted) break;
         const fatal = FATAL_CLOSE[closed.code];
         if (fatal) {
+          // Usually fixed in the developer portal without touching z, so keep retrying, slowly.
+          session = null;
           runtime.status("error", fatal);
-          break;
+          await sleep(backoff(++attempt + 4, 300_000), signal);
+          continue;
         }
         if (NEW_SESSION_CLOSE.has(closed.code)) session = null;
         attempt = closed.ready ? 0 : attempt + 1;

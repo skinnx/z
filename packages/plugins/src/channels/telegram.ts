@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, safeEqual, sha256Hex, sleep, truncate } from "../util.ts";
-import { config, shouldDispatch } from "./shared.ts";
+import { config, shouldDispatch, untilAuthorized } from "./shared.ts";
 
 type TgUser = { id: number; is_bot: boolean; first_name: string; last_name?: string; username?: string };
 type TgEntity = { type: string; offset: number; length: number; user?: TgUser };
@@ -90,7 +90,8 @@ async function call<T>(runtime: ChannelRuntime, method: string, body: unknown, s
     error_code?: number;
   };
   if (!data.ok) {
-    const detail = String(data.description).replaceAll(token, "***");
+    let detail = String(data.description).replaceAll(token, "***");
+    if (data.error_code === 401 || data.error_code === 404) detail = `bot token rejected (${detail})`;
     throw Object.assign(new Error(`Telegram ${method}: ${detail}`), { code: data.error_code });
   }
   return data.result as T;
@@ -223,8 +224,13 @@ export const telegramAdapter: ChannelAdapter = {
       runtime.status("error", "botToken is required");
       return () => {};
     }
-    if (runtime.webhookUrl) void registerWebhook(runtime, runtime.webhookUrl, controller.signal);
-    else void poll(runtime, controller.signal);
+    const { signal } = controller;
+    const auth = await untilAuthorized(runtime, () => getBot(runtime), signal);
+    void auth.ready.then((ok) => {
+      if (!ok) return;
+      if (runtime.webhookUrl) return registerWebhook(runtime, runtime.webhookUrl, signal);
+      return poll(runtime, signal);
+    });
     return () => controller.abort();
   },
 };
