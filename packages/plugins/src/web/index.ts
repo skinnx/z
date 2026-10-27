@@ -1,7 +1,7 @@
 import { definePlugin, defineTool, type ToolContext } from "@z/core";
 import { z } from "zod";
 import { fetchPublic, htmlToText, readTextCapped, truncate } from "../util.ts";
-import { hackerNews, wikidata, wikipedia, wikipediaSearch } from "./facts.ts";
+import { hackerNews, lookUp, wikidata, wikipedia } from "./facts.ts";
 
 type SearchResult = { title: string; url: string; snippet: string };
 
@@ -53,22 +53,22 @@ async function searxng(ctx: ToolContext, base: string, query: string, limit: num
 
 const search = defineTool({
   description:
-    "Search the web. Returns titles, URLs and snippets; use fetch_page to read a result. Without a configured backend it searches Wikipedia only.",
+    "Search the web: titles, URLs and snippets (read one with fetch_page). Without a configured backend it searches English Wikipedia.",
   risk: "read",
   public: true,
   inputSchema: z.object({
     query: z.string().min(1).max(400),
-    limit: z.number().int().min(1).max(20).default(8),
   }),
-  execute: async ({ query, limit }, ctx) => {
+  execute: async ({ query }, ctx) => {
+    const limit = 8;
     const { tavilyApiKey, braveApiKey, searxngUrl } = ctx.settings;
     let provider: string;
     let results: SearchResult[];
     if (tavilyApiKey) [provider, results] = ["tavily", await tavily(ctx, tavilyApiKey, query, limit)];
     else if (braveApiKey) [provider, results] = ["brave", await brave(ctx, braveApiKey, query, limit)];
     else if (searxngUrl) [provider, results] = ["searxng", await searxng(ctx, searxngUrl, query, limit)];
-    // Keyless fallback so search always works; the provider name tells the model what it searched.
-    else [provider, results] = ["wikipedia", await wikipediaSearch(ctx, query, "en", Math.min(limit, 10))];
+    // Keyless fallback so search always works: Wikipedia, with the best article already read.
+    else return { provider: "wikipedia", ...(await lookUp(ctx, query, query, "en", 1500)) };
     return {
       provider,
       results: results.map((r) => ({ title: truncate(r.title, 200), url: r.url, snippet: truncate(r.snippet, 400) })),

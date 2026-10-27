@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, sleep, truncate } from "../util.ts";
-import { config, pressed, shouldDispatch, untilAuthorized, type Action } from "./shared.ts";
+import { config, pressed, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
 
 const API = "https://discord.com/api/v10";
 const GATEWAY = "wss://gateway.discord.gg";
@@ -27,8 +27,17 @@ export type DMessage = {
   content: string;
   timestamp: string;
   mentions?: DUser[];
+  attachments?: { url: string; filename: string; content_type?: string }[];
   referenced_message?: DMessage | null;
 };
+
+/** Image attachment URLs (Discord's CDN links are fetchable without auth until they expire). */
+export function discordImages(m: DMessage): string[] {
+  return (m.attachments ?? [])
+    .filter((a) => a.content_type?.startsWith("image/") ?? /\.(png|jpe?g|gif|webp)$/i.test(a.filename))
+    .map((a) => a.url)
+    .slice(0, 4);
+}
 
 /** INTERACTION_CREATE payload (the fields z reads). Type 3 is a message component, e.g. a button. */
 export type DInteraction = {
@@ -94,6 +103,8 @@ export function discordToInbound(
   const mentioned =
     (m.mentions ?? []).some((u) => u.id === opts.botUserId) || new RegExp(`<@!?${opts.botUserId}>`).test(m.content);
   const addressed = mentioned || ref?.author.id === opts.botUserId || !m.guild_id || mentionsHandle(m.content, opts.handle);
+  const images = discordImages(m);
+  const refImages = ref ? discordImages(ref) : [];
   return {
     channelId: opts.channelId,
     threadId: m.channel_id,
@@ -101,14 +112,22 @@ export function discordToInbound(
     author: { id: m.author.id, name: name(m.author) },
     text: m.content.replace(new RegExp(`<@!?${opts.botUserId}>`, "g"), `@${opts.handle}`),
     addressed,
-    ...(ref?.content ? { context: [{ author: name(ref.author), text: ref.content, url: messageUrl(ref, m.guild_id) }] } : {}),
+    ...(ref && (ref.content || refImages.length)
+      ? {
+          context: [
+            { author: name(ref.author), text: ref.content, url: messageUrl(ref, m.guild_id), ...(refImages.length ? { images: refImages } : {}) },
+          ],
+        }
+      : {}),
+    ...(images.length ? { images } : {}),
     receivedAt: m.timestamp,
   };
 }
 
 async function postReply(runtime: ChannelRuntime, m: DMessage, reply: OutboundReply): Promise<void> {
   await postMessage(runtime, m.channel_id, {
-    content: truncate(reply.text, 2000),
+    // <url> keeps Discord from expanding every source into an embed.
+    content: withSources(reply, 2000, (s) => `[${s.title.replace(/[[\]]/g, "")}](<${s.url}>)`),
     message_reference: { message_id: reply.replyTo || m.id, fail_if_not_exists: false },
     // Never let model output ping @everyone/roles; still notify the person we reply to.
     allowed_mentions: { parse: [], replied_user: true },

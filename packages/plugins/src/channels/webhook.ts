@@ -3,9 +3,12 @@ import { z } from "zod";
 import { errorMessage, safeEqual } from "../util.ts";
 import { config, pressed } from "./shared.ts";
 
+/** Public http(s) image URLs; the server downloads them for the model. */
+const Images = z.array(z.url({ protocol: /^https?$/ })).max(4).optional();
+
 const ContextEntry = z.union([
   z.string(),
-  z.object({ author: z.string().optional(), text: z.string(), url: z.string().optional() }),
+  z.object({ author: z.string().optional(), text: z.string(), url: z.string().optional(), images: Images }),
 ]);
 
 export const WebhookBody = z.object({
@@ -14,6 +17,7 @@ export const WebhookBody = z.object({
   messageId: z.string().max(200).optional(),
   author: z.union([z.string(), z.object({ id: z.string().optional(), name: z.string() })]).optional(),
   context: z.union([ContextEntry, z.array(ContextEntry)]).optional(),
+  images: Images,
 });
 
 /** A button press relayed by the integration: `{ action, threadId, authorId }`. */
@@ -30,7 +34,9 @@ export function webhookToInbound(body: z.output<typeof WebhookBody>, channelId: 
       : { id: body.author?.id ?? body.author?.name ?? "webhook", name: body.author?.name ?? "webhook" };
   const entries = body.context === undefined ? [] : Array.isArray(body.context) ? body.context : [body.context];
   const context = entries.map((c) =>
-    typeof c === "string" ? { author: "unknown", text: c } : { author: c.author ?? "unknown", text: c.text, ...(c.url ? { url: c.url } : {}) },
+    typeof c === "string"
+      ? { author: "unknown", text: c }
+      : { author: c.author ?? "unknown", text: c.text, ...(c.url ? { url: c.url } : {}), ...(c.images?.length ? { images: c.images } : {}) },
   );
   const messageId = body.messageId ?? crypto.randomUUID();
   return {
@@ -42,6 +48,7 @@ export function webhookToInbound(body: z.output<typeof WebhookBody>, channelId: 
     // Calling the webhook is itself an explicit request to the bot.
     addressed: true,
     ...(context.length ? { context } : {}),
+    ...(body.images?.length ? { images: body.images } : {}),
     receivedAt: now.toISOString(),
   };
 }
@@ -89,7 +96,13 @@ export const webhookAdapter: ChannelAdapter = {
     try {
       const reply = await runtime.dispatch(message);
       runtime.status("ok");
-      return Response.json({ reply: reply?.text ?? null, threadId: message.threadId, messageId: message.messageId });
+      return Response.json({
+        reply: reply?.text ?? null,
+        verdict: reply?.verdict ?? null,
+        sources: reply?.sources ?? [],
+        threadId: message.threadId,
+        messageId: message.messageId,
+      });
     } catch (error) {
       runtime.status("error", errorMessage(error));
       return Response.json({ error: "Bot failed to answer" }, { status: 500 });
