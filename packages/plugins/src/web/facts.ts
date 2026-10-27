@@ -125,7 +125,7 @@ export function focusText(text: string, focus: string | undefined, maxChars: num
   const picked = [{ i: 0, p: truncate(paragraphs[0]!, Math.round(maxChars / 3)) }];
   let used = picked[0]!.p.length;
   for (const x of scored) {
-    const p = truncate(x.p, Math.min(800, maxChars - used));
+    const p = truncate(x.p, Math.min(1000, maxChars - used));
     if (used + p.length + 5 > maxChars) continue;
     picked.push({ i: x.i, p });
     used += p.length + 5;
@@ -144,14 +144,18 @@ export const wikipedia = defineTool({
     focus: z.string().max(300).optional().describe("The specific claim or detail you need"),
     lang: Lang,
   }),
-  execute: ({ query, focus, lang }, ctx) => lookUp(ctx, query, focus ?? query, lang, 2000),
+  execute: ({ query, focus, lang }, ctx) => lookUp(ctx, query, focus ?? query, lang, 2500),
 });
 
 /** Search Wikipedia and read the best hit, focused on what the question needs. */
 export async function lookUp(ctx: ToolContext, query: string, focus: string, lang: string, maxChars: number) {
   const hits = await wikipediaSearch(ctx, query, lang, 5);
+  // A claim-shaped query ("octopus three hearts") should read the topic's own article ("Octopus"),
+  // not a narrower one that happens to rank first ("Blue-ringed octopus").
+  const words = new Set(terms(query));
   const exact = hits.find((h) => h.title.toLowerCase() === query.trim().toLowerCase());
-  const best = exact ?? hits[0];
+  const topic = hits.find((h) => terms(h.title).every((w) => words.has(w)));
+  const best = exact ?? topic ?? hits[0];
   const article = best ? await wikipediaExtract(ctx, best.title, lang) : null;
   return {
     article: article

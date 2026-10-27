@@ -1,4 +1,4 @@
-import type { ChannelAdapter, InboundMessage } from "@z/core";
+import { RateLimitedError, type ChannelAdapter, type InboundMessage } from "@z/core";
 import { z } from "zod";
 import { errorMessage, safeEqual } from "../util.ts";
 import { config, pressed } from "./shared.ts";
@@ -105,6 +105,13 @@ export const webhookAdapter: ChannelAdapter = {
       });
     } catch (error) {
       runtime.status("error", errorMessage(error));
+      if (error instanceof RateLimitedError) {
+        const seconds = Math.max(1, Math.ceil(error.retryAfterMs / 1000));
+        return Response.json(
+          { error: "Every model is rate limited right now", retryAfter: seconds },
+          { status: 503, headers: { "retry-after": String(seconds) } },
+        );
+      }
       return Response.json({ error: "Bot failed to answer" }, { status: 500 });
     }
   },

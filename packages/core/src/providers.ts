@@ -185,6 +185,32 @@ export class ModelUnavailableError extends Error {
   override name = "ModelUnavailableError";
 }
 
+/** Every model in a chain is rate limited or out of quota; `retryAfterMs` is when the first frees up. */
+export class RateLimitedError extends ModelUnavailableError {
+  override name = "RateLimitedError";
+  readonly retryAfterMs: number;
+  constructor(message: string, retryAfterMs: number) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+const MAX_COOLDOWN_MS = 24 * 3600_000;
+
+/**
+ * How long a provider asked us to wait after a 429 (rate limit, quota) or 402 (free-tier limit):
+ * the Retry-After header, the body's `retry_after`, or "retry after N s" in the message. Null otherwise.
+ */
+export function rateLimitWaitMs(error: unknown): number | null {
+  if (!APICallError.isInstance(error) || (error.statusCode !== 429 && error.statusCode !== 402)) return null;
+  const seconds =
+    Number(error.responseHeaders?.["retry-after"]) ||
+    Number(/"retry_after"\s*:\s*(\d+)/.exec(error.responseBody ?? "")?.[1]) ||
+    Number(/retry after (\d+)\s*s/i.exec(`${error.message} ${error.responseBody ?? ""}`)?.[1]) ||
+    (error.statusCode === 429 ? 30 : 60);
+  return Math.min(seconds * 1000, MAX_COOLDOWN_MS);
+}
+
 export type ModelCall = { ref: ModelRef; usage: UsageReport };
 
 export type ChainOptions = ModelOptions & {
@@ -204,6 +230,9 @@ export type ModelResolverDeps = {
 export type ModelResolver = ReturnType<typeof createModelResolver>;
 
 export function createModelResolver(deps: ModelResolverDeps) {
+  /** Per model ref: when a provider's Retry-After (or quota reset) lets us ask it again. */
+  const coolingUntil = new Map<ModelRef, number>();
+
   function provider(providerId: string): ProviderConfig {
     const p = deps.providers().find((x) => x.id === providerId);
     if (!p) throw new ModelUnavailableError(`Unknown provider "${providerId}"`);
@@ -247,7 +276,14 @@ export function createModelResolver(deps: ModelResolverDeps) {
 
     async function attempt<T>(run: (model: LanguageModelV4, p: ProviderConfig, modelId: string, ref: ModelRef) => Promise<T>) {
       let lastError: unknown;
+      const limited: number[] = [];
       for (const ref of refs) {
+        // A model that said "retry after N" is skipped until then instead of being asked again.
+        const until = coolingUntil.get(ref) ?? 0;
+        if (until > Date.now()) {
+          limited.push(until);
+          continue;
+        }
         try {
           const { providerId, modelId } = parseModelRef(ref);
           const p = provider(providerId);
@@ -255,8 +291,18 @@ export function createModelResolver(deps: ModelResolverDeps) {
           return await run(createLanguageModel(p, modelId, opts), p, modelId, ref);
         } catch (error) {
           lastError = error;
+          const wait = rateLimitWaitMs(error);
+          if (wait !== null) {
+            coolingUntil.set(ref, Date.now() + wait);
+            limited.push(Date.now() + wait);
+          }
           if (!isFallbackError(error)) throw error;
         }
+      }
+      if (limited.length === refs.length) {
+        const retryAfterMs = Math.max(0, Math.min(...limited) - Date.now());
+        const last = lastError ? `: ${describeError(lastError)}` : "";
+        throw new RateLimitedError(`Every model for this job is rate limited; retry in ${Math.ceil(retryAfterMs / 1000)}s${last}`, retryAfterMs);
       }
       throw lastError;
     }
