@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage } from "@z/core";
 import { decodeEntities, errorMessage, hmacSha256Hex, mentionsHandle, safeEqual, truncate } from "../util.ts";
-import { config, pressed, shouldDispatch, type Action } from "./shared.ts";
+import { config, imageDataUrl, pressed, shouldDispatch, withSources, type Action } from "./shared.ts";
 
 export type SlackEvent = {
   type: string;
@@ -13,7 +13,19 @@ export type SlackEvent = {
   channel: string;
   channel_type?: string;
   event_ts?: string;
+  files?: SlackFile[];
 };
+
+type SlackFile = { mimetype?: string; url_private?: string };
+
+/** Slack files need the bot token (files:read) to download, so images become data URLs here. */
+async function slackImages(runtime: ChannelRuntime, files: SlackFile[] | undefined): Promise<string[]> {
+  const urls = (files ?? []).filter((f) => f.mimetype?.startsWith("image/") && f.url_private).map((f) => f.url_private!);
+  const images = await Promise.all(
+    urls.slice(0, 4).map((url) => imageDataUrl(runtime, url, { authorization: `Bearer ${config(runtime, "botToken")}` })),
+  );
+  return images.filter((i): i is string => i !== null);
+}
 
 /** Interactivity payload for a Block Kit button press (the fields z reads). */
 export type SlackBlockActions = {
@@ -159,26 +171,36 @@ async function respond(runtime: ChannelRuntime, event: SlackEvent, message: Inbo
   // In a thread, "is this true?" refers to the thread's parent message.
   if (event.thread_ts && event.thread_ts !== event.ts) {
     try {
-      const { messages } = await slackApi<{ messages: { user?: string; text?: string; ts: string }[] }>(
+      const { messages } = await slackApi<{ messages: { user?: string; text?: string; ts: string; files?: SlackFile[] }[] }>(
         runtime,
         "conversations.replies",
         { channel: event.channel, ts: event.thread_ts, limit: 1, inclusive: true },
         true,
       );
       const parent = messages[0];
-      if (parent?.text) {
-        message.context = [{ author: parent.user ?? "unknown", text: slackToPlain(parent.text, botId, runtime.handle) }];
+      const images = await slackImages(runtime, parent?.files);
+      if (parent?.text || images.length) {
+        message.context = [
+          {
+            author: parent!.user ?? "unknown",
+            text: slackToPlain(parent!.text ?? "", botId, runtime.handle),
+            ...(images.length ? { images } : {}),
+          },
+        ];
       }
     } catch (error) {
       runtime.log(`slack: could not load thread parent: ${errorMessage(error)}`);
     }
   }
+  const images = await slackImages(runtime, event.files);
+  if (images.length) message.images = images;
   const reply = await runtime.dispatch(message);
   if (!reply) return;
   await slackApi(runtime, "chat.postMessage", {
     channel: event.channel,
     thread_ts: event.thread_ts ?? event.ts,
-    text: truncate(reply.text, 3900),
+    text: withSources(reply, 3900, (s) => `<${s.url.replace(/\|/g, "%7C")}|${escapeMrkdwn(s.title).replace(/\|/g, "/")}>`, escapeMrkdwn),
+    unfurl_links: false,
   });
 }
 

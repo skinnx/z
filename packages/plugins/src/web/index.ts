@@ -1,6 +1,7 @@
 import { definePlugin, defineTool, type ToolContext } from "@z/core";
 import { z } from "zod";
 import { fetchPublic, htmlToText, readTextCapped, truncate } from "../util.ts";
+import { hackerNews, lookUp, wikidata, wikipedia } from "./facts.ts";
 
 type SearchResult = { title: string; url: string; snippet: string };
 
@@ -51,24 +52,23 @@ async function searxng(ctx: ToolContext, base: string, query: string, limit: num
 }
 
 const search = defineTool({
-  description: "Search the web. Returns titles, URLs and snippets; use fetch_page to read a result.",
+  description:
+    "Search the web: titles, URLs and snippets (read one with fetch_page). Without a configured backend it searches English Wikipedia.",
   risk: "read",
+  public: true,
   inputSchema: z.object({
     query: z.string().min(1).max(400),
-    limit: z.number().int().min(1).max(20).default(8),
   }),
-  execute: async ({ query, limit }, ctx) => {
+  execute: async ({ query }, ctx) => {
+    const limit = 8;
     const { tavilyApiKey, braveApiKey, searxngUrl } = ctx.settings;
     let provider: string;
     let results: SearchResult[];
     if (tavilyApiKey) [provider, results] = ["tavily", await tavily(ctx, tavilyApiKey, query, limit)];
     else if (braveApiKey) [provider, results] = ["brave", await brave(ctx, braveApiKey, query, limit)];
     else if (searxngUrl) [provider, results] = ["searxng", await searxng(ctx, searxngUrl, query, limit)];
-    else {
-      throw new Error(
-        "No search backend configured. Set a Tavily API key, a Brave Search API key, or a SearXNG URL in the Web plugin settings.",
-      );
-    }
+    // Keyless fallback so search always works: Wikipedia, with the best article already read.
+    else return { provider: "wikipedia", ...(await lookUp(ctx, query, query, "en", 1500)) };
     return {
       provider,
       results: results.map((r) => ({ title: truncate(r.title, 200), url: r.url, snippet: truncate(r.snippet, 400) })),
@@ -81,6 +81,7 @@ const MAX_BYTES = 2_000_000;
 const fetchPage = defineTool({
   description: "Fetch a public web page and return its title and readable text.",
   risk: "read",
+  public: true,
   inputSchema: z.object({
     url: z.string().min(1),
     maxChars: z.number().int().min(500).max(20_000).default(8000),
@@ -89,7 +90,7 @@ const fetchPage = defineTool({
     const res = await fetchPublic(ctx.fetch, url, {
       headers: {
         accept: "text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.1",
-        "user-agent": "Mozilla/5.0 (compatible; z-agent/0.1)",
+        "user-agent": "Mozilla/5.0 (compatible; z/0.1; +https://github.com/skinnx/z)",
       },
       signal: ctx.signal,
     });
@@ -115,11 +116,12 @@ const fetchPage = defineTool({
 export default definePlugin({
   id: "web",
   name: "Web",
-  description: "Search the web (Tavily, Brave Search or SearXNG) and read pages.",
+  description:
+    "Search the web (Tavily, Brave Search or SearXNG), read pages, and look things up keylessly on Wikipedia, Wikidata and Hacker News.",
   settings: [
     { key: "tavilyApiKey", label: "Tavily API key", secret: true },
     { key: "braveApiKey", label: "Brave Search API key", secret: true },
     { key: "searxngUrl", label: "SearXNG base URL (e.g. http://localhost:8080)" },
   ],
-  tools: { search, fetch_page: fetchPage },
+  tools: { search, fetch_page: fetchPage, wikipedia, wikidata, hacker_news: hackerNews },
 });

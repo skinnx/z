@@ -1,4 +1,4 @@
-import type { ChannelAdapter, ChannelRuntime, InboundMessage } from "@z/core";
+import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, sleep } from "../util.ts";
 import { config, untilAuthorized } from "./shared.ts";
 
@@ -12,9 +12,20 @@ export type Tweet = {
   created_at?: string;
   referenced_tweets?: { type: "replied_to" | "quoted" | "retweeted"; id: string }[];
   note_tweet?: { text: string };
+  attachments?: { media_keys?: string[] };
 };
 export type XUser = { id: string; username: string; name: string };
-export type Includes = { tweets?: Tweet[]; users?: XUser[] };
+export type XMedia = { media_key: string; type: "photo" | "video" | "animated_gif"; url?: string; preview_image_url?: string };
+export type Includes = { tweets?: Tweet[]; users?: XUser[]; media?: XMedia[] };
+
+/** Photo URLs, or the preview frame of videos and GIFs. */
+function tweetImages(tweet: Tweet, media: Map<string, XMedia>): string[] {
+  return (tweet.attachments?.media_keys ?? []).flatMap((key) => {
+    const m = media.get(key);
+    const url = m?.type === "photo" ? m.url : m?.preview_image_url;
+    return url ? [url] : [];
+  });
+}
 
 /** Pure mapping from a mentions-timeline tweet; null when it should be ignored. */
 export function xToInbound(
@@ -26,6 +37,7 @@ export function xToInbound(
   if (tweet.referenced_tweets?.some((r) => r.type === "retweeted")) return null;
   const users = new Map((includes.users ?? []).map((u) => [u.id, u]));
   const tweets = new Map((includes.tweets ?? []).map((t) => [t.id, t]));
+  const media = new Map((includes.media ?? []).map((m) => [m.media_key, m]));
   const author = tweet.author_id ? users.get(tweet.author_id) : undefined;
   const full = tweet.note_tweet?.text ?? tweet.text;
   // Replies start with an auto-inserted run of @handles; drop it so the question stands alone.
@@ -38,8 +50,17 @@ export function xToInbound(
     const who = t.author_id ? users.get(t.author_id) : undefined;
     const handle = who ? `@${who.username}` : "unknown";
     const url = who ? `https://x.com/${who.username}/status/${t.id}` : `https://x.com/i/status/${t.id}`;
-    return [{ author: ref.type === "quoted" ? `${handle} (quoted)` : handle, text: t.note_tweet?.text ?? t.text, url }];
+    const images = tweetImages(t, media);
+    return [
+      {
+        author: ref.type === "quoted" ? `${handle} (quoted)` : handle,
+        text: t.note_tweet?.text ?? t.text,
+        url,
+        ...(images.length ? { images } : {}),
+      },
+    ];
   });
+  const images = tweetImages(tweet, media);
   return {
     channelId: opts.channelId,
     threadId: tweet.conversation_id ?? tweet.id,
@@ -48,6 +69,7 @@ export function xToInbound(
     text,
     addressed: true,
     ...(context.length ? { context } : {}),
+    ...(images.length ? { images } : {}),
     receivedAt: tweet.created_at ?? new Date().toISOString(),
   };
 }
@@ -57,6 +79,15 @@ function weight(cp: number): number {
   return cp <= 0x10ff || (cp >= 0x2000 && cp <= 0x200d) || (cp >= 0x2010 && cp <= 0x201f) || (cp >= 0x2032 && cp <= 0x2037)
     ? 1
     : 2;
+}
+
+/** X counts every link as 23 characters (t.co), whatever its length. */
+const TCO_LENGTH = 23;
+
+/** The reply as one post: the text, then the best (first) source link when there is one. */
+export function tweetText(reply: OutboundReply): string {
+  const link = reply.sources?.[0]?.url;
+  return link ? `${fitTweet(reply.text, 280 - TCO_LENGTH - 1)}\n${link}` : fitTweet(reply.text);
 }
 
 /** Truncate to X's 280 weighted characters, preferring a word boundary. */
@@ -131,16 +162,18 @@ async function poll(runtime: ChannelRuntime, me: XUser, signal: AbortSignal): Pr
     let waitMs = pollMs;
     try {
       const tweets: Tweet[] = [];
-      const includes: Required<Includes> = { tweets: [], users: [] };
+      const includes: Required<Includes> = { tweets: [], users: [], media: [] };
       let newest: string | undefined;
       let page: string | undefined;
       // On the first poll only record where the timeline is, so old mentions are not answered.
       for (let i = 0; i < (baselined ? 5 : 1); i++) {
         const q = new URLSearchParams({
           max_results: baselined ? "100" : "5",
-          expansions: "referenced_tweets.id,author_id,referenced_tweets.id.author_id",
+          expansions:
+            "referenced_tweets.id,author_id,referenced_tweets.id.author_id,attachments.media_keys,referenced_tweets.id.attachments.media_keys",
           "tweet.fields": "created_at,conversation_id,referenced_tweets,author_id,note_tweet",
           "user.fields": "username,name",
+          "media.fields": "url,preview_image_url,type",
         });
         if (sinceId) q.set("since_id", sinceId);
         if (page) q.set("pagination_token", page);
@@ -150,6 +183,7 @@ async function poll(runtime: ChannelRuntime, me: XUser, signal: AbortSignal): Pr
         tweets.push(...(data.data ?? []));
         includes.tweets.push(...(data.includes?.tweets ?? []));
         includes.users.push(...(data.includes?.users ?? []));
+        includes.media.push(...(data.includes?.media ?? []));
         page = data.meta?.next_token;
         if (!page || wait) break;
       }
@@ -199,7 +233,7 @@ async function answer(runtime: ChannelRuntime, tweet: Tweet, includes: Includes,
     if (!reply) return;
     await xApi(runtime, "/tweets", {
       method: "POST",
-      body: JSON.stringify({ text: fitTweet(reply.text), reply: { in_reply_to_tweet_id: reply.replyTo || tweet.id } }),
+      body: JSON.stringify({ text: tweetText(reply), reply: { in_reply_to_tweet_id: reply.replyTo || tweet.id } }),
     });
   } catch (error) {
     runtime.log(`x: reply to ${tweet.id} failed: ${errorMessage(error)}`);
