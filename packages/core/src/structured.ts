@@ -2,7 +2,7 @@
  * Structured output via the AI SDK's `Output.object`, tolerant of providers that
  * only do JSON mode and wrap the object in prose or code fences.
  */
-import { generateText, NoObjectGeneratedError, Output } from "ai";
+import { APICallError, generateText, NoObjectGeneratedError, Output } from "ai";
 import type { z } from "zod";
 
 type Args = Omit<Parameters<typeof generateText>[0], "output" | "tools" | "toolApproval">;
@@ -17,9 +17,15 @@ export async function generateStructured<S extends z.ZodType>(
     const result = await generateText({ ...args, output: Output.object({ schema }) } as Parameters<typeof generateText>[0]);
     return result.output as z.output<S>;
   } catch (error) {
-    if (!NoObjectGeneratedError.isInstance(error)) throw error;
-    const parsed = parseLenient(schema, error.text ?? "");
-    if (!parsed) log?.(`structured output did not parse: ${(error.text ?? "").slice(0, 300)}`);
+    let text: string;
+    if (NoObjectGeneratedError.isInstance(error)) text = error.text ?? "";
+    // Some models refuse JSON mode outright: ask again as plain text (the prompt describes the shape).
+    else if (APICallError.isInstance(error) && error.statusCode === 400 && /json|response.?format|structured/i.test(error.message)) {
+      log?.(`JSON mode unsupported, retrying as text: ${error.message.slice(0, 120)}`);
+      text = (await generateText(args as Parameters<typeof generateText>[0])).text;
+    } else throw error;
+    const parsed = parseLenient(schema, text);
+    if (!parsed) log?.(`structured output did not parse: ${text.slice(0, 300)}`);
     return parsed;
   }
 }
