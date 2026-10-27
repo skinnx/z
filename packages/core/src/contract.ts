@@ -116,6 +116,9 @@ export const TaskInput = z.object({
 });
 export type TaskInput = z.input<typeof TaskInput>;
 
+/** Watches without a schedule check hourly. */
+export const DEFAULT_WATCH_SCHEDULE = "0 * * * *";
+
 export type TaskEvent =
   | { type: "step"; at: string; text: string }
   | { type: "tool"; at: string; tool: string; input: unknown; output?: unknown; error?: string }
@@ -131,6 +134,8 @@ export type Task = {
   tools: string[] | null;
   lane: Lane;
   mode?: "do" | "watch";
+  /** Watch tasks only: when it last checked and the last thing it reported. */
+  watch?: { lastCheckAt: string | null; lastFinding: { title: string; body: string; at: string } | null };
   status: TaskStatus;
   result: string | null;
   error: string | null;
@@ -236,7 +241,7 @@ export type PluginManifest = {
   id: string;
   name: string;
   description: string;
-  tools: { name: string; description: string; risk: Risk }[];
+  tools: { name: string; description: string; risk: Risk; defaultPolicy?: "ask" | "allow" }[];
   /** Settings keys the plugin reads, shown as a form in the UI. */
   settings: { key: string; label: string; secret: boolean; required: boolean }[];
   briefing: boolean;

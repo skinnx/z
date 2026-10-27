@@ -42,6 +42,13 @@ export type ZTool<I = any, O = unknown> = {
   inputSchema: z.ZodType<I>;
   /** One line shown on the approval card, e.g. `Post "…" to #general`. */
   summarize?: (input: I) => string;
+  /**
+   * Policy until the user picks one. `allow` suits write tools that only change z itself
+   * (e.g. its own memory); it is ignored for `external` tools, which always ask.
+   */
+  defaultPolicy?: "ask" | "allow";
+  /** Never offered to channel bots, which strangers can reach (e.g. tools over the owner's memory). */
+  ownerOnly?: boolean;
   execute: (input: I, ctx: ToolContext) => Promise<O>;
 };
 
