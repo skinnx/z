@@ -56,6 +56,11 @@ export type ChannelRuntime = {
   webhookUrl: string | null;
   /** Run the bot for one message; resolves to null when it decides not to answer. */
   dispatch: (message: InboundMessage) => Promise<OutboundReply | null>;
+  /** Small per-channel key/value store that survives restarts (cursors, ids). */
+  state: {
+    get: (key: string) => string | null;
+    set: (key: string, value: string) => void;
+  };
   /** Report health to the UI. */
   status: (status: "ok" | "error" | "idle", detail?: string) => void;
   log: (text: string) => void;
