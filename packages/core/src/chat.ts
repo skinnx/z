@@ -1,0 +1,49 @@
+/** Streaming chat for the web UI, using the AI SDK's native tool-approval flow. */
+import { convertToModelMessages, generateId, stepCountIs, streamText, type UIMessage } from "ai";
+import type { ModelRef, Routing, Settings } from "./contract.ts";
+import { baseInstructions } from "./prompt.ts";
+import { describeError, type ModelResolver } from "./providers.ts";
+import { buildTools, type ActivePlugin } from "./tools.ts";
+
+export type ChatDeps = {
+  models: ModelResolver;
+  routing: Routing;
+  settings: Settings;
+  plugins: ActivePlugin[];
+  log?: (text: string) => void;
+};
+
+export type ChatRequest = {
+  messages: UIMessage[];
+  /** Overrides the `chat` lane for this request. */
+  model?: ModelRef;
+  signal?: AbortSignal;
+  /** Called with the full conversation once the response finishes. */
+  onFinish?: (messages: UIMessage[]) => void | Promise<void>;
+};
+
+export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<Response> {
+  const model = request.model ? deps.models.chain([request.model]) : deps.models.forLane(deps.routing, "chat");
+  const built = buildTools(deps.plugins, { policy: deps.settings.approvals, log: deps.log });
+
+  const result = streamText({
+    model,
+    instructions: baseInstructions(
+      deps.settings,
+      new Date(),
+      "You are chatting with the user directly. Use tools when they help; tools that change things wait for the user's approval in the UI.",
+    ),
+    messages: await convertToModelMessages(request.messages, { tools: built.tools, ignoreIncompleteToolCalls: true }),
+    tools: built.tools,
+    toolApproval: built.approval,
+    stopWhen: stepCountIs(8),
+    abortSignal: request.signal,
+  });
+
+  return result.toUIMessageStreamResponse({
+    originalMessages: request.messages,
+    generateMessageId: generateId,
+    onEnd: ({ messages }) => request.onFinish?.(messages),
+    onError: describeError,
+  });
+}
