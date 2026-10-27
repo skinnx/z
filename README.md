@@ -65,7 +65,13 @@ Every tool declares a risk:
 | `write` | create a draft, change a local file | asks |
 | `external` | post publicly, send a message, open an issue | always asks |
 
-Change the policy per tool under **Settings**. Bots answering in channels only ever get `read` tools, so strangers can't make z act on your behalf.
+Change the policy per tool under **Settings**. Bots answering in channels only ever get `read` tools that are marked `public` (web search and reference lookups, never your notifications, feeds or browser), so strangers can't make z act on your behalf or read your data.
+
+## Fact checks
+
+Reply to a post with "@z is this true?" and z researches before it answers: the routed model's own web search when its provider has one (Anthropic, OpenAI, Google, xAI incl. X search, OpenRouter's web plugin), the Web plugin's Tavily / Brave / SearXNG search when configured, and keyless Wikipedia, Wikidata and Hacker News lookups always. The reply leads with a verdict (True / False / Misleading / Unverified), says why in a sentence or two, and links sources — only pages a tool actually returned, rendered in each platform's style (one link on X, a sources line elsewhere, a `sources` array from the webhook). Images on the post go to vision models; models without vision answer without them and say so.
+
+`pnpm eval:factcheck` runs the real bot path over `scripts/factcheck.jsonl` (30 labeled claims, some in Vietnamese) and prints accuracy, citation rate and p50/p95 latency. It defaults to keyless LLM7 `gpt-oss:20b`; see the script header for flags.
 
 ### Reach me
 

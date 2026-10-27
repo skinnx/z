@@ -6,7 +6,7 @@
  */
 import { defineTool, type ToolContext } from "@z/core";
 import { z } from "zod";
-import { decodeEntities, truncate } from "../util.ts";
+import { decodeEntities, sleep, truncate } from "../util.ts";
 
 export const USER_AGENT = "z/0.1 (https://github.com/skinnx/z; self-hosted open-source agent) z-web-plugin";
 
@@ -18,10 +18,19 @@ async function getJson<T>(ctx: ToolContext, url: URL, label: string): Promise<T>
   const key = url.toString();
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value as T;
-  const res = await ctx.fetch(url, {
-    headers: { accept: "application/json", "user-agent": USER_AGENT, "api-user-agent": USER_AGENT },
-    signal: ctx.signal,
-  });
+  const request = () =>
+    ctx.fetch(url, {
+      headers: { accept: "application/json", "user-agent": USER_AGENT, "api-user-agent": USER_AGENT },
+      signal: ctx.signal,
+    });
+  let res = await request();
+  // One polite retry when the API asks for a short pause; otherwise back off to other sources.
+  const retryAfter = Number(res.headers.get("retry-after"));
+  if (res.status === 429 && retryAfter > 0 && retryAfter <= 3) {
+    await res.body?.cancel();
+    await sleep(retryAfter * 1000, ctx.signal);
+    res = await request();
+  }
   if (res.status === 429) {
     await res.body?.cancel();
     throw new Error(`${label} is rate limiting requests right now; use another source`);
