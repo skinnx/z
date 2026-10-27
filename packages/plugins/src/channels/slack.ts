@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage } from "@z/core";
 import { decodeEntities, errorMessage, hmacSha256Hex, mentionsHandle, safeEqual, truncate } from "../util.ts";
-import { config, shouldDispatch } from "./shared.ts";
+import { config, pressed, shouldDispatch, type Action } from "./shared.ts";
 
 export type SlackEvent = {
   type: string;
@@ -14,6 +14,62 @@ export type SlackEvent = {
   channel_type?: string;
   event_ts?: string;
 };
+
+/** Interactivity payload for a Block Kit button press (the fields z reads). */
+export type SlackBlockActions = {
+  type: string;
+  user?: { id: string };
+  channel?: { id: string };
+  container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
+  message?: { ts: string; thread_ts?: string; text?: string };
+  response_url?: string;
+  actions?: { action_id: string; value?: string }[];
+};
+
+/** Pure mapping from an interactivity payload; null unless it is a button press z can answer. */
+export function slackAction(payload: SlackBlockActions) {
+  const action = payload.actions?.[0];
+  const channel = payload.channel?.id ?? payload.container?.channel_id;
+  const ts = payload.message?.thread_ts ?? payload.message?.ts ?? payload.container?.message_ts;
+  if (payload.type !== "block_actions" || !action || !payload.user || !channel || !ts) return null;
+  // response_url is the only way back; only ever post to Slack's own host.
+  if (!payload.response_url?.startsWith("https://hooks.slack.com/")) return null;
+  return {
+    actionId: action.value ?? action.action_id,
+    from: { threadId: `${channel}:${ts}`, authorId: payload.user.id },
+    responseUrl: payload.response_url,
+    text: payload.message?.text ?? "",
+  };
+}
+
+/** Interactivity requests are form-encoded: `payload=<JSON>`. */
+export function parseSlackForm(raw: string): SlackBlockActions | null {
+  try {
+    const json = new URLSearchParams(raw).get("payload");
+    return json ? (JSON.parse(json) as SlackBlockActions) : null;
+  } catch {
+    return null;
+  }
+}
+
+const escapeMrkdwn = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Text plus a row of buttons. `text` stays as the notification fallback. */
+export function slackBlocks(text: string, actions: Action[]) {
+  return [
+    { type: "section", text: { type: "mrkdwn", text: escapeMrkdwn(truncate(text, 2900)) } },
+    {
+      type: "actions",
+      elements: actions.map((a) => ({
+        type: "button",
+        text: { type: "plain_text", text: a.label },
+        action_id: a.id,
+        value: a.id,
+        ...(a.style ? { style: a.style } : {}),
+      })),
+    },
+  ];
+}
 
 /** Verify `X-Slack-Signature` (v0 scheme): HMAC-SHA256 over `v0:{timestamp}:{raw body}`, 5-minute window. */
 export function verifySlackSignature(
@@ -133,6 +189,15 @@ export const slackAdapter: ChannelAdapter = {
     { key: "botToken", label: "Bot token (xoxb-…)", secret: true, required: true },
     { key: "signingSecret", label: "Signing secret", secret: true, required: true },
   ],
+  // Owner notices go to the conversation itself (top level), not into the pairing thread.
+  send: async (runtime, threadId, message) => {
+    const [channel] = threadId.split(":");
+    await slackApi(runtime, "chat.postMessage", {
+      channel,
+      text: truncate(message.text, 3900),
+      ...(message.actions?.length ? { blocks: slackBlocks(message.text, message.actions) } : {}),
+    });
+  },
   webhook: async (request, runtime) => {
     const raw = await request.text();
     const ok = verifySlackSignature(
@@ -142,6 +207,25 @@ export const slackAdapter: ChannelAdapter = {
       raw,
     );
     if (!ok) return new Response("Invalid signature", { status: 401 });
+    if (request.headers.get("content-type")?.includes("application/x-www-form-urlencoded")) {
+      const action = slackAction(parseSlackForm(raw) ?? { type: "" });
+      if (!action) return new Response("", { status: 200 });
+      // Ack within 3 seconds; the outcome goes back through response_url.
+      void (async () => {
+        const { ack, final } = await pressed(runtime, action.actionId, action.from);
+        const res = await runtime.fetch(action.responseUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            final
+              ? { replace_original: true, text: truncate(`${action.text}\n\n${ack}`, 3900) }
+              : { replace_original: false, response_type: "ephemeral", text: ack },
+          ),
+        });
+        if (!res.ok) throw new Error(`Slack response_url: ${res.status}`);
+      })().catch((error) => runtime.log(`slack: ${errorMessage(error)}`));
+      return new Response("", { status: 200 });
+    }
     let payload: { type: string; challenge?: string; event?: SlackEvent; authorizations?: { user_id?: string }[] };
     try {
       payload = JSON.parse(raw);

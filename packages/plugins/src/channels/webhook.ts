@@ -1,7 +1,7 @@
 import type { ChannelAdapter, InboundMessage } from "@z/core";
 import { z } from "zod";
 import { errorMessage, safeEqual } from "../util.ts";
-import { config } from "./shared.ts";
+import { config, pressed } from "./shared.ts";
 
 const ContextEntry = z.union([
   z.string(),
@@ -14,6 +14,13 @@ export const WebhookBody = z.object({
   messageId: z.string().max(200).optional(),
   author: z.union([z.string(), z.object({ id: z.string().optional(), name: z.string() })]).optional(),
   context: z.union([ContextEntry, z.array(ContextEntry)]).optional(),
+});
+
+/** A button press relayed by the integration: `{ action, threadId, authorId }`. */
+export const WebhookAction = z.object({
+  action: z.string().min(1).max(200),
+  threadId: z.string().max(200),
+  authorId: z.string().max(200),
 });
 
 export function webhookToInbound(body: z.output<typeof WebhookBody>, channelId: string, now = new Date()): InboundMessage {
@@ -42,7 +49,22 @@ export function webhookToInbound(body: z.output<typeof WebhookBody>, channelId: 
 export const webhookAdapter: ChannelAdapter = {
   kind: "webhook",
   label: "Webhook (JSON)",
-  config: [{ key: "secret", label: "Shared secret (sent as X-Z-Secret)", secret: true, required: true }],
+  config: [
+    { key: "secret", label: "Shared secret (sent as X-Z-Secret)", secret: true, required: true },
+    { key: "notifyUrl", label: "Notify URL (optional): receives owner notices as JSON POSTs" },
+  ],
+  send: async (runtime, threadId, message) => {
+    const url = config(runtime, "notifyUrl");
+    if (!url) throw new Error("notifyUrl is not configured");
+    const res = await runtime.fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-z-secret": config(runtime, "secret") },
+      body: JSON.stringify({ type: "notice", threadId, text: message.text, actions: message.actions ?? [] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    await res.body?.cancel();
+    if (!res.ok) throw new Error(`notifyUrl answered ${res.status}`);
+  },
   webhook: async (request, runtime) => {
     const secret = config(runtime, "secret");
     if (!secret) return Response.json({ error: "Channel has no secret configured" }, { status: 503 });
@@ -50,9 +72,16 @@ export const webhookAdapter: ChannelAdapter = {
     if (!safeEqual(request.headers.get("x-z-secret") ?? "", secret)) {
       return Response.json({ error: "Invalid X-Z-Secret" }, { status: 401 });
     }
+    let raw: unknown;
     let body: z.output<typeof WebhookBody>;
     try {
-      body = WebhookBody.parse(await request.json());
+      raw = await request.json();
+      const action = raw && typeof raw === "object" && "action" in raw ? WebhookAction.parse(raw) : null;
+      if (action) {
+        const { ack, final } = await pressed(runtime, action.action, { threadId: action.threadId, authorId: action.authorId });
+        return final ? Response.json({ ack }) : Response.json({ error: ack }, { status: 403 });
+      }
+      body = WebhookBody.parse(raw);
     } catch (error) {
       return Response.json({ error: `Invalid body: ${errorMessage(error)}` }, { status: 400 });
     }

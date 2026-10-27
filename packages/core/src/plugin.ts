@@ -63,7 +63,9 @@ export type ChannelRuntime = {
   dispatch: (message: InboundMessage) => Promise<OutboundReply | null>;
   /**
    * Handle a button press (e.g. Telegram callback, Discord component, Slack action).
-   * The server checks `from` is the paired owner. Resolves to a short ack to show.
+   * The server checks `from` is the paired owner. Resolves to a short ack once the action is
+   * final (show it and drop the buttons); rejects with a message to show when it was refused
+   * (e.g. not the owner), in which case the buttons stay for the owner.
    */
   act: (actionId: string, from: { threadId: string; authorId: string }) => Promise<string>;
   /** Small per-channel key/value store that survives restarts (cursors, ids). */
@@ -107,6 +109,11 @@ export type ZPlugin = {
   /** Enabled on first run. Defaults to true when the plugin needs no settings. */
   enabledByDefault?: boolean;
 };
+
+/** The 6-digit code of an owner pairing command (`/link 123456`, `/link@zbot 123456`, `@z /link 123456`), or null. */
+export function linkCode(text: string): string | null {
+  return /(?:^|\s)\/link(?:@\w+)?\s+(\d{6})\s*$/.exec(text)?.[1] ?? null;
+}
 
 export const definePlugin = (plugin: ZPlugin): ZPlugin => plugin;
 export const defineTool = <I, O>(tool: ZTool<I, O>): ZTool<I, O> => tool;

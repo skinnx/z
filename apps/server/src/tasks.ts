@@ -13,6 +13,7 @@ import {
 } from "@z/core";
 import type { ModelMessage } from "ai";
 import type { z } from "zod";
+import { clip, notify } from "./notify.ts";
 import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
 
@@ -85,6 +86,8 @@ export function createTasks(rt: Runtime) {
           store.approvals.insert(approval);
           events.push({ type: "approval", at: approval.createdAt, approvalId: approval.id });
           bus.emit({ type: "approval", approval });
+          const title = store.tasks.get(id)?.title ?? task.title;
+          notify({ kind: "approval", title: `Approval needed · ${clip(title, 80)}`, body: approval.summary, path: "/", approvalId: approval.id });
         }
         store.tasks.appendEvents(id, events);
         update(id, { status: "waiting" });
@@ -103,10 +106,19 @@ export function createTasks(rt: Runtime) {
     }
   }
 
-  /** One-shot tasks end; recurring ones go back to `scheduled`. */
+  /** One-shot tasks end and tell the owner; recurring ones go back to `scheduled`. */
   function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed") {
-    if (task.schedule) update(task.id, { ...patch, status: "scheduled", nextRunAt: nextRunAt(task.schedule, timezone()) });
-    else update(task.id, { ...patch, status, nextRunAt: null });
+    if (task.schedule) {
+      update(task.id, { ...patch, status: "scheduled", nextRunAt: nextRunAt(task.schedule, timezone()) });
+      return;
+    }
+    const done = update(task.id, { ...patch, status, nextRunAt: null });
+    notify({
+      kind: "task",
+      title: `${status === "done" ? "Done" : "Failed"} · ${clip(done?.title ?? task.title, 80)}`,
+      body: clip((status === "done" ? patch.result : patch.error) || "", 300),
+      path: `/tasks?task=${task.id}`,
+    });
   }
 
   function schedule(task: Task) {
