@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, sleep, truncate } from "../util.ts";
-import { config, shouldDispatch, untilAuthorized } from "./shared.ts";
+import { config, pressed, shouldDispatch, untilAuthorized, type Action } from "./shared.ts";
 
 const API = "https://discord.com/api/v10";
 const GATEWAY = "wss://gateway.discord.gg";
@@ -29,6 +29,52 @@ export type DMessage = {
   mentions?: DUser[];
   referenced_message?: DMessage | null;
 };
+
+/** INTERACTION_CREATE payload (the fields z reads). Type 3 is a message component, e.g. a button. */
+export type DInteraction = {
+  id: string;
+  token: string;
+  type: number;
+  channel_id?: string;
+  member?: { user: DUser };
+  user?: DUser;
+  data?: { custom_id?: string; component_type?: number };
+  message?: { id: string; content: string };
+};
+
+/** Pure mapping from a button press; null for any other interaction. */
+export function discordAction(i: DInteraction) {
+  const user = i.member?.user ?? i.user;
+  if (i.type !== 3 || !i.data?.custom_id || !i.channel_id || !user) return null;
+  return {
+    interactionId: i.id,
+    token: i.token,
+    actionId: i.data.custom_id,
+    from: { threadId: i.channel_id, authorId: user.id },
+    text: i.message?.content ?? "",
+  };
+}
+
+/** Actions as one action row of buttons (Discord allows five per row). */
+export function discordComponents(actions: Action[]) {
+  const style = { primary: 1, danger: 4 } as const;
+  return [
+    {
+      type: 1,
+      components: actions.slice(0, 5).map((a) => ({ type: 2, style: a.style ? style[a.style] : 2, label: a.label, custom_id: a.id })),
+    },
+  ];
+}
+
+/**
+ * The interaction response: a final outcome replaces the message (buttons removed, type 7);
+ * a refusal is an ephemeral reply only the presser sees (type 4, flag 64).
+ */
+export function discordInteractionResponse(text: string, ack: string, final: boolean) {
+  return final
+    ? { type: 7, data: { content: truncate(`${text}\n\n${ack}`, 2000), components: [] } }
+    : { type: 4, data: { content: truncate(ack, 2000), flags: 64 } };
+}
 
 function name(user: DUser): string {
   return user.global_name || user.username;
@@ -61,14 +107,18 @@ export function discordToInbound(
 }
 
 async function postReply(runtime: ChannelRuntime, m: DMessage, reply: OutboundReply): Promise<void> {
-  const body = JSON.stringify({
+  await postMessage(runtime, m.channel_id, {
     content: truncate(reply.text, 2000),
     message_reference: { message_id: reply.replyTo || m.id, fail_if_not_exists: false },
     // Never let model output ping @everyone/roles; still notify the person we reply to.
     allowed_mentions: { parse: [], replied_user: true },
   });
+}
+
+async function postMessage(runtime: ChannelRuntime, channelId: string, payload: unknown): Promise<void> {
+  const body = JSON.stringify(payload);
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await runtime.fetch(`${API}/channels/${m.channel_id}/messages`, {
+    const res = await runtime.fetch(`${API}/channels/${channelId}/messages`, {
       method: "POST",
       headers: { authorization: `Bot ${config(runtime, "botToken")}`, "content-type": "application/json" },
       body,
@@ -83,6 +133,19 @@ async function postReply(runtime: ChannelRuntime, m: DMessage, reply: OutboundRe
     throw new Error(`Discord POST message: ${res.status} ${detail}`);
   }
   throw new Error("Discord POST message: rate limited");
+}
+
+async function onInteraction(runtime: ChannelRuntime, interaction: DInteraction): Promise<void> {
+  const action = discordAction(interaction);
+  if (!action) return;
+  const { ack, final } = await pressed(runtime, action.actionId, action.from);
+  // Must be answered within 3 seconds; the token itself authorizes the callback.
+  const res = await runtime.fetch(`${API}/interactions/${action.interactionId}/${action.token}/callback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(discordInteractionResponse(action.text, ack, final)),
+  });
+  if (!res.ok) throw new Error(`Discord interaction callback: ${res.status}`);
 }
 
 async function checkToken(runtime: ChannelRuntime, signal: AbortSignal): Promise<void> {
@@ -102,6 +165,13 @@ export const discordAdapter: ChannelAdapter = {
   kind: "discord",
   label: "Discord",
   config: [{ key: "botToken", label: "Bot token", secret: true, required: true }],
+  send: async (runtime, threadId, message) => {
+    await postMessage(runtime, threadId, {
+      content: truncate(message.text, 2000),
+      allowed_mentions: { parse: [] },
+      ...(message.actions?.length ? { components: discordComponents(message.actions) } : {}),
+    });
+  },
   start: async (runtime) => {
     const token = config(runtime, "botToken");
     if (!token) {
@@ -189,6 +259,8 @@ export const discordAdapter: ChannelAdapter = {
                 runtime.status("ok", "Resumed");
               } else if (packet.t === "MESSAGE_CREATE") {
                 onMessage(packet.d as DMessage);
+              } else if (packet.t === "INTERACTION_CREATE") {
+                onInteraction(runtime, packet.d as DInteraction).catch((error) => runtime.log(`discord: ${errorMessage(error)}`));
               }
               break;
           }

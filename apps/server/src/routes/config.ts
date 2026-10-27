@@ -30,7 +30,8 @@ export function configRoutes({ rt, tasks, briefings, channels }: Services) {
 
   app.put("/settings", async (c) => {
     const current = store.settings.get();
-    const patch = await body(c, z.record(z.string(), z.unknown()));
+    // The owner is set by pairing only (POST /api/owner/link, DELETE /api/owner).
+    const { owner: _readOnly, ...patch } = await body(c, z.record(z.string(), z.unknown()));
     const next = validate(Settings, { ...current, ...patch });
     if (!isValidTimezone(next.timezone)) throw badRequest(`timezone: unknown time zone "${next.timezone}"`);
     if (!isValidCron(next.briefingCron, next.timezone)) throw badRequest(`briefingCron: invalid cron expression`);
