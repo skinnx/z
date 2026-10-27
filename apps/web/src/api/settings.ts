@@ -9,7 +9,7 @@ export function useSettings() {
 
 export function useSaveSettings() {
   return useMutation({
-    mutationFn: (settings: Settings) => api<Settings>("/settings", { method: "PUT", body: settings }),
+    mutationFn: (settings: Partial<Omit<Settings, "owner">>) => api<Settings>("/settings", { method: "PUT", body: settings }),
     onSuccess: (data) => queryClient.setQueryData(keys.settings, data),
   });
 }

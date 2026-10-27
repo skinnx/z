@@ -56,6 +56,11 @@ export type ChannelRuntime = {
   webhookUrl: string | null;
   /** Run the bot for one message; resolves to null when it decides not to answer. */
   dispatch: (message: InboundMessage) => Promise<OutboundReply | null>;
+  /**
+   * Handle a button press (e.g. Telegram callback, Discord component, Slack action).
+   * The server checks `from` is the paired owner. Resolves to a short ack to show.
+   */
+  act: (actionId: string, from: { threadId: string; authorId: string }) => Promise<string>;
   /** Small per-channel key/value store that survives restarts (cursors, ids). */
   state: {
     get: (key: string) => string | null;
@@ -73,6 +78,15 @@ export type ChannelAdapter = {
   config: SettingField[];
   /** Handle `POST /hooks/:channelId`. */
   webhook?: (request: Request, runtime: ChannelRuntime) => Promise<Response>;
+  /**
+   * Send an unprompted message to a thread (owner notices). `actions` become
+   * buttons where the platform supports them; ids are opaque and go back via `runtime.act`.
+   */
+  send?: (
+    runtime: ChannelRuntime,
+    threadId: string,
+    message: { text: string; actions?: { id: string; label: string; style?: "primary" | "danger" }[] },
+  ) => Promise<void>;
   /** Start a long-lived connection (polling, gateway). Returns a stop function. */
   start?: (runtime: ChannelRuntime) => Promise<() => void | Promise<void>>;
 };
