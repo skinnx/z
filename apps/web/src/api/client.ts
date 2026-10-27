@@ -1,0 +1,65 @@
+import { createSignal, createStored } from "../lib/store.ts";
+
+/** Optional bearer token for servers started with Z_TOKEN. */
+export const token = createStored<string>("z.token", () => "", (v): v is string => v.length > 0);
+
+/** Set when the server answered 401; the token dialog listens to it. */
+export const authRequired = createSignal(false);
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function authHeaders(): Record<string, string> {
+  const tok = token.get();
+  return tok ? { Authorization: `Bearer ${tok}` } : {};
+}
+
+/** Typed JSON fetch against the z server. Throws ApiError on non-2xx. */
+export async function api<T>(path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      method: init.method ?? (init.body === undefined ? "GET" : "POST"),
+      headers: {
+        ...authHeaders(),
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      signal: init.signal,
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new ApiError(0, "offline");
+  }
+  if (res.status === 401) authRequired.set(true);
+  const text = await res.text();
+  const data: unknown = text ? safeJson(text) : null;
+  if (!res.ok) {
+    const message =
+      data && typeof data === "object" && "error" in data && typeof data.error === "string"
+        ? data.error
+        : `${res.status} ${res.statusText}`;
+    throw new ApiError(res.status, message);
+  }
+  return data as T;
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+/** URL for EventSource, which cannot send headers. */
+export function eventsUrl(): string {
+  const tok = token.get();
+  return tok ? `/api/events?token=${encodeURIComponent(tok)}` : "/api/events";
+}
