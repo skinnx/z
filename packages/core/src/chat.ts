@@ -1,7 +1,8 @@
 /** Streaming chat for the web UI, using the AI SDK's native tool-approval flow. */
 import { convertToModelMessages, generateId, stepCountIs, streamText, type UIMessage } from "ai";
-import type { ModelRef, Routing, Settings } from "./contract.ts";
-import { baseInstructions } from "./prompt.ts";
+import type { Memory, ModelRef, Routing, Settings } from "./contract.ts";
+import { memoryPrompt } from "./memory.ts";
+import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, type ModelResolver } from "./providers.ts";
 import { buildTools, type ActivePlugin } from "./tools.ts";
 
@@ -10,6 +11,8 @@ export type ChatDeps = {
   routing: Routing;
   settings: Settings;
   plugins: ActivePlugin[];
+  /** The owner's long-term memories; the most relevant to the latest message go into the prompt. */
+  memories?: Memory[];
   log?: (text: string) => void;
 };
 
@@ -28,10 +31,14 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
 
   const result = streamText({
     model,
-    instructions: baseInstructions(
-      deps.settings,
-      new Date(),
-      "You are chatting with the user directly. Use tools when they help; tools that change things wait for the user's approval in the UI.",
+    instructions: joinSections(
+      baseInstructions(
+        deps.settings,
+        new Date(),
+        "You are chatting with the user directly. Use tools when they help; tools that change things wait for the user's approval in the UI." +
+          memoryHint(built.tools),
+      ),
+      memoryPrompt(deps.memories, lastUserText(request.messages)),
     ),
     messages: await convertToModelMessages(request.messages, { tools: built.tools, ignoreIncompleteToolCalls: true }),
     tools: built.tools,
@@ -46,4 +53,9 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
     onEnd: ({ messages }) => request.onFinish?.(messages),
     onError: describeError,
   });
+}
+
+function lastUserText(messages: UIMessage[]): string {
+  const last = messages.findLast((m) => m.role === "user");
+  return last?.parts.map((p) => (p.type === "text" ? p.text : "")).join(" ") ?? "";
 }

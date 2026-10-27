@@ -26,3 +26,15 @@ export function baseInstructions(settings: Settings, now: Date, role: string): s
   if (settings.persona.trim()) parts.push(`About the user and how to behave:\n${settings.persona.trim()}`);
   return parts.join("\n\n");
 }
+
+/** Join prompt sections, skipping empty ones. */
+export function joinSections(...sections: (string | null | undefined | false)[]): string {
+  return sections.filter(Boolean).join("\n\n");
+}
+
+/** Nudge towards the memory tools when the run has them. */
+export function memoryHint(tools: Record<string, unknown>): string {
+  return "memory_remember" in tools
+    ? " When you learn a lasting fact or preference about the user (not secrets, not one-off details), save it with memory_remember."
+    : "";
+}

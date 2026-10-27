@@ -1,7 +1,8 @@
 /** Turn plugin tools into an AI SDK ToolSet with z's approval policy applied. */
-import { tool, type ToolSet } from "ai";
+import { tool, type ToolApprovalStatus, type ToolSet } from "ai";
 import type { ApprovalPolicy, Risk } from "./contract.ts";
 import type { ZPlugin, ZTool } from "./plugin.ts";
+import { findSensitive } from "./sensitive.ts";
 
 /** An enabled plugin together with its decrypted settings. */
 export type ActivePlugin = { plugin: ZPlugin; settings: Record<string, string> };
@@ -16,6 +17,8 @@ export type BuildToolsOptions = {
   only?: string[] | null;
   /** Expose only read-risk tools, and never anything that would need approval. */
   readOnly?: boolean;
+  /** Strangers can reach this run (channel bots): drop `ownerOnly` tools. */
+  public?: boolean;
   log?: (text: string) => void;
   onCall?: (report: ToolCallReport) => void;
 };
@@ -23,15 +26,15 @@ export type BuildToolsOptions = {
 export type BuiltTools = {
   tools: ToolSet;
   /** Pass as `toolApproval` to generateText/streamText. */
-  approval: Record<string, "user-approval" | "not-applicable">;
+  approval: Record<string, ToolApprovalStatus | ((input: unknown) => ToolApprovalStatus)>;
   info: Record<string, ToolInfo>;
 };
 
 export const toolName = (pluginId: string, name: string) => `${pluginId}_${name}`;
 
 /** Whether a tool call must wait for the user, or `null` when the tool may not be exposed at all. */
-export function approvalFor(name: string, risk: Risk, policy: ApprovalPolicy): boolean | null {
-  const rule = policy[name];
+export function approvalFor(name: string, risk: Risk, policy: ApprovalPolicy, defaultPolicy?: ZTool["defaultPolicy"]): boolean | null {
+  const rule = policy[name] ?? (risk === "external" ? undefined : defaultPolicy);
   if (rule === "deny") return null;
   if (rule === "allow") return false;
   if (risk === "read") return rule === "ask";
@@ -55,9 +58,11 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
 
   for (const info of listTools(plugins)) {
     if (options.only && !options.only.includes(info.name)) continue;
-    const needsApproval = approvalFor(info.name, info.risk, options.policy);
+    const needsApproval = approvalFor(info.name, info.risk, options.policy, info.tool.defaultPolicy);
     if (needsApproval === null) continue;
     if (options.readOnly && (info.risk !== "read" || needsApproval)) continue;
+    if (options.public && info.tool.ownerOnly) continue;
+    const guarded = info.risk !== "read";
 
     const settings = settingsById.get(info.pluginId) ?? {};
     const log = (text: string) => options.log?.(`[${info.name}] ${text}`);
@@ -65,6 +70,14 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
       description: info.tool.description,
       inputSchema: info.tool.inputSchema,
       execute: async (input: unknown, { abortSignal }) => {
+        // Sensitive-data guard: write/external tools never receive card numbers, keys and the like.
+        const sensitive = guarded ? findSensitive(input) : null;
+        if (sensitive) {
+          const message = `blocked: contains ${sensitive}`;
+          log(message);
+          options.onCall?.({ tool: info.name, input: `[withheld: contains ${sensitive}]`, error: message });
+          throw new Error(`${message}. z never passes highly sensitive data to tools that write or send; do not retry with it.`);
+        }
         try {
           const output = await info.tool.execute(input, {
             settings,
@@ -81,7 +94,12 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
         }
       },
     });
-    out.approval[info.name] = needsApproval ? "user-approval" : "not-applicable";
+    // A call the guard will block is not worth the user's approval: let it fail straight away.
+    out.approval[info.name] = !needsApproval
+      ? "not-applicable"
+      : guarded
+        ? (input: unknown) => (findSensitive(input) ? "not-applicable" : "user-approval")
+        : "user-approval";
     out.info[info.name] = info;
   }
   return out;

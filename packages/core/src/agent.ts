@@ -1,7 +1,8 @@
 /** The proactive agent: run a Task as a tool loop that pauses for approvals. */
 import { generateText, stepCountIs, type ModelMessage } from "ai";
-import type { Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
-import { baseInstructions } from "./prompt.ts";
+import type { Memory, Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
+import { memoryPrompt } from "./memory.ts";
+import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, laneConfigured, type ModelResolver } from "./providers.ts";
 import { buildTools, summarizeCall, type ActivePlugin } from "./tools.ts";
 
@@ -12,6 +13,8 @@ export type AgentDeps = {
   routing: Routing;
   settings: Settings;
   plugins: ActivePlugin[];
+  /** The owner's long-term memories. Owner-facing runs only; never set for channel bots. */
+  memories?: Memory[];
   log?: (text: string) => void;
 };
 
@@ -57,13 +60,17 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
         onCall: ({ ref, usage }) =>
           opts.onEvent({ type: "model", at: at(), model: ref, tokens: usage.inputTokens + usage.outputTokens }),
       }),
-      instructions: baseInstructions(
-        deps.settings,
-        new Date(),
-        "You are working on a task the user delegated to you while they are away. " +
-          "Use the available tools when they help. Some tools need the user's approval; " +
-          "if a call is denied, adapt or explain what you could not do. " +
-          "Finish with a concise report of what you did and found.",
+      instructions: joinSections(
+        baseInstructions(
+          deps.settings,
+          new Date(),
+          "You are working on a task the user delegated to you while they are away. " +
+            "Use the available tools when they help. Some tools need the user's approval; " +
+            "if a call is denied, adapt or explain what you could not do. " +
+            "Finish with a concise report of what you did and found." +
+            memoryHint(built.tools),
+        ),
+        memoryPrompt(deps.memories, task.instructions),
       ),
       messages,
       tools: built.tools,

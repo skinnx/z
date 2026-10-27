@@ -40,7 +40,9 @@ export async function answerMessage(message: InboundMessage, deps: BotDeps): Pro
   if (!message.text.trim() && !message.context?.length) return null;
 
   const maxLength = deps.maxLength ?? DEFAULT_REPLY_LENGTH[deps.channel.kind] ?? 2000;
-  const built = buildTools(deps.plugins, { policy: deps.settings.approvals, readOnly: true, log: deps.log });
+  // `public`: owner-only tools (memory) never reach strangers, whatever the policy says.
+  // BotDeps deliberately has no `memories`, so nothing about the owner reaches this prompt either.
+  const built = buildTools(deps.plugins, { policy: deps.settings.approvals, readOnly: true, public: true, log: deps.log });
 
   const { text } = await generateText({
     model: deps.models.forLane(deps.routing, deps.channel.lane),
