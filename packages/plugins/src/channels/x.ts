@@ -118,6 +118,8 @@ async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void>
   let me: XUser | null = null;
   let sinceId: string | null = null;
   let baselined = false;
+  // Cursor keys are per bot account, so swapping the token does not reuse another account's cursor.
+  const key = (name: string) => `${name}:${me!.id}`;
   let attempt = 0;
   while (!signal.aborted) {
     let waitMs = pollMs;
@@ -126,6 +128,8 @@ async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void>
         const { data } = await xApi<{ data: XUser }>(runtime, "/users/me", {}, signal);
         const userId = config(runtime, "userId");
         me = userId && userId !== data.data.id ? { ...data.data, id: userId } : data.data;
+        sinceId = runtime.state.get(key("sinceId"));
+        baselined = runtime.state.get(key("baselined")) === "1";
       }
       const tweets: Tweet[] = [];
       const includes: Required<Includes> = { tweets: [], users: [] };
@@ -150,16 +154,24 @@ async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void>
         page = data.meta?.next_token;
         if (!page || wait) break;
       }
-      if (newest) sinceId = newest;
       if (!baselined) {
+        // First run ever: only record where the timeline is, so old mentions are not answered.
         baselined = true;
+        runtime.state.set(key("baselined"), "1");
         runtime.status("ok", `Watching mentions of @${me.username}`);
       } else {
-        // The timeline is newest first; answer in the order people asked.
+        // The timeline is newest first; answer in the order people asked, advancing the cursor
+        // after each so a restart mid-batch resumes after the last answered mention.
         for (const tweet of tweets.reverse()) {
           if (signal.aborted) return;
           await answer(runtime, tweet, includes, me);
+          sinceId = tweet.id;
+          runtime.state.set(key("sinceId"), sinceId);
         }
+      }
+      if (newest && newest !== sinceId) {
+        sinceId = newest;
+        runtime.state.set(key("sinceId"), sinceId);
       }
       attempt = 0;
     } catch (error) {

@@ -89,7 +89,10 @@ async function call<T>(runtime: ChannelRuntime, method: string, body: unknown, s
     description?: string;
     error_code?: number;
   };
-  if (!data.ok) throw Object.assign(new Error(`Telegram ${method}: ${data.description}`), { code: data.error_code });
+  if (!data.ok) {
+    const detail = String(data.description).replaceAll(token, "***");
+    throw Object.assign(new Error(`Telegram ${method}: ${detail}`), { code: data.error_code });
+  }
   return data.result as T;
 }
 
@@ -140,7 +143,8 @@ function processInBackground(runtime: ChannelRuntime, update: TgUpdate): void {
 }
 
 async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void> {
-  let offset = 0;
+  // Persisted so a restart neither replays nor skips updates Telegram is still holding.
+  let offset = Number(runtime.state.get("offset")) || 0;
   let attempt = 0;
   // getUpdates returns 409 while a webhook is registered.
   while (!signal.aborted) {
@@ -170,6 +174,7 @@ async function poll(runtime: ChannelRuntime, signal: AbortSignal): Promise<void>
         offset = update.update_id + 1;
         processInBackground(runtime, update);
       }
+      if (updates.length) runtime.state.set("offset", String(offset));
     } catch (error) {
       if (signal.aborted) return;
       healthy = false;
