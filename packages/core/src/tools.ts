@@ -69,6 +69,7 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
     out.tools[info.name] = tool({
       description: info.tool.description,
       inputSchema: info.tool.inputSchema,
+      ...(info.tool.toModelOutput && { toModelOutput: info.tool.toModelOutput as any }),
       execute: async (input: unknown, { abortSignal }) => {
         // Sensitive-data guard: write/external tools never receive card numbers, keys and the like.
         const sensitive = guarded ? findSensitive(input) : null;
