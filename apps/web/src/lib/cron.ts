@@ -19,6 +19,15 @@ export function parseCron(cron: string | null | undefined): { preset: Preset; ti
   return { preset: m[3] === "1-5" ? "weekdays" : "daily", time };
 }
 
+/** How often a watch checks. */
+export type WatchEvery = "hourly" | "4h" | "daily" | "custom";
+
+export function watchCron(every: WatchEvery, hhmm: string, custom: string): string | undefined {
+  if (every === "hourly") return "0 * * * *";
+  if (every === "4h") return "0 */4 * * *";
+  return toCron(every, hhmm, custom);
+}
+
 export function isValidCron(cron: string): boolean {
   const parts = cron.trim().split(/\s+/);
   return parts.length >= 5 && parts.length <= 6 && parts.every((p) => /^[\d*/,\-A-Za-z?LW#]+$/.test(p));

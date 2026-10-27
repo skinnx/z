@@ -1,5 +1,5 @@
 import { Toast as BaseToast } from "@base-ui/react/toast";
-import { CircleAlert, CircleCheck, ShieldAlert, X } from "lucide-react";
+import { CircleAlert, CircleCheck, Radar, ShieldAlert, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { t } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
@@ -8,7 +8,7 @@ import { buttonClass } from "./button.tsx";
 /** One manager for the whole app, usable outside React (live events, mutations). */
 export const toastManager = BaseToast.createToastManager();
 
-type Kind = "success" | "error" | "approval";
+type Kind = "success" | "error" | "approval" | "watch";
 
 export function notify(
   kind: Kind,
@@ -21,7 +21,7 @@ export function notify(
     title,
     description,
     priority: kind === "success" ? "low" : "high",
-    timeout: kind === "approval" ? 10_000 : 5_000,
+    timeout: kind === "approval" || kind === "watch" ? 10_000 : 5_000,
     actionProps: action ? { children: action.label, onClick: action.onClick } : undefined,
   });
 }
@@ -35,6 +35,7 @@ const icons: Record<Kind, ReactNode> = {
   success: <CircleCheck aria-hidden className="size-5 text-ok" />,
   error: <CircleAlert aria-hidden className="size-5 text-danger" />,
   approval: <ShieldAlert aria-hidden className="size-5 text-warn" />,
+  watch: <Radar aria-hidden className="size-5 text-accent-text" />,
 };
 
 function ToastList() {

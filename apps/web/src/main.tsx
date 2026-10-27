@@ -17,6 +17,7 @@ const Channels = lazy(() => import("./routes/channels.tsx"));
 const Models = lazy(() => import("./routes/models.tsx"));
 const Plugins = lazy(() => import("./routes/plugins.tsx"));
 const SettingsRoute = lazy(() => import("./routes/settings.tsx"));
+const MemoryRoute = lazy(() => import("./routes/memory.tsx"));
 
 const router = createBrowserRouter([
   {
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { index: true, element: <Today /> },
       { path: "chat/:id?", element: <Chat /> },
       { path: "tasks", element: <Tasks /> },
+      { path: "memory", element: <MemoryRoute /> },
       { path: "channels", element: <Channels /> },
       { path: "models", element: <Models /> },
       { path: "plugins", element: <Plugins /> },

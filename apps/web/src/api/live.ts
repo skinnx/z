@@ -1,13 +1,13 @@
-import type { Approval, ChannelView, LiveEvent, Task } from "@z/core";
+import type { Approval, ChannelView, LiveEvent, Notice, Task } from "@z/core";
 import { useEffect } from "react";
 import { t } from "../i18n.ts";
 import { notify } from "../ui/toast.tsx";
 import { eventsUrl, token } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
-const TYPES = ["task", "approval", "briefing", "channel"] as const;
+const TYPES = ["task", "approval", "briefing", "channel", "notice"] as const;
 
-function apply(event: LiveEvent, onReview: () => void) {
+function apply(event: LiveEvent, go: (path: string) => void) {
   switch (event.type) {
     case "task":
       queryClient.setQueryData<Task[]>(keys.tasks, (list) => (list ? upsert(list, event.task) : list));
@@ -20,7 +20,7 @@ function apply(event: LiveEvent, onReview: () => void) {
         a.status === "pending" ? upsert(prev, a) : prev?.filter((x) => x.id !== a.id),
       );
       if (a.status === "pending" && !known) {
-        notify("approval", t().newApproval, a.summary, { label: t().review, onClick: onReview });
+        notify("approval", t().newApproval, a.summary, { label: t().review, onClick: () => go("/") });
       }
       break;
     }
@@ -30,18 +30,26 @@ function apply(event: LiveEvent, onReview: () => void) {
     case "channel":
       queryClient.setQueryData<ChannelView[]>(keys.channels, (list) => (list ? upsert(list, event.channel, false) : list));
       break;
+    case "notice": {
+      const n = event.notice;
+      const known = queryClient.getQueryData<Notice[]>(keys.notices)?.some((x) => x.id === n.id) ?? false;
+      queryClient.setQueryData<Notice[]>(keys.notices, (list) => (list ? upsert(list, n) : list));
+      // Approvals already toast above; watch hits are the other thing worth interrupting for.
+      if (n.kind === "watch" && !n.read && !known) notify("watch", n.title, n.body, { label: t().showDetails, onClick: () => go(n.path) });
+      break;
+    }
   }
 }
 
-/** One EventSource for the whole app, feeding the React Query cache. */
-export function useLiveEvents(onReview: () => void) {
+/** One EventSource for the whole app, feeding the React Query cache. `go` opens an app path from a toast. */
+export function useLiveEvents(go: (path: string) => void) {
   const tok = token.use();
   useEffect(() => {
     const source = new EventSource(eventsUrl());
     const handle = (e: MessageEvent<string>) => {
       try {
         const data = JSON.parse(e.data) as LiveEvent;
-        if (data && typeof data === "object" && "type" in data) apply(data, onReview);
+        if (data && typeof data === "object" && "type" in data) apply(data, go);
       } catch {
         // ignore keep-alives and malformed frames
       }
@@ -55,5 +63,5 @@ export function useLiveEvents(onReview: () => void) {
       opened = true;
     };
     return () => source.close();
-  }, [tok, onReview]);
+  }, [tok, go]);
 }

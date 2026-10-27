@@ -113,7 +113,7 @@ function AgentSettings({ initial }: { initial: SettingsT }) {
           <Card>
             <ul className="divide-y divide-line">
               {tools.map((tool) => {
-                const fallback: Policy = tool.risk === "read" ? "allow" : "ask";
+                const fallback: Policy = tool.defaultPolicy ?? (tool.risk === "read" ? "allow" : "ask");
                 return (
                   <li key={tool.key} className="flex flex-wrap items-center gap-3 px-4 py-3">
                     <RiskIcon risk={tool.risk} t={t} />

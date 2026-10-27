@@ -11,6 +11,7 @@ import { Kbd, Spinner } from "../ui/card.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { Menu, MenuItem, MenuLinkItem, MenuSeparator } from "../ui/menu.tsx";
 import { CommandMenu, commandMenuOpen } from "./command-menu.tsx";
+import { NoticeBell, NoticeTab } from "./notices.tsx";
 import { NAV } from "./nav.ts";
 import { TokenDialog } from "./token-dialog.tsx";
 
@@ -37,8 +38,8 @@ export function Shell() {
   const navigate = useNavigate();
   const location = useLocation();
   const pending = usePendingApprovals().data?.length ?? 0;
-  const onReview = useCallback(() => navigate("/"), [navigate]);
-  useLiveEvents(onReview);
+  const go = useCallback((path: string) => navigate(path), [navigate]);
+  useLiveEvents(go);
   const isChat = location.pathname.startsWith("/chat");
   const morePaths = NAV.filter((n) => !n.primary).map((n) => n.to);
   const moreActive = morePaths.some((p) => location.pathname.startsWith(p));
@@ -57,9 +58,12 @@ export function Shell() {
         <div className="mb-4 flex items-center justify-between ps-2">
           <Logo />
           <span className="sr-only">z</span>
-          <IconButton label={t.toggleTheme} onClick={toggleTheme} className="text-fg-muted">
-            <SunMoon aria-hidden />
-          </IconButton>
+          <div className="flex items-center">
+            <NoticeBell />
+            <IconButton label={t.toggleTheme} onClick={toggleTheme} className="text-fg-muted">
+              <SunMoon aria-hidden />
+            </IconButton>
+          </div>
         </div>
         <nav aria-label={t.mainNav} className="flex flex-col gap-0.5">
           {NAV.map((n) => (
@@ -105,7 +109,7 @@ export function Shell() {
       {/* Small screens: bottom tab bar */}
       <nav
         aria-label={t.mainNav}
-        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-6 border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
       >
         {NAV.filter((n) => n.primary).map((n) => (
           <NavLink
@@ -131,6 +135,7 @@ export function Shell() {
             {n.to === "/" && pending > 0 && <span className="sr-only">{t.pendingCount(pending)}</span>}
           </NavLink>
         ))}
+        <NoticeTab className="relative flex h-16 flex-col items-center justify-center gap-1 text-[0.6875rem] font-medium text-fg-muted" />
         <Menu
           side="top"
           trigger={

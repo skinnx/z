@@ -1,5 +1,5 @@
 import type { Task, TaskEvent, TaskStatus } from "@z/core";
-import { Ban, Bot, Cpu, Footprints, ListChecks, Play, Plus, ShieldAlert, SquarePen, Trash2, Wrench } from "lucide-react";
+import { Ban, Bot, Cpu, Footprints, ListChecks, Play, Plus, Radar, ShieldAlert, SquarePen, Trash2, Wrench } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { useSearchParams } from "react-router";
 import { useEffect, useState } from "react";
@@ -18,7 +18,7 @@ import { Drawer } from "../ui/drawer.tsx";
 import { TabList, TabPanel, TabsRoot } from "../ui/tabs.tsx";
 import { notifyError } from "../ui/toast.tsx";
 
-type Tab = "active" | "scheduled" | "done";
+type Tab = "active" | "scheduled" | "watch" | "done";
 const TAB_OF: Record<TaskStatus, Tab> = {
   queued: "active",
   running: "active",
@@ -29,11 +29,16 @@ const TAB_OF: Record<TaskStatus, Tab> = {
   cancelled: "done",
 };
 
+/** Watches live in their own tab whatever their status. */
+const tabOf = (task: Task): Tab => (task.mode === "watch" ? "watch" : TAB_OF[task.status]);
+
 export function scheduleText(schedule: string | null, t: Dict): string | null {
   if (!schedule) return null;
   const c = parseCron(schedule);
   if (c.preset === "daily") return `${t.sched_daily} ${t.at} ${c.time}`;
   if (c.preset === "weekdays") return `${t.sched_weekdays} ${t.at} ${c.time}`;
+  if (schedule.trim() === "0 * * * *") return t.every_hourly;
+  if (schedule.trim() === "0 */4 * * *") return t.every_4h;
   return schedule;
 }
 
@@ -45,16 +50,24 @@ export default function Tasks() {
   const openId = params.get("task");
   const list = tasks.data ?? [];
   const open = list.find((x) => x.id === openId) ?? null;
-  const by = (tab: Tab) => list.filter((x) => TAB_OF[x.status] === tab);
+  const by = (tab: Tab) => list.filter((x) => tabOf(x) === tab);
   const active = by("active");
   const [tab, setTab] = useState<Tab | null>(null);
-  const initialTab: Tab = open ? TAB_OF[open.status] : active.length || !list.length ? "active" : by("scheduled").length ? "scheduled" : "done";
+  const initialTab: Tab = open
+    ? tabOf(open)
+    : active.length || !list.length
+      ? "active"
+      : by("scheduled").length
+        ? "scheduled"
+        : by("watch").length
+          ? "watch"
+          : "done";
   // Pick the tab once data is in, then keep the user's choice (remounting would drop focus).
   useEffect(() => {
     if (tasks.data && tab === null) setTab(initialTab);
   }, [tasks.data, tab, initialTab]);
   useEffect(() => {
-    if (open) setTab(TAB_OF[open.status]);
+    if (open) setTab(tabOf(open));
     // only when a different task is opened (e.g. from the command menu)
   }, [openId]);
 
@@ -67,7 +80,7 @@ export default function Tasks() {
     </Button>
   );
 
-  const empty: Record<Tab, string> = { active: t.noActive, scheduled: t.noScheduled, done: t.noDone };
+  const empty: Record<Tab, string> = { active: t.noActive, scheduled: t.noScheduled, watch: t.noWatches, done: t.noDone };
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6 md:px-8 md:py-10">
@@ -85,13 +98,14 @@ export default function Tasks() {
                 tabs={[
                   { value: "active", label: t.tab_active, count: active.length },
                   { value: "scheduled", label: t.tab_scheduled, count: by("scheduled").length },
+                  { value: "watch", label: t.tab_watch, count: by("watch").length, icon: <Radar aria-hidden /> },
                   { value: "done", label: t.tab_done },
                 ]}
               />
             </div>
             <div className="mb-1.5 hidden sm:block">{newTask}</div>
           </div>
-          {(["active", "scheduled", "done"] as const).map((tab) => {
+          {(["active", "scheduled", "watch", "done"] as const).map((tab) => {
             const items = by(tab);
             return (
               <TabPanel key={tab} value={tab} className="pt-4">
@@ -102,9 +116,13 @@ export default function Tasks() {
                 ) : (
                   <Card>
                     <ul className="divide-y divide-line">
-                      {items.map((task) => (
-                        <TaskRow key={task.id} task={task} onOpen={() => select(task.id)} />
-                      ))}
+                      {items.map((task) =>
+                        task.mode === "watch" ? (
+                          <WatchRow key={task.id} task={task} onOpen={() => select(task.id)} />
+                        ) : (
+                          <TaskRow key={task.id} task={task} onOpen={() => select(task.id)} />
+                        ),
+                      )}
                     </ul>
                   </Card>
                 )}
@@ -173,6 +191,48 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   );
 }
 
+/** A watch: when it last looked and what it last found. */
+function WatchRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
+  const t = useT();
+  const finding = task.watch?.lastFinding ?? null;
+  const checked = task.watch?.lastCheckAt ?? null;
+  const busy = task.status === "running" || task.status === "queued";
+  return (
+    <li>
+      <button type="button" onClick={onOpen} className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-start hover:bg-subtle/60">
+        {busy || task.status === "cancelled" ? (
+          <StatusIcon status={task.status} t={t} />
+        ) : (
+          <Radar role="img" aria-label={t.sched_watch} className={task.error ? "size-5 shrink-0 text-danger" : "size-5 shrink-0 text-accent-text"} />
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{task.title}</span>
+          <span className="mt-0.5 block truncate text-xs text-fg-muted">
+            {task.error ? (
+              <span className="text-danger">{task.error}</span>
+            ) : finding ? (
+              <>
+                <span className="text-fg">{finding.title}</span> · <time dateTime={finding.at}>{relativeTime(finding.at)}</time>
+              </>
+            ) : (
+              t.noFindingYet
+            )}
+          </span>
+        </span>
+        <span className="shrink-0 text-end text-xs text-fg-muted">
+          {busy ? (
+            t.checkingNow
+          ) : checked ? (
+            <time dateTime={checked}>{t.checked(relativeTime(checked))}</time>
+          ) : (
+            scheduleText(task.schedule, t)
+          )}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) {
   const t = useT();
   const action = useTaskAction();
@@ -225,6 +285,12 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
             </dd>
           </>
         )}
+        {task.mode === "watch" && (
+          <>
+            <dt className="text-fg-muted">{t.lastCheck}</dt>
+            <dd className="text-end">{task.watch?.lastCheckAt ? <time dateTime={task.watch.lastCheckAt}>{dateTime(task.watch.lastCheckAt)}</time> : "—"}</dd>
+          </>
+        )}
         <dt className="text-fg-muted">{t.lane}</dt>
         <dd className="text-end">
           <Badge>{t[`lane_${task.lane}`]}</Badge>
@@ -251,10 +317,23 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
         </div>
       )}
 
-      {task.result && (
-        <section aria-label={t.result} className="prose-z">
-          <Streamdown mode="static">{task.result}</Streamdown>
+      {task.mode === "watch" && task.watch?.lastFinding ? (
+        <section aria-label={t.lastFinding} className="flex flex-col gap-1 rounded-xl border border-accent/40 bg-accent-soft/40 p-3">
+          <h3 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-accent-text uppercase">
+            <Radar aria-hidden className="size-3.5" />
+            {t.lastFinding} · <time dateTime={task.watch.lastFinding.at}>{relativeTime(task.watch.lastFinding.at)}</time>
+          </h3>
+          <p className="font-medium break-words">{task.watch.lastFinding.title}</p>
+          <div className="prose-z text-sm">
+            <Streamdown mode="static">{task.watch.lastFinding.body}</Streamdown>
+          </div>
         </section>
+      ) : (
+        task.result && (
+          <section aria-label={t.result} className="prose-z">
+            <Streamdown mode="static">{task.result}</Streamdown>
+          </section>
+        )
       )}
 
       {task.events.length > 0 && (
