@@ -2,8 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import {
+  DEFAULT_WATCH_SCHEDULE,
   deriveTitle,
+  MAX_FINGERPRINTS,
   runTask,
+  runWatch,
   withApprovalResponses,
   type Approval,
   type ApprovalDecision,
@@ -62,8 +65,10 @@ export function createTasks(rt: Runtime) {
       emit(id);
     };
 
+    if (task.mode === "watch") return executeWatch(task, controller, onEvent);
+
     try {
-      const outcome = await runTask(task, rt.deps(`task:${id.slice(0, 8)}`), {
+      const outcome = await runTask(task, rt.ownerDeps(`task:${id.slice(0, 8)}`), {
         messages: store.tasks.messages(id),
         signal: controller.signal,
         onEvent,
@@ -85,6 +90,7 @@ export function createTasks(rt: Runtime) {
           store.approvals.insert(approval);
           events.push({ type: "approval", at: approval.createdAt, approvalId: approval.id });
           bus.emit({ type: "approval", approval });
+          rt.notify({ kind: "approval", title: `Approve? ${task.title}`, body: approval.summary, path: "/", approvalId: approval.id });
         }
         store.tasks.appendEvents(id, events);
         update(id, { status: "waiting" });
@@ -103,10 +109,49 @@ export function createTasks(rt: Runtime) {
     }
   }
 
-  /** One-shot tasks end; recurring ones go back to `scheduled`. */
+  /** A watch check: look with read tools, decide, notify only on something new. */
+  async function executeWatch(task: Task, controller: AbortController, onEvent: (event: TaskEvent) => void) {
+    const id = task.id;
+    try {
+      const outcome = await runWatch(task, rt.ownerDeps(`watch:${id.slice(0, 8)}`), {
+        seen: store.tasks.fingerprints(id),
+        signal: controller.signal,
+        onEvent,
+      });
+      if (controller.signal.aborted || !store.tasks.get(id)) return;
+      if (outcome.status === "failed") return finish(task, { error: outcome.error }, "failed");
+
+      const checkedAt = new Date().toISOString();
+      const { decision } = outcome;
+      const previous = store.tasks.get(id)?.watch?.lastFinding ?? null;
+      const lastFinding = decision.notify ? { title: decision.title, body: decision.body, at: checkedAt } : previous;
+      store.tasks.recordWatch(id, { lastCheckAt: checkedAt, lastFinding }, outcome.fingerprints, MAX_FINGERPRINTS);
+      if (decision.notify) {
+        rt.notify({ kind: "watch", title: decision.title, body: decision.body, path: `/tasks?task=${encodeURIComponent(id)}` });
+      }
+      finish(task, { ...(decision.notify ? { result: decision.body } : {}), error: null }, "done");
+    } catch (error) {
+      finish(task, { error: error instanceof Error ? error.message : String(error) }, "failed");
+    } finally {
+      running.delete(id);
+      pump();
+    }
+  }
+
+  /** One-shot tasks end (and tell the owner); recurring ones go back to `scheduled`. */
   function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed") {
-    if (task.schedule) update(task.id, { ...patch, status: "scheduled", nextRunAt: nextRunAt(task.schedule, timezone()) });
-    else update(task.id, { ...patch, status, nextRunAt: null });
+    if (task.schedule) {
+      update(task.id, { ...patch, status: "scheduled", nextRunAt: nextRunAt(task.schedule, timezone()) });
+      return;
+    }
+    const done = update(task.id, { ...patch, status, nextRunAt: null });
+    if (!done) return;
+    rt.notify({
+      kind: "task",
+      title: `${status === "done" ? "Done" : "Failed"}: ${done.title}`,
+      body: (status === "done" ? done.result : done.error) ?? "",
+      path: `/tasks?task=${encodeURIComponent(task.id)}`,
+    });
   }
 
   function schedule(task: Task) {
@@ -124,7 +169,10 @@ export function createTasks(rt: Runtime) {
   }
 
   function expireApprovals(taskId: string) {
-    for (const approval of store.approvals.expireForTask(taskId)) bus.emit({ type: "approval", approval });
+    for (const approval of store.approvals.expireForTask(taskId)) {
+      bus.emit({ type: "approval", approval });
+      rt.notices.markRead(store.notices.unreadForApproval(approval.id));
+    }
   }
 
   function stop(id: string) {
@@ -141,25 +189,30 @@ export function createTasks(rt: Runtime) {
   return {
     create(input: z.output<typeof TaskInput>): Task {
       const at = new Date().toISOString();
+      const watch = input.mode === "watch";
+      // A watch always has a schedule, and checks once right away to show it works.
+      const sched = input.schedule ?? (watch ? DEFAULT_WATCH_SCHEDULE : null);
       const task: Task = {
         id: randomUUID(),
         title: input.instructions.replace(/\s+/g, " ").trim().slice(0, 60),
         instructions: input.instructions,
-        schedule: input.schedule ?? null,
+        schedule: sched,
         tools: input.tools ?? null,
         lane: input.lane,
-        status: input.schedule ? "scheduled" : "queued",
+        mode: input.mode,
+        ...(watch ? { watch: { lastCheckAt: null, lastFinding: null } } : {}),
+        status: sched && !watch ? "scheduled" : "queued",
         result: null,
         error: null,
         events: [],
-        nextRunAt: input.schedule ? nextRunAt(input.schedule, timezone()) : null,
+        nextRunAt: sched ? nextRunAt(sched, timezone()) : null,
         createdAt: at,
         updatedAt: at,
       };
       store.tasks.insert(task);
       bus.emit({ type: "task", task });
       if (task.schedule) schedule(task);
-      else enqueue(task.id);
+      if (task.status === "queued") enqueue(task.id);
 
       void deriveTitle(task.instructions, rt.deps("title")).then((title) => {
         if (title !== task.title && store.tasks.get(task.id)) update(task.id, { title });
@@ -197,6 +250,7 @@ export function createTasks(rt: Runtime) {
 
       const decided = store.approvals.decide(approvalId, decision.approve ? "approved" : "denied", decision.note ?? null);
       bus.emit({ type: "approval", approval: decided });
+      rt.notices.markRead(store.notices.unreadForApproval(approvalId));
       if (decision.remember) remember(decided, decision.approve);
 
       const task = store.tasks.get(approval.taskId);

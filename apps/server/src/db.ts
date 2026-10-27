@@ -114,6 +114,36 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (channel_id, key)
   );
   `,
+  // ── Proactive: watch tasks (mode + de-dup fingerprints + last finding) ──
+  `
+  ALTER TABLE tasks ADD COLUMN mode TEXT NOT NULL DEFAULT 'do';
+  ALTER TABLE tasks ADD COLUMN watch TEXT;          -- JSON Task["watch"]
+  ALTER TABLE tasks ADD COLUMN fingerprints TEXT;   -- JSON string[] already notified
+  `,
+  // ── Proactive: notices (in-app inbox; push/owner-channel delivery hooks into notify()) ──
+  `
+  CREATE TABLE notices (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    path TEXT NOT NULL,
+    approval_id TEXT,
+    read INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX notices_created ON notices(created_at);
+  `,
+  // ── Proactive: long-term memory ──
+  `
+  CREATE TABLE memories (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL,     -- user | agent
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

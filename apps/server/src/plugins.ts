@@ -4,9 +4,12 @@ import type { ActivePlugin, ChannelAdapter, PluginManifest, ZPlugin } from "@z/c
 import { builtinPlugins } from "@z/plugins";
 import type { Store } from "./store.ts";
 
-/** Built-in plugins plus those named in Z_PLUGINS (module specifiers or paths default-exporting a ZPlugin). */
-export async function loadPlugins(specifiers: string[]): Promise<ZPlugin[]> {
-  const plugins = [...builtinPlugins];
+/**
+ * Built-in plugins, server-provided ones (`own`, e.g. memory) and those named in Z_PLUGINS
+ * (module specifiers or paths default-exporting a ZPlugin).
+ */
+export async function loadPlugins(specifiers: string[], own: ZPlugin[] = []): Promise<ZPlugin[]> {
+  const plugins = [...builtinPlugins, ...own];
   for (const spec of specifiers) {
     const target = /^[./]/.test(spec) ? pathToFileURL(resolve(spec)).href : spec;
     try {
@@ -67,7 +70,12 @@ export function createPluginRegistry(plugins: ZPlugin[], store: Store) {
       id: plugin.id,
       name: plugin.name,
       description: plugin.description,
-      tools: Object.entries(plugin.tools ?? {}).map(([name, t]) => ({ name, description: t.description, risk: t.risk })),
+      tools: Object.entries(plugin.tools ?? {}).map(([name, t]) => ({
+        name,
+        description: t.description,
+        risk: t.risk,
+        ...(t.defaultPolicy && t.risk !== "external" ? { defaultPolicy: t.defaultPolicy } : {}),
+      })),
       settings: (plugin.settings ?? []).map((f) => ({ key: f.key, label: f.label, secret: f.secret ?? false, required: f.required ?? false })),
       briefing: Boolean(plugin.briefing),
       enabled: state(plugin).enabled,

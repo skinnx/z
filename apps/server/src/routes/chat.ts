@@ -38,7 +38,7 @@ export function chatRoutes({ rt }: Services) {
           signal: c.req.raw.signal,
           onFinish: (messages) => store.threads.save(input.id, titleOf(messages), messages),
         },
-        rt.deps("chat"),
+        rt.ownerDeps("chat"),
       );
     } catch (error) {
       if (error instanceof NoModelConfiguredError) throw badRequest(error.message);
