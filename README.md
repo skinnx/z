@@ -16,6 +16,13 @@ pnpm dev            # server on :8787, web on :5173
 
 Open the web app, add a provider under **Models**, pick models for each lane, done.
 
+No key yet? Two free, keyless OpenAI-compatible endpoints work out of the box (anonymous rate limits, fine for trying z):
+
+| Provider | Base URL | Models with tool calling |
+| --- | --- | --- |
+| LLM7 | `https://api.llm7.io/v1` | `gpt-oss:20b`, `nemotron-3-nano:30b`, `codestral-latest` |
+| Pollinations | `https://text.pollinations.ai/openai` | `openai-fast` |
+
 Production:
 
 ```sh
