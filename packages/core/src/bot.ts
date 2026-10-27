@@ -208,9 +208,9 @@ function buildPrompt(message: InboundMessage, memory: BotTurn[]): string {
 
 type Evidence = { url: string; title: string; /** A page whose content was read, not just a search hit. */ read: boolean };
 
-/** Every URL that a tool result (or the provider's own search) put in front of the model. */
 type StepContent = { content: readonly ({ type: string; output?: unknown; sourceType?: string; url?: string; title?: string })[] };
 
+/** Every URL that a tool result (or the provider's own search) put in front of the model. */
 function evidenceFrom(steps: readonly StepContent[]): Map<string, Evidence> {
   const found = new Map<string, Evidence>();
   const add = (url: string, title: string, read: boolean) => {
