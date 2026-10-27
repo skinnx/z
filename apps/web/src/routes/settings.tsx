@@ -4,6 +4,7 @@ import { AtSign, Check, Clock, KeyRound, Languages, Monitor, Moon, ShieldCheck, 
 import { useMemo, useState } from "react";
 import { token } from "../api/client.ts";
 import { usePlugins } from "../api/plugins.ts";
+import { ReachSettings } from "../components/reach-settings.tsx";
 import { useSaveSettings, useSettings } from "../api/settings.ts";
 import { locale, useT, type Locale } from "../i18n.ts";
 import { parseCron } from "../lib/cron.ts";
@@ -24,12 +25,14 @@ export default function Settings() {
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 px-4 py-6 md:px-8 md:py-10">
       <h1 className="sr-only">{t.nav_settings}</h1>
       {settings.data ? (
-        <AgentSettings key={JSON.stringify(settings.data)} initial={settings.data} />
+        // Keyed without the owner: pairing elsewhere must not reset unsaved edits here.
+        <AgentSettings key={JSON.stringify({ ...settings.data, owner: null })} initial={settings.data} />
       ) : settings.error ? (
         <LoadError error={settings.error} onRetry={() => void settings.refetch()} retryLabel={t.retry} />
       ) : (
         <Loading label={t.loading} />
       )}
+      <ReachSettings />
       <DeviceSettings />
     </div>
   );
