@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { generateBriefing, PROPOSED_SOURCE, type Briefing } from "@z/core";
+import { clip, notify } from "./notify.ts";
 import type { Runtime } from "./runtime.ts";
 
 export type Briefings = ReturnType<typeof createBriefings>;
@@ -18,10 +19,10 @@ export function createBriefings(rt: Runtime) {
     rt.store.briefings.insert(briefing);
     rt.bus.emit({ type: "briefing", briefing });
     const proposals = briefing.items.filter((i) => i.source === PROPOSED_SOURCE).length;
-    rt.notify({
+    notify({
       kind: "briefing",
-      title: proposals ? `Your briefing is ready · ${proposals} task${proposals === 1 ? "" : "s"} to delegate` : "Your briefing is ready",
-      body: briefing.summary,
+      title: proposals ? `Your briefing · ${proposals} task${proposals === 1 ? "" : "s"} worth delegating` : "Your briefing",
+      body: clip(briefing.summary, 300),
       path: "/",
     });
     return briefing;

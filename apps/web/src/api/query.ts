@@ -21,6 +21,8 @@ export const keys = {
   adapters: ["adapters"] as const,
   channels: ["channels"] as const,
   plugins: ["plugins"] as const,
+  push: ["push"] as const,
+  pushHere: ["push", "here"] as const,
   threads: ["threads"] as const,
   notices: ["notices"] as const,
   memories: ["memories"] as const,

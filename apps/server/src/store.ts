@@ -19,6 +19,7 @@ import {
 import type { ModelMessage, UIMessage } from "ai";
 import type { z } from "zod";
 import type { Sealer } from "./crypto.ts";
+import type { VapidKeys } from "./webpush.ts";
 
 type Row = Record<string, any>;
 export type ChannelConfig = z.output<typeof ChannelInput>;
@@ -349,45 +350,6 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       ),
   };
 
-  // ─── Notices ──────────────────────────────────────────────────────────────
-
-  const toNotice = (r: Row): Notice => ({
-    id: r.id,
-    kind: r.kind,
-    title: r.title,
-    body: r.body,
-    path: r.path,
-    ...(r.approval_id ? { approvalId: r.approval_id } : {}),
-    read: Boolean(r.read),
-    createdAt: r.created_at,
-  });
-
-  const notices = {
-    list: (limit = 100) => all("SELECT * FROM notices ORDER BY created_at DESC LIMIT ?", limit).map(toNotice),
-    insert: (n: Notice) =>
-      run(
-        "INSERT INTO notices (id, kind, title, body, path, approval_id, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        n.id,
-        n.kind,
-        n.title,
-        n.body,
-        n.path,
-        n.approvalId ?? null,
-        n.read ? 1 : 0,
-        n.createdAt,
-      ),
-    /** Mark read; all unread when `ids` is omitted. Returns the notices that changed. */
-    markRead: (ids?: string[]): Notice[] => {
-      const where = ids ? `id IN (${ids.map(() => "?").join(",")}) AND read = 0` : "read = 0";
-      if (ids && ids.length === 0) return [];
-      const changed = all(`SELECT * FROM notices WHERE ${where}`, ...(ids ?? [])).map(toNotice);
-      run(`UPDATE notices SET read = 1 WHERE ${where}`, ...(ids ?? []));
-      return changed.map((n) => ({ ...n, read: true }));
-    },
-    unreadForApproval: (approvalId: string) =>
-      all("SELECT id FROM notices WHERE approval_id = ? AND read = 0", approvalId).map((r) => r.id as string),
-  };
-
   // ─── Memory ───────────────────────────────────────────────────────────────
 
   const toMemory = (r: Row): Memory => ({ id: r.id, text: r.text, source: r.source, createdAt: r.created_at, updatedAt: r.updated_at });
@@ -453,5 +415,65 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     delete: (id: string) => run("DELETE FROM threads WHERE id = ?", id).changes > 0,
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, notices, memories, plugins, threads, kv };
+  // ─── Notices & Web Push ───────────────────────────────────────────────────
+
+  const toNotice = (r: Row): Notice => ({
+    id: r.id,
+    kind: r.kind,
+    title: r.title,
+    body: r.body,
+    path: r.path,
+    ...(r.approval_id ? { approvalId: r.approval_id } : {}),
+    read: Boolean(r.read),
+    createdAt: r.created_at,
+  });
+
+  const notices = {
+    list: (limit = 100): Notice[] => all("SELECT * FROM notices ORDER BY created_at DESC LIMIT ?", limit).map(toNotice),
+    insert: (n: Notice) =>
+      run(
+        "INSERT INTO notices (id, kind, title, body, path, approval_id, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        n.id,
+        n.kind,
+        n.title,
+        n.body,
+        n.path,
+        n.approvalId ?? null,
+        n.read ? 1 : 0,
+        n.createdAt,
+      ),
+    /** All when `ids` is omitted. */
+    markRead: (ids?: string[]) => {
+      if (!ids) return run("UPDATE notices SET read = 1 WHERE read = 0");
+      for (const id of ids) run("UPDATE notices SET read = 1 WHERE id = ?", id);
+    },
+  };
+
+  type PushKeys = { p256dh: string; auth: string };
+  const push = {
+    list: () =>
+      all("SELECT * FROM push_subscriptions ORDER BY created_at").map((r) => ({
+        endpoint: r.endpoint as string,
+        keys: sealer.openJson<PushKeys>(r.keys, { p256dh: "", auth: "" }),
+        device: r.device as string,
+        createdAt: r.created_at as string,
+      })),
+    upsert: (endpoint: string, keys: PushKeys, device: string) =>
+      run(
+        `INSERT INTO push_subscriptions (endpoint, keys, device, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(endpoint) DO UPDATE SET keys = excluded.keys, device = excluded.device`,
+        endpoint,
+        sealer.sealJson(keys),
+        device,
+        now(),
+      ),
+    delete: (endpoint: string) => run("DELETE FROM push_subscriptions WHERE endpoint = ?", endpoint).changes > 0,
+    /** The VAPID key pair as JWKs, sealed in kv. */
+    vapid: {
+      get: (): VapidKeys | null => sealer.openJson(kv.get<string>("vapid") ?? null, null),
+      set: (keys: VapidKeys) => kv.set("vapid", sealer.sealJson(keys)),
+    },
+  };
+
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, memories, plugins, threads, notices, push, kv };
 }

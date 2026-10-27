@@ -2,7 +2,6 @@
 import { createModelResolver } from "@z/core";
 import type { Bus } from "./bus.ts";
 import type { Env } from "./env.ts";
-import { createNotifier } from "./notices.ts";
 import type { PluginRegistry } from "./plugins.ts";
 import type { Store } from "./store.ts";
 
@@ -30,7 +29,5 @@ export function createRuntime(env: Env, store: Store, plugins: PluginRegistry, b
   /** Deps for runs only the owner reaches (chat, tasks, watches, briefing): adds long-term memory. */
   const ownerDeps = (scope: string) => ({ ...deps(scope), memories: store.memories.list() });
 
-  const notices = createNotifier(store, bus);
-
-  return { env, store, plugins, bus, models, deps, ownerDeps, notify: notices.notify, notices };
+  return { env, store, plugins, bus, models, deps, ownerDeps };
 }

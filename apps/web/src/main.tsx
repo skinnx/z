@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Navigate } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { queryClient } from "./api/query.ts";
+import { startPwa } from "./lib/pwa.ts";
 import { Shell } from "./shell/shell.tsx";
 import { Toaster } from "./ui/toast.tsx";
 import { TooltipProvider } from "./ui/tooltip.tsx";
@@ -36,6 +37,8 @@ const router = createBrowserRouter([
     ],
   },
 ]);
+
+startPwa((path) => void router.navigate(path));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
