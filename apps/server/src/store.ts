@@ -10,6 +10,8 @@ import {
   type BriefItem,
   type Briefing,
   type ChannelInput,
+  type Memory,
+  type Notice,
   type ProviderConfig,
   type Task,
   type TaskEvent,
@@ -134,6 +136,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     schedule: r.schedule,
     tools: parse(r.tools, null),
     lane: r.lane,
+    mode: r.mode === "watch" ? "watch" : "do",
+    ...(r.mode === "watch" ? { watch: parse<NonNullable<Task["watch"]>>(r.watch, { lastCheckAt: null, lastFinding: null }) } : {}),
     status: r.status,
     result: r.result,
     error: r.error,
@@ -151,14 +155,16 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
     insert: (t: Task) =>
       run(
-        `INSERT INTO tasks (id, title, instructions, schedule, tools, lane, status, result, error, events, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, title, instructions, schedule, tools, lane, mode, watch, status, result, error, events, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         t.id,
         t.title,
         t.instructions,
         t.schedule,
         t.tools ? json(t.tools) : null,
         t.lane,
+        t.mode ?? "do",
+        t.watch ? json(t.watch) : null,
         t.status,
         t.result,
         t.error,
@@ -187,6 +193,13 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     messages: (id: string): ModelMessage[] | null => parse(get("SELECT messages FROM tasks WHERE id = ?", id)?.messages, null),
     setMessages: (id: string, messages: ModelMessage[] | null) =>
       run("UPDATE tasks SET messages = ? WHERE id = ?", messages ? json(messages) : null, id),
+    /** Watch tasks: fingerprints of findings already notified, oldest first. */
+    fingerprints: (id: string): string[] => parse(get("SELECT fingerprints FROM tasks WHERE id = ?", id)?.fingerprints, []),
+    /** Record a watch check; `added` fingerprints are appended (capped). */
+    recordWatch: (id: string, watch: NonNullable<Task["watch"]>, added: string[], cap: number) => {
+      const next = [...tasks.fingerprints(id), ...added].slice(-cap);
+      run("UPDATE tasks SET watch = ?, fingerprints = ?, updated_at = ? WHERE id = ?", json(watch), json(next), now(), id);
+    },
     byStatus: (...statuses: Task["status"][]) =>
       all(`SELECT * FROM tasks WHERE status IN (${statuses.map(() => "?").join(",")})`, ...statuses).map(toTask),
     delete: (id: string) => run("DELETE FROM tasks WHERE id = ?", id).changes > 0,
@@ -336,6 +349,72 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       ),
   };
 
+  // ─── Notices ──────────────────────────────────────────────────────────────
+
+  const toNotice = (r: Row): Notice => ({
+    id: r.id,
+    kind: r.kind,
+    title: r.title,
+    body: r.body,
+    path: r.path,
+    ...(r.approval_id ? { approvalId: r.approval_id } : {}),
+    read: Boolean(r.read),
+    createdAt: r.created_at,
+  });
+
+  const notices = {
+    list: (limit = 100) => all("SELECT * FROM notices ORDER BY created_at DESC LIMIT ?", limit).map(toNotice),
+    insert: (n: Notice) =>
+      run(
+        "INSERT INTO notices (id, kind, title, body, path, approval_id, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        n.id,
+        n.kind,
+        n.title,
+        n.body,
+        n.path,
+        n.approvalId ?? null,
+        n.read ? 1 : 0,
+        n.createdAt,
+      ),
+    /** Mark read; all unread when `ids` is omitted. Returns the notices that changed. */
+    markRead: (ids?: string[]): Notice[] => {
+      const where = ids ? `id IN (${ids.map(() => "?").join(",")}) AND read = 0` : "read = 0";
+      if (ids && ids.length === 0) return [];
+      const changed = all(`SELECT * FROM notices WHERE ${where}`, ...(ids ?? [])).map(toNotice);
+      run(`UPDATE notices SET read = 1 WHERE ${where}`, ...(ids ?? []));
+      return changed.map((n) => ({ ...n, read: true }));
+    },
+    unreadForApproval: (approvalId: string) =>
+      all("SELECT id FROM notices WHERE approval_id = ? AND read = 0", approvalId).map((r) => r.id as string),
+  };
+
+  // ─── Memory ───────────────────────────────────────────────────────────────
+
+  const toMemory = (r: Row): Memory => ({ id: r.id, text: r.text, source: r.source, createdAt: r.created_at, updatedAt: r.updated_at });
+
+  const memories = {
+    list: (): Memory[] => all("SELECT * FROM memories ORDER BY updated_at DESC").map(toMemory),
+    get: (id: string) => {
+      const r = get("SELECT * FROM memories WHERE id = ?", id);
+      return r ? toMemory(r) : null;
+    },
+    /** Same text again only refreshes the existing memory. */
+    add: (id: string, text: string, source: Memory["source"]): Memory => {
+      const existing = get("SELECT id FROM memories WHERE lower(text) = lower(?)", text);
+      if (existing) {
+        run("UPDATE memories SET updated_at = ? WHERE id = ?", now(), existing.id);
+        return memories.get(existing.id)!;
+      }
+      run("INSERT INTO memories (id, text, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", id, text, source, now(), now());
+      return memories.get(id)!;
+    },
+    update: (id: string, text: string): Memory | null => {
+      run("UPDATE memories SET text = ?, updated_at = ? WHERE id = ?", text, now(), id);
+      return memories.get(id);
+    },
+    delete: (id: string) => run("DELETE FROM memories WHERE id = ?", id).changes > 0,
+  };
+
   // ─── Plugins ──────────────────────────────────────────────────────────────
 
   const plugins = {
@@ -374,5 +453,5 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     delete: (id: string) => run("DELETE FROM threads WHERE id = ?", id).changes > 0,
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, plugins, threads, kv };
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, notices, memories, plugins, threads, kv };
 }
