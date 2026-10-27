@@ -251,7 +251,7 @@ function BriefRow({ item }: { item: BriefItem }) {
           }
         >
           <Sparkles aria-hidden className="text-accent-text" />
-          <span className="min-w-0 [overflow-wrap:anywhere]">
+          <span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]">
             <span className="sr-only">{t.delegateSuggestion}: </span>
             {item.suggestion}
           </span>
