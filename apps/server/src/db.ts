@@ -114,6 +114,29 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (channel_id, key)
   );
   `,
+  // ─── Reach & delivery: notices, Web Push devices ──────────────────────────
+  // IF NOT EXISTS: other branches may create `notices` too; the shape follows the Notice contract.
+  `
+  CREATE TABLE IF NOT EXISTS notices (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    path TEXT NOT NULL,
+    approval_id TEXT,
+    read INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS notices_created ON notices(created_at);
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    keys TEXT NOT NULL,       -- sealed JSON { p256dh, auth }
+    device TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  `,
+  // ─── End reach & delivery ─────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

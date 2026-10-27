@@ -3,8 +3,9 @@ import type { Settings } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient } from "./query.ts";
 
-export function useSettings() {
-  return useQuery({ queryKey: keys.settings, queryFn: () => api<Settings>("/settings") });
+/** `refetchInterval` polls, e.g. while waiting for the owner to pair. */
+export function useSettings(refetchInterval?: number) {
+  return useQuery({ queryKey: keys.settings, queryFn: () => api<Settings>("/settings"), ...(refetchInterval ? { refetchInterval } : {}) });
 }
 
 export function useSaveSettings() {

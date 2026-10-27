@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { generateBriefing, type Briefing } from "@z/core";
+import { clip, notify } from "./notify.ts";
 import type { Runtime } from "./runtime.ts";
 
 export type Briefings = ReturnType<typeof createBriefings>;
@@ -17,6 +18,7 @@ export function createBriefings(rt: Runtime) {
     const briefing: Briefing = { id: randomUUID(), ...draft, createdAt: new Date().toISOString() };
     rt.store.briefings.insert(briefing);
     rt.bus.emit({ type: "briefing", briefing });
+    notify({ kind: "briefing", title: "Your briefing", body: clip(briefing.summary, 300), path: "/" });
     return briefing;
   }
 
