@@ -196,6 +196,14 @@ export class RateLimitedError extends ModelUnavailableError {
 }
 
 const MAX_COOLDOWN_MS = 24 * 3600_000;
+/** When every model is limited, wait for the first to free up only if that's this soon. */
+const MAX_WAIT_MS = 35_000;
+
+const abortableDelay = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
+  });
 
 /**
  * How long a provider asked us to wait after a 429 (rate limit, quota) or 402 (free-tier limit):
@@ -274,7 +282,11 @@ export function createModelResolver(deps: ModelResolverDeps) {
     if (refs.length === 0) throw new NoModelConfiguredError();
     const first = parseModelRef(refs[0]!);
 
-    async function attempt<T>(run: (model: LanguageModelV4, p: ProviderConfig, modelId: string, ref: ModelRef) => Promise<T>) {
+    async function attempt<T>(
+      run: (model: LanguageModelV4, p: ProviderConfig, modelId: string, ref: ModelRef) => Promise<T>,
+      signal: AbortSignal | undefined,
+      waited = false,
+    ): Promise<T> {
       let lastError: unknown;
       const limited: number[] = [];
       for (const ref of refs) {
@@ -301,6 +313,11 @@ export function createModelResolver(deps: ModelResolverDeps) {
       }
       if (limited.length === refs.length) {
         const retryAfterMs = Math.max(0, Math.min(...limited) - Date.now());
+        // Free tiers ask for short pauses (one reply per 30 s); waiting once beats failing the answer.
+        if (!waited && retryAfterMs <= MAX_WAIT_MS && !signal?.aborted) {
+          await abortableDelay(retryAfterMs + 250, signal);
+          return attempt(run, signal, true);
+        }
         const last = lastError ? `: ${describeError(lastError)}` : "";
         throw new RateLimitedError(`Every model for this job is rate limited; retry in ${Math.ceil(retryAfterMs / 1000)}s${last}`, retryAfterMs);
       }
@@ -317,7 +334,7 @@ export function createModelResolver(deps: ModelResolverDeps) {
           const result = await model.doGenerate(options);
           report(p, modelId, ref, result.usage, opts);
           return result;
-        }),
+        }, options.abortSignal),
       doStream: (options) =>
         attempt(async (model, p, modelId, ref) => {
           const result = await model.doStream(options);
@@ -328,7 +345,7 @@ export function createModelResolver(deps: ModelResolverDeps) {
             },
           });
           return { ...result, stream: result.stream.pipeThrough(tap) };
-        }),
+        }, options.abortSignal),
     };
   }
 
