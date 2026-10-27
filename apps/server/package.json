@@ -10,6 +10,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@z/core": "workspace:*",
+    "@z/plugins": "workspace:*",
     "ai": "^7.0.154",
     "croner": "^11.0.0",
     "hono": "^4.13.14",

@@ -225,6 +225,15 @@ export type PluginManifest = {
   enabled: boolean;
 };
 
+export type AdapterManifest = {
+  kind: ChannelKind;
+  label: string;
+  /** Fields for ChannelInput.config, rendered as a form. */
+  config: { key: string; label: string; secret: boolean; required: boolean }[];
+  /** Whether the platform calls us (needs Z_PUBLIC_URL) or we connect out. */
+  mode: "webhook" | "connect";
+};
+
 // ─── Live events (SSE on /api/events) ───────────────────────────────────────
 
 export type LiveEvent =
@@ -260,6 +269,7 @@ export type LiveEvent =
 // POST   /api/approvals/:id ApprovalDecision → Approval
 // GET    /api/briefing                     → Briefing | null  (latest)
 // POST   /api/briefing                     → Briefing         (generate now)
+// GET    /api/adapters                     → AdapterManifest[]
 // GET    /api/channels                     → ChannelView[]
 // PUT    /api/channels/:id  ChannelInput   → ChannelView
 // DELETE /api/channels/:id                 → { ok: true }
