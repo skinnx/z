@@ -2,20 +2,25 @@
 import {
   answerMessage,
   describeError,
+  linkCode,
   type ChannelAdapter,
   type ChannelRuntime,
   type ChannelView,
   type InboundMessage,
   type OutboundReply,
 } from "@z/core";
+import type { Pairing } from "./owner.ts";
 import type { Runtime } from "./runtime.ts";
 import type { ChannelRecord } from "./store.ts";
+import { ConflictError, type Tasks } from "./tasks.ts";
 
 type Connection = { stop: () => void | Promise<void> };
 
 export type Channels = ReturnType<typeof createChannels>;
 
-export function createChannels(rt: Runtime) {
+type OutboundNotice = Parameters<NonNullable<ChannelAdapter["send"]>>[2];
+
+export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   const { store, bus } = rt;
   const connections = new Map<string, Connection>();
   // Serializes start/stop per channel so rapid config edits don't race.
@@ -46,6 +51,9 @@ export function createChannels(rt: Runtime) {
     emit(channelId);
     const record = store.channels.get(channelId);
     if (!record?.enabled) return null;
+    // Handled before the model, addressed or not: pairing must not depend on an LLM.
+    const code = linkCode(message.text);
+    if (code !== null) return { text: link(record, message, code), replyTo: message.messageId };
     try {
       const { config: _secret, configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, ...channel } = record;
       const answer = await answerMessage(
@@ -62,6 +70,40 @@ export function createChannels(rt: Runtime) {
     }
   }
 
+  /** `/link <code>`: make this author in this thread the owner z reaches when away. */
+  function link(record: ChannelRecord, message: InboundMessage, code: string): string {
+    if (!adapterFor(record.kind)?.send) {
+      // The code was just posted somewhere z cannot use privately; void it so nobody else can.
+      pairing.revoke(code);
+      return `${record.label} can't carry private approvals. That code is now void: pair from Telegram, Discord, Slack or a webhook instead.`;
+    }
+    if (!pairing.consume(code)) return "That code is wrong or expired. Create a new one in z's Settings.";
+    const settings = store.settings.get();
+    store.settings.set({
+      ...settings,
+      owner: { channelId: record.id, threadId: message.threadId, authorId: message.author.id, label: message.author.name },
+    });
+    return "Paired. z will reach you here for approvals and updates.";
+  }
+
+  /** A button press from a channel. Only the paired owner, on the paired channel, may decide. */
+  async function act(record: ChannelRecord, actionId: string, from: { threadId: string; authorId: string }): Promise<string> {
+    const owner = store.settings.get().owner;
+    if (!owner || owner.channelId !== record.id || owner.authorId !== from.authorId) {
+      throw new Error("Only z's paired owner can do that.");
+    }
+    const match = /^(approve|deny):(.+)$/.exec(actionId);
+    if (!match) throw new Error("Unknown action.");
+    try {
+      const approval = tasks.decide(match[2]!, { approve: match[1] === "approve", remember: false });
+      if (!approval) return "That approval no longer exists.";
+      return `${approval.status === "approved" ? "Approved" : "Denied"}: ${approval.summary}`;
+    } catch (error) {
+      if (error instanceof ConflictError) return `${error.message}.`;
+      throw error;
+    }
+  }
+
   function runtimeFor(record: ChannelRecord): ChannelRuntime {
     const { configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, ...channel } = record;
     return {
@@ -69,6 +111,7 @@ export function createChannels(rt: Runtime) {
       handle: store.settings.get().handle,
       webhookUrl: webhookUrl(record),
       dispatch: (message) => dispatch(record.id, message),
+      act: (actionId, from) => act(record, actionId, from),
       state: {
         get: (key) => store.channelState.get(record.id, key),
         set: (key, value) => store.channelState.set(record.id, key, value),
@@ -127,7 +170,22 @@ export function createChannels(rt: Runtime) {
     async remove(id: string): Promise<boolean> {
       await (locks.get(id) ?? Promise.resolve());
       await stopConnection(id);
+      const settings = store.settings.get();
+      if (settings.owner?.channelId === id) store.settings.set({ ...settings, owner: null });
       return store.channels.delete(id);
+    },
+
+    /** Unprompted message to a thread (owner notices). Throws when the channel cannot send. */
+    async send(id: string, threadId: string, message: OutboundNotice): Promise<void> {
+      const record = store.channels.get(id);
+      const adapter = record?.enabled ? adapterFor(record.kind) : undefined;
+      if (!record || !adapter?.send) throw new Error(`Channel ${id} is missing, disabled or cannot send`);
+      try {
+        await adapter.send(runtimeFor(record), threadId, message);
+      } catch (error) {
+        setStatus(id, "error", `Could not reach the owner: ${describeError(error)}`);
+        throw error;
+      }
     },
 
     /** `ALL /hooks/:channelId` (some platforms verify with GET). */

@@ -42,6 +42,7 @@ or `docker build -t z . && docker run -p 8787:8787 -v z-data:/data z`.
 | `Z_TOKEN` | unset | Require `Authorization: Bearer <token>` on `/api` — set it whenever the server is reachable by others |
 | `Z_PUBLIC_URL` | unset | Public base URL, needed for webhook channels (Slack, Telegram webhook mode) |
 | `Z_PLUGINS` | unset | Comma-separated module paths of extra plugins |
+| `Z_VAPID_SUBJECT` | `Z_PUBLIC_URL` if https, else `mailto:z@localhost` | Contact push services see for Web Push (`mailto:` or `https:`) |
 
 ## Layout
 
@@ -65,6 +66,13 @@ Every tool declares a risk:
 | `external` | post publicly, send a message, open an issue | always asks |
 
 Change the policy per tool under **Settings**. Bots answering in channels only ever get `read` tools, so strangers can't make z act on your behalf.
+
+### Reach me
+
+z asks wherever you are, not only in its own tab. Approvals, finished one-shot tasks and briefings become notices that are:
+
+- **pushed to your devices** — install z (it is a PWA) and turn on *Settings → Reach me → Notifications on this device*. Approval notifications carry **Approve / Deny** buttons that work without opening the app.
+- **sent to your owner channel** with buttons — in *Settings → Reach me*, choose **Pair a channel** and send the `/link 123456` it shows to your z bot on Telegram, Discord, Slack or a webhook (in Slack, start with the mention: `@z /link 123456`). Only the paired person can press the buttons. The webhook adapter POSTs notices to its *Notify URL* and takes button presses as `POST /hooks/:id {"action": "approve:<id>", "threadId", "authorId"}` with `X-Z-Secret`.
 
 ## Writing a plugin
 
