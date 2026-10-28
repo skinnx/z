@@ -10,6 +10,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "node --test --disable-warning=ExperimentalWarning 'apps/server/test/*.test.ts'",
     "eval:factcheck": "node scripts/eval-factcheck.ts",
-    "eval:triage": "node scripts/eval-triage.ts"
+    "eval:triage": "node scripts/eval-triage.ts",
+    "check:i18n": "node scripts/check-i18n-keys.ts"
   }
 }

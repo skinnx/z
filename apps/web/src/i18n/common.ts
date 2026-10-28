@@ -1,0 +1,56 @@
+import type { DictOf } from "./types.ts";
+
+export const en = {
+  // generic
+  save: "Save",
+  saved: "Saved",
+  cancel: "Cancel",
+  close: "Close",
+  delete: "Delete",
+  edit: "Edit",
+  add: "Add",
+  remove: "Remove",
+  retry: "Retry",
+  copy: "Copy",
+  copied: "Copied",
+  enabled: "Enabled",
+  loading: "Loading…",
+  error: "Something went wrong",
+  optional: "optional",
+  required: "required",
+  moveUp: "Move up",
+  moveDown: "Move down",
+  showDetails: "Details",
+  openLink: "Open link",
+  keepSecret: "Saved. Leave blank to keep it.",
+  cannotUndo: "This can't be undone.",
+
+  blankKeeps: "Leave blank to keep the current value.",
+} as const;
+
+export const vi: DictOf<typeof en> = {
+  save: "Lưu",
+  saved: "Đã lưu",
+  cancel: "Huỷ",
+  close: "Đóng",
+  delete: "Xoá",
+  edit: "Sửa",
+  add: "Thêm",
+  remove: "Gỡ",
+  retry: "Thử lại",
+  copy: "Sao chép",
+  copied: "Đã sao chép",
+  enabled: "Bật",
+  loading: "Đang tải…",
+  error: "Đã xảy ra lỗi",
+  optional: "không bắt buộc",
+  required: "bắt buộc",
+  moveUp: "Lên trên",
+  moveDown: "Xuống dưới",
+  showDetails: "Chi tiết",
+  openLink: "Mở liên kết",
+  keepSecret: "Đã lưu. Để trống để giữ nguyên.",
+  cannotUndo: "Không thể hoàn tác.",
+
+  blankKeeps: "Để trống để giữ giá trị hiện tại.",
+};
