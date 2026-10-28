@@ -1,6 +1,6 @@
 import type { BriefItem, Briefing, TaskStatus } from "@z/core";
 import { Brain, Check, CircleAlert, Hand, KeyRound, Radar, RefreshCw, Sparkles, Sunrise, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { useBriefing, useGenerateBriefing } from "../api/briefing.ts";
 import { useMemories } from "../api/memories.ts";
@@ -60,16 +60,11 @@ export default function Today() {
   const tasks = useTasks();
   const providers = useProviders();
   const setup = useSetup();
+  const briefing = useBriefing();
+  const memories = useMemories();
+  const notices = useNotices();
   const [skipSetup, setSkipSetup] = useState(() => Boolean(sessionStorage.getItem(FIRST_RUN_KEY)));
-  const [params, setParams] = useSearchParams();
   const composerRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (params.has("compose")) {
-      composerRef.current?.focus();
-      setParams({}, { replace: true });
-    }
-  }, [params, setParams]);
 
   // First run: until any model has answered, nothing works, so the checklist is the screen. Once one
   // has, or something waits on the owner, a failing chat model is a banner above the rest of Today.
@@ -96,13 +91,12 @@ export default function Today() {
     );
   }
   const noProviders = providers.data?.length === 0;
+  const settled = needs.settled && !briefing.isPending && !memories.isPending && !notices.isPending;
   const titles = new Map((tasks.data ?? []).map((x) => [x.id, x.title]));
 
   return (
     <Page title={t.nav_today}>
       {chat?.state === "needs_setup" && !noProviders && <ChatBanner detail={chat.detail} shown={serverText(chat.detail, chat.detailMsg)} fixPath={chat.fix?.path ?? "/models"} />}
-      <NeedsYouBlock needs={needs} titles={titles} />
-
       <Section label={t.delegate} hideLabel>
         {noProviders ? (
           <Empty icon={<KeyRound />} text={t.noModels}>
@@ -112,15 +106,43 @@ export default function Today() {
             </Link>
           </Empty>
         ) : (
-          <Composer inputRef={composerRef} />
+          <>
+            <Composer inputRef={composerRef} />
+            <FocusOnCompose target={composerRef} />
+          </>
         )}
       </Section>
 
-      <MemoryReview />
-      <WatchHits />
-      <BriefingSection canGenerate={!noProviders} />
+      {/* Below the composer, so nothing that arrives moves it. Everything here waits for all of its
+          data and then appears at once, in the loader's place: no block pushes another down. */}
+      {settled ? (
+        <div className="flex flex-col gap-8 motion-safe:animate-rise">
+          <NeedsYouBlock needs={needs} titles={titles} />
+          <MemoryReview />
+          <WatchHits />
+          <BriefingSection canGenerate={!noProviders} />
+        </div>
+      ) : (
+        <Loading label={t.loading} className="h-32" />
+      )}
     </Page>
   );
+}
+
+/**
+ * `?compose` focuses the composer. Its own component: reading the URL here, not in Today, keeps
+ * every other URL change (settings opening and closing over Today) from re-rendering the screen.
+ */
+function FocusOnCompose({ target }: { target: RefObject<HTMLTextAreaElement | null> }) {
+  const [params, setParams] = useSearchParams();
+  const compose = params.has("compose");
+  useEffect(() => {
+    if (compose) {
+      target.current?.focus();
+      setParams({}, { replace: true });
+    }
+  }, [compose, setParams, target]);
+  return null;
 }
 
 /** One line while z has memories awaiting review; opens the memory manager in place. */
@@ -256,8 +278,6 @@ function BriefingSection({ canGenerate }: { canGenerate: boolean }) {
   // Until settings are in, the time isn't known (parseCron would say 09:00).
   const at = settings.data && cron.preset !== "custom" ? ` ${t.briefingAt(cron.time)}` : "";
   const run = () => generate.mutate(undefined, { onError: notifyError });
-
-  if (briefing.isPending) return <Loading label={t.loading} className="h-32" />;
 
   const data = briefing.data;
   if (!data) {
@@ -398,7 +418,7 @@ function BriefRow({ item, proposed }: { item: BriefItem; proposed?: boolean }) {
           onClick={() =>
             create.mutate(
               { instructions: item.suggestion! },
-              { onSuccess: (task) => notify("success", t.taskQueued, task.title), onError: notifyError },
+              { onSuccess: (task) => notify("success", t.taskQueued, task.title) },
             )
           }
         >

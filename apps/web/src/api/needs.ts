@@ -14,6 +14,8 @@ export type NeedsYou = {
   count: number;
   /** Both lists have loaded at least once. */
   loaded: boolean;
+  /** Both lists have answered at least once, with data or an error. */
+  settled: boolean;
 };
 
 const byNewest = (a: Task, b: Task) => b.updatedAt.localeCompare(a.updatedAt);
@@ -35,5 +37,6 @@ export function useNeedsYou(): NeedsYou {
     working: pick("running", "queued"),
     count: approvals.length + questions.length + reviews.length + interrupted.length,
     loaded: approvalsQuery.data !== undefined && tasksQuery.data !== undefined,
+    settled: !approvalsQuery.isPending && !tasksQuery.isPending,
   };
 }

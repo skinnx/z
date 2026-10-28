@@ -63,6 +63,14 @@
 
   --radius-card: 0.75rem;
   --animate-pulse-dot: pulse-dot 2s ease-in-out infinite;
+  /* Content arriving in place: fades and rises, never moves its neighbours (no layout shift). */
+  --animate-rise: rise 180ms ease-out;
+  @keyframes rise {
+    from {
+      opacity: 0;
+      translate: 0 0.375rem;
+    }
+  }
   /* AI Elements Shimmer: a highlight sweeping across text (duration set per element). */
   --animate-shimmer: shimmer var(--shimmer-duration, 2s) linear infinite;
   @keyframes shimmer {
