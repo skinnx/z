@@ -1,8 +1,8 @@
 name: CI
 
+# Run by hand only (Actions → CI → Run workflow); pushes and pull requests don't trigger it.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
