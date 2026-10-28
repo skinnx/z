@@ -32,12 +32,14 @@ export default defineConfig({
     proxy: {
       "/api": { target: api, changeOrigin: true },
       "/hooks": { target: api, changeOrigin: true },
+      "/oauth": { target: api, changeOrigin: true },
     },
   },
   preview: {
     proxy: {
       "/api": { target: api, changeOrigin: true },
       "/hooks": { target: api, changeOrigin: true },
+      "/oauth": { target: api, changeOrigin: true },
     },
   },
 });

@@ -19,6 +19,7 @@ const Models = lazy(() => import("./routes/models.tsx"));
 const Plugins = lazy(() => import("./routes/plugins.tsx"));
 const SettingsRoute = lazy(() => import("./routes/settings.tsx"));
 const MemoryRoute = lazy(() => import("./routes/memory.tsx"));
+const Connect = lazy(() => import("./routes/connect.tsx"));
 
 const router = createBrowserRouter([
   {
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
       { path: "memory", element: <MemoryRoute /> },
       { path: "channels", element: <Channels /> },
       { path: "models", element: <Models /> },
+      { path: "connect", element: <Connect /> },
       { path: "plugins", element: <Plugins /> },
       { path: "settings", element: <SettingsRoute /> },
       { path: "*", element: <Navigate to="/" replace /> },

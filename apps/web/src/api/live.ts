@@ -1,11 +1,11 @@
-import type { Approval, ChannelView, LiveEvent, Notice, Task } from "@z/core";
+import type { Approval, ChannelView, ConnectorView, LiveEvent, Notice, Task } from "@z/core";
 import { useEffect } from "react";
 import { t } from "../i18n.ts";
 import { notify } from "../ui/toast.tsx";
 import { eventsUrl, token } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
-const TYPES = ["task", "approval", "briefing", "channel", "notice"] as const;
+const TYPES = ["task", "approval", "briefing", "channel", "notice", "connector"] as const;
 
 function apply(event: LiveEvent, go: (path: string) => void) {
   switch (event.type) {
@@ -29,6 +29,9 @@ function apply(event: LiveEvent, go: (path: string) => void) {
       break;
     case "channel":
       queryClient.setQueryData<ChannelView[]>(keys.channels, (list) => (list ? upsert(list, event.channel, false) : list));
+      break;
+    case "connector":
+      queryClient.setQueryData<ConnectorView[]>(keys.connectors, (list) => (list ? upsert(list, event.connector, false) : list));
       break;
     case "notice": {
       const n = event.notice;
