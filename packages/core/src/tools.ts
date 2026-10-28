@@ -1,11 +1,11 @@
 /** Turn plugin tools into an AI SDK ToolSet with z's approval policy applied. */
 import { tool, type ToolApprovalStatus, type ToolSet } from "ai";
 import type { ApprovalPolicy, Risk } from "./contract.ts";
-import type { ZPlugin, ZTool } from "./plugin.ts";
+import type { LoginVault, ZPlugin, ZTool } from "./plugin.ts";
 import { findSensitive } from "./sensitive.ts";
 
-/** An enabled plugin together with its decrypted settings. */
-export type ActivePlugin = { plugin: ZPlugin; settings: Record<string, string> };
+/** An enabled plugin together with its decrypted settings (and, for the browser alone, saved sign-ins). */
+export type ActivePlugin = { plugin: ZPlugin; settings: Record<string, string>; vault?: LoginVault };
 
 export type ToolInfo = { name: string; pluginId: string; tool: ZTool; risk: Risk };
 
@@ -57,7 +57,7 @@ export function listTools(plugins: ActivePlugin[]): ToolInfo[] {
 
 export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions): BuiltTools {
   const out: BuiltTools = { tools: {}, approval: {}, info: {} };
-  const settingsById = new Map(plugins.map((p) => [p.plugin.id, p.settings]));
+  const byId = new Map(plugins.map((p) => [p.plugin.id, p]));
 
   for (const info of listTools(plugins)) {
     if (options.only && !options.only.includes(info.name)) continue;
@@ -67,7 +67,7 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
     if (options.publicOnly && (!info.tool.public || info.tool.ownerOnly)) continue;
     const guarded = info.risk !== "read";
 
-    const settings = settingsById.get(info.pluginId) ?? {};
+    const { settings = {}, vault } = byId.get(info.pluginId) ?? {};
     const log = (text: string) => options.log?.(`[${info.name}] ${text}`);
     out.tools[info.name] = tool({
       description: info.tool.description,
@@ -88,6 +88,7 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
             signal: abortSignal ?? new AbortController().signal,
             log,
             fetch,
+            ...(vault && { vault }),
           });
           options.onCall?.({ tool: info.name, input, output });
           return output as any;

@@ -13,6 +13,7 @@ import {
   type ConnectorInput,
   type ConnectorView,
   type McpToolDefinition,
+  type LoginView,
   type Memory,
   type Notice,
   type ProviderConfig,
@@ -544,6 +545,51 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
   };
 
+  // ─── Saved sign-ins ───────────────────────────────────────────────────────
+
+  type LoginSecret = { username: string; password: string; totp?: string };
+  const toLogin = (r: Row): LoginView => ({
+    id: r.id,
+    origin: r.origin,
+    username: sealer.openJson<LoginSecret>(r.secret, { username: "", password: "" }).username,
+    hasTotp: Boolean(r.has_totp),
+    updatedAt: r.updated_at,
+    lastUsedAt: r.last_used_at ?? null,
+  });
+
+  const logins = {
+    list: (): LoginView[] => all("SELECT * FROM logins ORDER BY origin").map(toLogin),
+    get: (id: string): LoginView | null => {
+      const r = get("SELECT * FROM logins WHERE id = ?", id);
+      return r ? toLogin(r) : null;
+    },
+    byOrigin: (origin: string) => {
+      const r = get("SELECT * FROM logins WHERE origin = ?", origin);
+      return r ? { id: r.id as string, ...sealer.openJson<LoginSecret>(r.secret, { username: "", password: "" }) } : null;
+    },
+    /** Insert, or update `id`. Unset `password` / `totp` keep the stored ones; `totp: ""` removes it. */
+    save: (id: string, input: { origin: string; username: string; password?: string; totp?: string }): LoginView => {
+      const existing = get("SELECT * FROM logins WHERE id = ?", id);
+      const old = sealer.openJson<LoginSecret>(existing?.secret ?? null, { username: "", password: "" });
+      const totp = input.totp ?? old.totp;
+      const secret: LoginSecret = { username: input.username, password: input.password ?? old.password, ...(totp ? { totp } : {}) };
+      run(
+        `INSERT INTO logins (id, origin, secret, has_totp, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET origin = excluded.origin, secret = excluded.secret, has_totp = excluded.has_totp, updated_at = excluded.updated_at`,
+        id,
+        input.origin,
+        sealer.sealJson(secret),
+        totp ? 1 : 0,
+        existing?.created_at ?? now(),
+        now(),
+        null,
+      );
+      return logins.get(id)!;
+    },
+    touch: (id: string) => run("UPDATE logins SET last_used_at = ? WHERE id = ?", now(), id),
+    delete: (id: string) => run("DELETE FROM logins WHERE id = ?", id).changes > 0,
+  };
+
   type PushKeys = { p256dh: string; auth: string };
   const push = {
     list: () =>
@@ -570,5 +616,5 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, memories, plugins, threads, notices, push, connectors, kv };
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, memories, plugins, threads, notices, push, connectors, logins, kv };
 }

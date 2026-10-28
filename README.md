@@ -60,6 +60,7 @@ or `docker build -t z . && docker run -p 8787:8787 -v z-data:/data z`.
 | `Z_PLUGINS` | unset | Comma-separated module paths of extra plugins |
 | `Z_VAPID_SUBJECT` | `Z_PUBLIC_URL` if https, else `mailto:z@localhost` | Contact push services see for Web Push (`mailto:` or `https:`) |
 | `Z_ALLOW_PRIVATE_MCP` | unset | `1` lets connectors reach MCP servers on localhost, your LAN and plain `http` (blocked by default) |
+| `Z_ALLOW_PRIVATE_BROWSER` | unset | `1` lets the Browser plugin open localhost and your LAN (a self-hosted app, a local test login page); blocked by default |
 
 ## Layout
 
@@ -100,6 +101,7 @@ Each tool gets a risk from the server's annotations, which are hints from a thir
 - **URLs and headers are secrets.** They are stored encrypted and never returned or logged (the app shows `https://host/…`), since services like Zapier put the key in the URL.
 - **OAuth** (Linear, Notion, Pipedream, any server that advertises it) uses discovery, dynamic client registration and PKCE; tokens are stored encrypted and refreshed automatically. The provider redirects back to `/oauth/callback`, so set `Z_PUBLIC_URL` in production; without it z uses the address you opened it on.
 - **Network safety.** Connector requests (including OAuth discovery) must be `https` to public addresses; localhost, private ranges and cloud metadata are refused and redirects are not followed. Set `Z_ALLOW_PRIVATE_MCP=1` to use a self-hosted MCP server on your own network.
+- **Saved sign-ins.** Settings → Security keeps logins (origin, username, password, optional authenticator secret), sealed with the master key and never returned by the API. `browser_sign_in` fills them into the page through Playwright only when the page's origin exactly matches (re-checked before each fill and after redirects; plain `http` only for localhost), submits, and enters a TOTP code when asked. The model only gets `{ signedIn, url, title, note }`.
 - **Aggregators hold your tokens.** Composio, Zapier and Pipedream keep the OAuth tokens for every app you connect through them and run the calls on their servers; Composio and Zapier bill per tool call (Zapier: two tasks per call). Connect the app's own MCP server instead when it has one.
 
 ## Fact checks
