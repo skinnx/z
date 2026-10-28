@@ -19,16 +19,23 @@ export function createRuntime(env: Env, store: Store, plugins: PluginRegistry, b
    * Fresh core deps for one run: settings, routing, plugins and connected MCP connectors are read at call time.
    * No memories: this is what channel bots (strangers) get.
    */
-  const deps = (scope: string) => ({
-    models,
-    routing: store.routing.get(),
-    settings: store.settings.get(),
-    plugins: [...plugins.active(), ...connectors.active()],
-    log: (text: string) => console.log(`[z:${scope}] ${text}`),
-  });
+  const deps = (scope: string) => {
+    const settings = store.settings.get();
+    return {
+      models,
+      routing: store.routing.get(),
+      settings,
+      // With memory switched off, z neither recalls nor remembers: the memory tools go too.
+      plugins: [...plugins.active(), ...connectors.active()].filter((p) => settings.memory || p.plugin.id !== "memory"),
+      log: (text: string) => console.log(`[z:${scope}] ${text}`),
+    };
+  };
 
   /** Deps for runs only the owner reaches (chat, tasks, watches, briefing): adds long-term memory. */
-  const ownerDeps = (scope: string) => ({ ...deps(scope), memories: store.memories.list() });
+  const ownerDeps = (scope: string) => {
+    const d = deps(scope);
+    return { ...d, memories: d.settings.memory ? store.memories.list() : [] };
+  };
 
   return { env, store, plugins, bus, models, deps, ownerDeps };
 }

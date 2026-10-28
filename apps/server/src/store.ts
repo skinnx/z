@@ -288,6 +288,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       const r = get("SELECT * FROM briefings ORDER BY created_at DESC LIMIT 1");
       return r ? toBriefing(r) : null;
     },
+    all: () => all("SELECT * FROM briefings ORDER BY created_at DESC").map(toBriefing),
     insert: (b: Briefing) =>
       run("INSERT INTO briefings (id, date, summary, items, created_at) VALUES (?, ?, ?, ?, ?)", b.id, b.date, b.summary, json(b.items), b.createdAt),
   };
@@ -458,6 +459,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       return memories.get(id);
     },
     delete: (id: string) => run("DELETE FROM memories WHERE id = ?", id).changes > 0,
+    clear: () => Number(run("DELETE FROM memories").changes),
   };
 
   // ─── Plugins ──────────────────────────────────────────────────────────────
@@ -496,6 +498,16 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       );
     },
     delete: (id: string) => run("DELETE FROM threads WHERE id = ?", id).changes > 0,
+    clear: () => Number(run("DELETE FROM threads").changes),
+    /** Every thread with its messages, for export. */
+    all: () =>
+      all("SELECT * FROM threads ORDER BY updated_at DESC").map((r) => ({
+        id: r.id as string,
+        title: r.title as string,
+        messages: parse<UIMessage[]>(r.messages, []),
+        createdAt: r.created_at as string,
+        updatedAt: r.updated_at as string,
+      })),
   };
 
   // ─── Notices & Web Push ───────────────────────────────────────────────────

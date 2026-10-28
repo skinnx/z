@@ -11,14 +11,17 @@ const PluginUpdate = z.object({
   settings: z.record(z.string(), z.string()).optional(),
 });
 
+/** A provider as clients see it: the key itself never leaves the server. */
+export function toProviderView(store: Services["rt"]["store"], p: ProviderConfig): ProviderView {
+  const { apiKey, ...rest } = p;
+  return { ...rest, hasKey: Boolean(apiKey), keyHint: store.providers.keyHint(p.id), usage: store.usage.month(p.id) };
+}
+
 export function configRoutes({ rt, tasks, briefings, channels }: Services) {
   const { store } = rt;
   const app = new Hono();
 
-  const providerView = (p: ProviderConfig): ProviderView => {
-    const { apiKey, ...rest } = p;
-    return { ...rest, hasKey: Boolean(apiKey), keyHint: store.providers.keyHint(p.id), usage: store.usage.month(p.id) };
-  };
+  const providerView = (p: ProviderConfig) => toProviderView(store, p);
 
   const provider = (id: string) => {
     const p = store.providers.get(id);

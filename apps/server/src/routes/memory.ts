@@ -23,6 +23,8 @@ export function memoryRoutes({ rt }: Services) {
     return c.json(store.memories.update(id, text.trim()));
   });
 
+  app.delete("/memories", (c) => c.json({ deleted: store.memories.clear() }));
+
   app.delete("/memories/:id", (c) => {
     if (!store.memories.delete(c.req.param("id"))) throw notFound("Memory");
     return c.json({ ok: true });

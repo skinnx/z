@@ -21,6 +21,7 @@ import { chatRoutes } from "./routes/chat.ts";
 import { configRoutes } from "./routes/config.ts";
 import { connectorRoutes } from "./routes/connectors.ts";
 import { eventRoutes } from "./routes/events.ts";
+import { dataRoutes } from "./routes/data.ts";
 import { memoryRoutes } from "./routes/memory.ts";
 import { reachRoutes } from "./routes/reach.ts";
 import { workRoutes } from "./routes/work.ts";
@@ -55,7 +56,7 @@ app.onError((error, c) => {
 const api = new Hono();
 api.use("*", auth(env.token));
 api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
-for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes]) {
+for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes]) {
   api.route("/", routes(services));
 }
 api.all("*", (c) => c.json({ error: "Not found" }, 404));
