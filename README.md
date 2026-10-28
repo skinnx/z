@@ -21,6 +21,15 @@ Duet and Grok are closed, single-vendor products; the rows below describe z, not
 
 `pnpm eval:factcheck` (30 labelled claims) and `pnpm eval:triage` measure the bot and the briefing on your own model. The one fact-check run recorded so far — keyless gpt-oss-20b via Pollinations — scored 75.9% verdict accuracy with sources on every answer; treat a single run on 30 items as a smoke test, not a benchmark.
 
+## Docs
+
+- [Deploy](docs/deploy.md): local, Docker, reverse proxy, Tailscale/LAN, backups, upgrades
+- [Security](docs/security.md): threat model, encryption at rest, approvals, SSRF guards ([report a vulnerability](SECURITY.md))
+- [Plugins](docs/plugins.md): tools, briefing sources and channel adapters
+- [Connectors](docs/connectors.md): MCP servers, auth, OAuth, risk mapping
+- [HTTP API](docs/api.md): every route, event streams and a curl walkthrough
+- [Architecture](docs/architecture.md): packages, run flows, storage, where to change what
+
 ## Run
 
 ```sh
