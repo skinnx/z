@@ -28,7 +28,8 @@ import type {
 } from "./contract.ts";
 
 /** `toggle`: an on/off switch in the channel form, stored as `on` (adapter config only). */
-export type SettingField = { key: string; label: string; secret?: boolean; required?: boolean; toggle?: boolean };
+/** `multiline`: a list, one entry per line (rendered as a text area). */
+export type SettingField = { key: string; label: string; secret?: boolean; required?: boolean; toggle?: boolean; multiline?: boolean };
 
 export type ToolContext = {
   /** This plugin's settings, already decrypted. */

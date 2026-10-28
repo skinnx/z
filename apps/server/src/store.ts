@@ -717,6 +717,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     body: r.body,
     path: r.path,
     ...(r.approval_id ? { approvalId: r.approval_id } : {}),
+    ...(r.status ? { status: r.status } : {}),
     read: Boolean(r.read),
     createdAt: r.created_at,
   });
@@ -725,13 +726,14 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     list: (limit = 100): Notice[] => all("SELECT * FROM notices ORDER BY created_at DESC LIMIT ?", limit).map(toNotice),
     insert: (n: Notice) =>
       run(
-        "INSERT INTO notices (id, kind, title, body, path, approval_id, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notices (id, kind, title, body, path, approval_id, status, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         n.id,
         n.kind,
         n.title,
         n.body,
         n.path,
         n.approvalId ?? null,
+        n.status ?? null,
         n.read ? 1 : 0,
         n.createdAt,
       ),

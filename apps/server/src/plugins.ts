@@ -101,7 +101,7 @@ export function createPluginRegistry(plugins: ZPlugin[], store: Store) {
         risk: t.risk,
         ...(t.defaultPolicy && t.risk !== "external" ? { defaultPolicy: t.defaultPolicy } : {}),
       })),
-      settings: (plugin.settings ?? []).map((f) => ({ key: f.key, label: f.label, secret: f.secret ?? false, required: f.required ?? false })),
+      settings: (plugin.settings ?? []).map((f) => ({ key: f.key, label: f.label, secret: f.secret ?? false, required: f.required ?? false, ...(f.multiline ? { multiline: true } : {}) })),
       briefing: Boolean(plugin.briefing),
       enabled: state(plugin).enabled,
     };

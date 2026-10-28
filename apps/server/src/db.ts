@@ -263,6 +263,10 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End saved sign-ins ───────────────────────────────────────────────────
+  // ─── Task notices carry how the run ended (Notice.status) ─────────────────
+  `
+  ALTER TABLE notices ADD COLUMN status TEXT;       -- TaskStatus, task notices only
+  `,
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */
