@@ -362,11 +362,14 @@ function ToolRow({ connector, tool }: { connector: ConnectorView; tool: Connecto
             return { value: r, label: <span className="max-[30rem]:sr-only">{t[`riskShort_${r}`]}</span>, icon: <Icon aria-hidden />, ariaLabel: t[`risk_${r}`] };
           })}
         />
-        <LivePolicyControl toolKey={tool.toolName} risk={tool.risk} />
-        {tool.riskSource === "user" && (
+        <LivePolicyControl toolKey={tool.toolName} risk={tool.risk} className="sm:w-48" />
+        {tool.riskSource === "user" ? (
           <IconButton label={`${t.resetRisk}: ${name}`} size="icon-sm" onClick={() => setRisk.mutate({ connector, tool: tool.name, risk: null }, { onError: notifyError })}>
             <RotateCcw aria-hidden />
           </IconButton>
+        ) : (
+          // Keeps the controls of every row in one column.
+          <span aria-hidden className="hidden size-8 sm:block" />
         )}
       </div>
     </li>
