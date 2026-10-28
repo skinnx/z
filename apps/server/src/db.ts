@@ -177,6 +177,13 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End connectors ───────────────────────────────────────────────────────
+  // ─── Context: per-model window overrides, cached chat summaries ───────────
+  `
+  ALTER TABLE providers ADD COLUMN context_windows TEXT; -- JSON Record<modelId, tokens>
+  ALTER TABLE threads ADD COLUMN summary TEXT;           -- summary of the oldest turns sent to the model
+  ALTER TABLE threads ADD COLUMN summarized_up_to INTEGER; -- model messages the summary covers
+  `,
+  // ─── End context ──────────────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

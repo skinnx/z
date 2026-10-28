@@ -304,6 +304,7 @@ function ProviderForm({
       ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}),
       ...(apiKey ? { apiKey } : {}),
       ...(provider?.headers ? { headers: provider.headers } : {}),
+      ...(provider?.contextWindows ? { contextWindows: provider.contextWindows } : {}),
       models,
       enabled,
       ...(budget !== null ? { monthlyBudgetUsd: budget } : {}),
