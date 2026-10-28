@@ -51,6 +51,8 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
   return result.toUIMessageStreamResponse({
     originalMessages: request.messages,
     generateMessageId: generateId,
+    // Providers with built-in search (Perplexity, OpenAI/xAI web search…) cite sources; the UI shows them.
+    sendSources: true,
     onEnd: ({ messages }) => request.onFinish?.(messages),
     onError: describeError,
   });
