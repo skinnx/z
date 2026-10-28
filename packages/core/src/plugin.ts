@@ -16,6 +16,7 @@
  *     },
  *   });
  */
+import type { Schema } from "ai";
 import type { z } from "zod";
 import type {
   BriefItem,
@@ -44,7 +45,8 @@ export type ZTool<I = any, O = unknown> = {
    * The summonable bot answers strangers, so it only gets read tools marked public.
    */
   public?: boolean;
-  inputSchema: z.ZodType<I>;
+  /** A zod schema, or a JSON schema via the AI SDK's `jsonSchema()` (MCP connector tools). */
+  inputSchema: z.ZodType<I> | Schema<I>;
   /** One line shown on the approval card, e.g. `Post "…" to #general`. */
   summarize?: (input: I) => string;
   /**
@@ -115,6 +117,8 @@ export type ZPlugin = {
   tools?: Record<string, ZTool>;
   briefing?: BriefingSource;
   adapters?: ChannelAdapter[];
+  /** Usage notes shown to the model whenever this plugin's tools are offered (e.g. an MCP server's instructions). */
+  instructions?: string;
   /** Enabled on first run. Defaults to true when the plugin needs no settings. */
   enabledByDefault?: boolean;
 };

@@ -12,7 +12,7 @@ import { memoryPrompt } from "./memory.ts";
 import { baseInstructions, joinSections } from "./prompt.ts";
 import { describeError, type ModelCall } from "./providers.ts";
 import { generateStructured } from "./structured.ts";
-import { buildTools } from "./tools.ts";
+import { buildTools, toolNotes } from "./tools.ts";
 
 export const MAX_WATCH_STEPS = 8;
 /** How many seen fingerprints a watch keeps for de-duplication. */
@@ -116,6 +116,7 @@ export async function runWatch(task: Task, deps: AgentDeps, opts: RunWatchOption
             "If nothing matches, say so plainly. Do not invent items.",
         ),
         memoryPrompt(deps.memories, task.instructions),
+        toolNotes(deps.plugins, built),
       ),
       prompt: `What the user wants to be told about:\n${task.instructions}\n\n${seenBlock}\n\nList matching items as short lines "title — URL"; no tables.`,
       tools: built.tools,
