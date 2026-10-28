@@ -31,7 +31,8 @@ export function errorMessage(error: unknown): string {
 const NO_MODEL = /no model is configured|no models? (?:configured|chosen|set)/i;
 const NETWORK = /^offline$|failed to fetch|networkerror|network ?error|load failed|network request failed|err_internet_disconnected|err_connection_refused|econnrefused/i;
 // Checked before the key patterns: "Every model … is rate limited: 401 …" is about the limit.
-const QUOTA = /^(?:402|429)\b|rate.?limit|quota|insufficient[_ ](?:quota|balance|credits?|funds)|out of credits|too many requests|payment required|queue full|credit balance|billing/i;
+// Keyless tiers phrase limits their own way: Pollinations answers 402 FREE_LIMIT ("Free limit reached … Retry after 24s").
+const QUOTA = /free.?limit|"status":\s*(?:402|429)\b|retry after \d+\s*s|^(?:402|429)\b|rate.?limit|quota|insufficient[_ ](?:quota|balance|credits?|funds)|out of credits|too many requests|payment required|queue full|credit balance|billing/i;
 const MODEL = /^404\b.*model|model\b.*(?:not found|does not exist|doesn't exist|is not available|is currently unavailable|unavailable|isn't on|not supported|unknown|invalid)|unknown model|invalid model|no such model|model_not_found/i;
 const KEY = /^(?:401|403)\b|incorrect api key|invalid (?:x-)?api[- _]?key|api[- _]?key (?:not valid|is invalid|expired)|invalid_api_key|authentication_error|unauthori[sz]ed|permission_denied|expired (?:api )?key|key (?:was )?revoked/i;
 const SIGN_IN = /needs? (?:you to )?sign.?in|needs_auth|sign in again|reauthori[sz]e|invalid_grant|token (?:has )?expired/i;
