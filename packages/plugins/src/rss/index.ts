@@ -1,4 +1,4 @@
-import { definePlugin, defineTool, type BriefItem } from "@z/core";
+import { definePlugin, defineTool, type BriefSourceItem } from "@z/core";
 import { z } from "zod";
 import { decodeEntities, errorMessage, fetchPublic, htmlToText, readTextCapped, sha256Hex, truncate } from "../util.ts";
 
@@ -132,7 +132,7 @@ export default definePlugin({
   tools: { read_feed: readFeed },
   briefing: async (ctx) => {
     const since = ctx.since.getTime();
-    const items: BriefItem[] = [];
+    const items: BriefSourceItem[] = [];
     for (const url of feedUrls(ctx.settings.feeds)) {
       try {
         const feed = await loadFeed(ctx.fetch, url, false);

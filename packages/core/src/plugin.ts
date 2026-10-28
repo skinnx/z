@@ -19,7 +19,7 @@
 import type { Schema } from "ai";
 import type { z } from "zod";
 import type {
-  BriefItem,
+  BriefSourceItem,
   ChannelInput,
   ChannelKind,
   InboundMessage,
@@ -75,7 +75,7 @@ export type ZTool<I = any, O = unknown> = {
 };
 
 export type BriefingContext = Omit<ToolContext, "signal"> & { since: Date; timezone: string };
-export type BriefingSource = (ctx: BriefingContext) => Promise<BriefItem[]>;
+export type BriefingSource = (ctx: BriefingContext) => Promise<BriefSourceItem[]>;
 
 export type ChannelRuntime = {
   channel: z.output<typeof ChannelInput>;
@@ -120,12 +120,16 @@ export type ChannelAdapter = {
   /**
    * Send an unprompted message to a thread (owner notices). `actions` become
    * buttons where the platform supports them; ids are opaque and go back via `runtime.act`.
+   * `id` is the same on every retry of one delivery (use it for idempotency where the platform can).
+   * Resolve to `{ ref }` (the platform's message id) when `edit` can change the message later.
    */
   send?: (
     runtime: ChannelRuntime,
     threadId: string,
-    message: { text: string; actions?: { id: string; label: string; style?: "primary" | "danger" }[] },
-  ) => Promise<void>;
+    message: { text: string; actions?: { id: string; label: string; style?: "primary" | "danger" }[]; id?: string },
+  ) => Promise<void | { ref: string }>;
+  /** Replace a sent notice's text and remove its buttons (answered or decided elsewhere). `ref` is from `send`. */
+  edit?: (runtime: ChannelRuntime, threadId: string, ref: string, text: string) => Promise<void>;
   /**
    * Longest `text` that `send` delivers whole when it carries actions. Approve buttons are only
    * offered when the complete approval preview fits. Omit when the platform has no practical limit.

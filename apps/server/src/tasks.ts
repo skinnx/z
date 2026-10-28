@@ -2,13 +2,14 @@
  * Task queue, recurring schedules and the pause/resume cycles: approvals, `ask_person` questions,
  * review → resolve, failure fatigue, and crash recovery that never replays a side effect.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import {
   DEFAULT_WATCH_SCHEDULE,
   deriveTitle,
   MAX_CONSECUTIVE_FAILURES,
   MAX_FINGERPRINTS,
+  MISSED_RUN_WINDOW_MS,
   pendingQuestion,
   runTask,
   runWatch,
@@ -23,28 +24,33 @@ import {
 } from "@z/core";
 import type { ModelMessage } from "ai";
 import type { z } from "zod";
-import { approvalBody, clip, notify } from "./notify.ts";
+import { approvalBody, buttonable, clip, notify, settleApproval, settleQuestion } from "./notify.ts";
 import { planRecovery } from "./recovery.ts";
 import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
 
 const CONCURRENCY = 2;
-/** Choices short and few enough to become buttons on the owner channel. */
-const MAX_BUTTONS = 4;
-const MAX_BUTTON_LABEL = 30;
 
 export class ConflictError extends Error {}
 
+/** Statuses a scheduled run may start from: not busy, not waiting on the owner, not paused. */
+const RUNNABLE: Task["status"][] = ["scheduled", "done", "failed"];
+
 export type Tasks = ReturnType<typeof createTasks>;
 
-export function createTasks(rt: Runtime) {
+/** Whitespace-normalized hash of a run's result: recurring runs that repeat it stay quiet. */
+export const resultHash = (text: string) => createHash("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
+
+/** `now`: the clock (tests pass a fake one for schedules and missed runs). */
+export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { now?: () => Date } = {}) {
   const { store, bus } = rt;
   const queue: string[] = [];
   const running = new Map<string, AbortController>();
   const jobs = new Map<string, Cron>();
 
   const timezone = () => store.settings.get().timezone;
-  const now = () => new Date().toISOString();
+  const now = () => clock().toISOString();
+  const nextRun = (pattern: string) => nextRunAt(pattern, timezone(), clock());
 
   function emit(id: string): Task | null {
     const task = store.tasks.get(id);
@@ -142,13 +148,13 @@ export function createTasks(rt: Runtime) {
     store.tasks.setQuestion(task.id, { ...q, askedAt });
     step(task.id, `Asked: ${q.question}`);
     update(task.id, { status: "needs_input" });
-    const buttons = q.choices.length > 0 && q.choices.length <= MAX_BUTTONS && q.choices.every((c) => c.length <= MAX_BUTTON_LABEL);
+    // Stored on the notice, so the app keeps its answer buttons; channels and push add buttons when they fit.
     notify({
       kind: "question",
       title: `Question · ${titleOf(task)}`,
-      body: clip(q.question + (q.choices.length && !buttons ? `\nChoices: ${q.choices.join(" / ")}` : ""), 1000),
+      body: clip(q.question + (q.choices.length && !buttonable(q.choices) ? `\nChoices: ${q.choices.join(" / ")}` : ""), 1000),
       path: `/tasks?task=${task.id}`,
-      ...(buttons ? { question: { taskId: task.id, choices: q.choices } } : {}),
+      question: { taskId: task.id, text: q.question, choices: q.choices },
     });
   }
 
@@ -183,14 +189,21 @@ export function createTasks(rt: Runtime) {
   /**
    * One-shot tasks go to `review` (or `failed`) and tell the owner. Recurring ones go back to `scheduled`:
    * a failure notifies only when it breaks a run of successes, and MAX_CONSECUTIVE_FAILURES in a row pause the task.
-   * `quiet` (no_update, or a watch) suppresses the completion notice.
+   * `quiet` (no_update, or a watch) suppresses the completion notice, and so does a result that repeats
+   * the last successful run's (whitespace-normalized hash), unless this run ends a failure streak.
    */
   function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed", quiet = false) {
     const path = `/tasks?task=${task.id}`;
     if (task.schedule) {
       if (status === "done") {
-        update(task.id, { ...patch, status: "scheduled", failures: 0, nextRunAt: nextRunAt(task.schedule, timezone()) });
-        if (!quiet && patch.result) notify({ kind: "task", title: `Done · ${titleOf(task)}`, body: clip(patch.result, 300), path });
+        const recovered = (store.tasks.get(task.id)?.failures ?? 0) > 0;
+        update(task.id, { ...patch, status: "scheduled", failures: 0, nextRunAt: nextRun(task.schedule) });
+        if (quiet || !patch.result) return;
+        const hash = resultHash(patch.result);
+        const repeated = hash === store.tasks.resultHash(task.id);
+        store.tasks.setResultHash(task.id, hash);
+        if (repeated && !recovered) return step(task.id, "Same result as the last run: no notice.");
+        notify({ kind: "task", title: `Done · ${titleOf(task)}`, body: clip(patch.result, 300), path });
         return;
       }
       const failures = (store.tasks.get(task.id)?.failures ?? 0) + 1;
@@ -205,7 +218,7 @@ export function createTasks(rt: Runtime) {
         });
         return;
       }
-      update(task.id, { ...patch, status: "scheduled", failures, nextRunAt: nextRunAt(task.schedule, timezone()) });
+      update(task.id, { ...patch, status: "scheduled", failures, nextRunAt: nextRun(task.schedule) });
       if (failures === 1) notify({ kind: "task", title: `Failing · ${titleOf(task)}`, body: clip(patch.error || "", 300), path });
       return;
     }
@@ -229,13 +242,23 @@ export function createTasks(rt: Runtime) {
   /** Scheduled runs skip tasks that are busy, wait for the owner (needs you) or are paused. */
   function fire(id: string) {
     const task = store.tasks.get(id);
-    if (!task || !["scheduled", "done", "failed"].includes(task.status)) return;
-    update(id, { status: "queued", nextRunAt: nextRunAt(task.schedule!, timezone()) });
+    if (!task || !RUNNABLE.includes(task.status)) return;
+    update(id, { status: "queued", nextRunAt: nextRun(task.schedule!) });
     enqueue(id);
   }
 
   function expireApprovals(taskId: string) {
-    for (const approval of store.approvals.expireForTask(taskId)) bus.emit({ type: "approval", approval });
+    for (const approval of store.approvals.expireForTask(taskId)) {
+      bus.emit({ type: "approval", approval });
+      settleApproval(approval);
+    }
+  }
+
+  /** Withdraw an open question (the run is reset): its notices and channel messages lose their buttons. */
+  function withdrawQuestion(id: string) {
+    if (!store.tasks.question(id)) return;
+    store.tasks.setQuestion(id, null);
+    settleQuestion(id, null);
   }
 
   function stop(id: string) {
@@ -246,7 +269,7 @@ export function createTasks(rt: Runtime) {
     jobs.get(id)?.stop();
     jobs.delete(id);
     expireApprovals(id);
-    store.tasks.setQuestion(id, null);
+    withdrawQuestion(id);
     endRun(id);
   }
 
@@ -257,6 +280,27 @@ export function createTasks(rt: Runtime) {
     if (question) return ask(task, question);
     update(task.id, { status: "queued" });
     enqueue(task.id);
+  }
+
+  /**
+   * Startup: a recurring run that fell due while z was down runs once now (however many slots it
+   * missed) when the policy is `once` and the miss is recent; otherwise it is skipped and noted.
+   */
+  function catchUp(task: Task) {
+    if (!task.schedule || !task.nextRunAt || !RUNNABLE.includes(task.status)) return;
+    const due = Date.parse(task.nextRunAt);
+    const late = clock().getTime() - due;
+    if (!(late > 0)) return;
+    const policy = task.missedPolicy ?? "once";
+    if (policy === "once" && late <= MISSED_RUN_WINDOW_MS) {
+      step(task.id, `Missed the run due ${task.nextRunAt} while z was offline: running it once now.`);
+      console.log(`[z:tasks] ${task.id.slice(0, 8)} missed its run at ${task.nextRunAt}: running once`);
+      return fire(task.id);
+    }
+    const why = policy === "skip" ? "missed runs are skipped for this task" : "more than 24 hours ago";
+    step(task.id, `Skipped the run due ${task.nextRunAt} while z was offline (${why}).`);
+    console.log(`[z:tasks] ${task.id.slice(0, 8)} missed its run at ${task.nextRunAt}: skipped (${why})`);
+    update(task.id, { nextRunAt: nextRun(task.schedule) });
   }
 
   /** Startup: decide what each task interrupted mid-run may do. */
@@ -300,10 +344,11 @@ export function createTasks(rt: Runtime) {
         mode: input.mode,
         ...(watch ? { watch: { lastCheckAt: null, lastFinding: null } } : {}),
         status: sched && !watch ? "scheduled" : "queued",
+        missedPolicy: input.missedPolicy,
         result: null,
         error: null,
         events: [],
-        nextRunAt: sched ? nextRunAt(sched, timezone()) : null,
+        nextRunAt: sched ? nextRun(sched) : null,
         createdAt: at,
         updatedAt: at,
         question: null,
@@ -325,7 +370,7 @@ export function createTasks(rt: Runtime) {
       if (!task) return null;
       if (task.status === "running" || task.status === "queued") throw new ConflictError(`Task is already ${task.status}`);
       expireApprovals(id);
-      store.tasks.setQuestion(id, null);
+      withdrawQuestion(id);
       endRun(id);
       const queued = update(id, { status: "queued", error: null });
       enqueue(id);
@@ -351,6 +396,7 @@ export function createTasks(rt: Runtime) {
       const messages = store.tasks.messages(id);
       if (task.status !== "needs_input" || !question || !messages) throw new ConflictError(`Task is ${task.status}, not waiting for an answer`);
       store.tasks.setQuestion(id, null);
+      settleQuestion(id, text);
       step(id, `Answered: ${text}`);
       resume(task, withAnswer(messages, question.toolCallId, text));
       return store.tasks.get(id);
@@ -373,6 +419,7 @@ export function createTasks(rt: Runtime) {
 
       const decided = store.approvals.decide(approvalId, decision.approve ? "approved" : "denied", decision.note ?? null);
       bus.emit({ type: "approval", approval: decided });
+      settleApproval(decided);
       if (decision.remember) remember(decided, decision.approve);
 
       const task = store.tasks.get(approval.taskId);
@@ -402,16 +449,22 @@ export function createTasks(rt: Runtime) {
       for (const task of store.tasks.list()) {
         if (!task.schedule) continue;
         schedule(task);
-        if (task.status === "scheduled") update(task.id, { nextRunAt: nextRunAt(task.schedule, timezone()) });
+        if (task.status === "scheduled") update(task.id, { nextRunAt: nextRun(task.schedule) });
       }
     },
 
-    /** Startup: tasks stopped mid-run resume or become `interrupted`; then schedules and the queue. */
+    /**
+     * Startup: tasks stopped mid-run resume or become `interrupted`; runs missed while z was down follow
+     * the task's missedPolicy; then schedules and the queue.
+     */
     start() {
       for (const task of store.tasks.byStatus("running")) recover(task);
       for (const task of store.tasks.list().reverse()) {
-        if (task.schedule) schedule(task);
-        if (task.status === "queued") enqueue(task.id);
+        if (task.schedule) {
+          catchUp(task);
+          schedule(task);
+        }
+        if (store.tasks.get(task.id)?.status === "queued") enqueue(task.id);
       }
     },
 

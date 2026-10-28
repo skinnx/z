@@ -1,14 +1,16 @@
 /**
- * The morning briefing: gather items from plugins and tasks, then let the model
- * summarize, suggest follow-ups on items and propose a few tasks worth delegating.
+ * The morning briefing: gather items from plugins and tasks, sort them into what needs the user
+ * and what can wait (triage.ts), then let the model summarize, suggest follow-ups on items and
+ * propose a few tasks worth delegating.
  */
 import { z } from "zod";
-import type { BriefItem, Briefing, CouldNotCheck, Routing, Settings, Task } from "./contract.ts";
+import type { BriefItem, BriefSourceItem, Briefing, CouldNotCheck, Routing, Settings, Task } from "./contract.ts";
 import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, localDate } from "./prompt.ts";
 import { laneConfigured, type ModelResolver } from "./providers.ts";
 import { generateStructured } from "./structured.ts";
 import type { ActivePlugin } from "./tools.ts";
+import { triageBriefItems } from "./triage.ts";
 
 export type BriefingDeps = {
   models: ModelResolver;
@@ -35,7 +37,7 @@ const NEEDS_YOU: Partial<Record<Task["status"], string>> = {
 };
 
 /** Items from plugins and tasks, plus the plugin sources that failed (listed, never silently dropped). */
-export async function collectBriefItems(deps: BriefingDeps): Promise<{ items: BriefItem[]; couldNotCheck: CouldNotCheck[] }> {
+export async function collectBriefItems(deps: BriefingDeps): Promise<{ items: BriefSourceItem[]; couldNotCheck: CouldNotCheck[] }> {
   const couldNotCheck: CouldNotCheck[] = [];
   const fromPlugins = await Promise.all(
     deps.plugins
@@ -54,13 +56,14 @@ export async function collectBriefItems(deps: BriefingDeps): Promise<{ items: Br
       }),
   );
 
-  const fromTasks: BriefItem[] = deps.tasks
+  const fromTasks: BriefSourceItem[] = deps.tasks
     .filter((t) => OPEN.includes(t.status))
     .map((t) => ({
       id: `tasks:${t.id}`,
       source: "tasks",
       kind: NEEDS_YOU[t.status] ? "followup" : "todo",
       text: NEEDS_YOU[t.status] ? `${NEEDS_YOU[t.status]}: ${t.title}` : `${t.title} (${t.status})`,
+      ...(NEEDS_YOU[t.status] ? {} : { signals: { delegated: true } }),
     }));
 
   return { items: [...fromPlugins.flat(), ...fromTasks], couldNotCheck };
@@ -75,19 +78,29 @@ const Draft = z.object({
 
 export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefing, "id" | "createdAt">> {
   const now = new Date();
-  const { items, couldNotCheck } = await collectBriefItems(deps);
-  const failed = couldNotCheck.length ? { couldNotCheck } : {};
+  const collected = await collectBriefItems(deps);
+  const failed = collected.couldNotCheck.length ? { couldNotCheck: collected.couldNotCheck } : {};
   const date = localDate(now, deps.settings.timezone);
-  const memories = memoryPrompt(deps.memories, items.map((i) => i.text).join(" "));
+  const memories = memoryPrompt(deps.memories, collected.items.map((i) => i.text).join(" "));
+  const hasModel = laneConfigured(deps.routing, "briefing");
+  const model = () => deps.models.forLane(deps.routing, "briefing", { background: true });
 
-  if (items.length === 0 && !memories) return { date, summary: "Nothing new since your last briefing.", items, ...failed };
+  if (collected.items.length === 0 && !memories) return { date, summary: "Nothing new since your last briefing.", items: [], ...failed };
+  // Without a model the rules still demote what they can; everything else shows as needing the user.
+  const items = await triageBriefItems(collected.items, {
+    model: hasModel ? model() : null,
+    settings: deps.settings,
+    now,
+    memories,
+    ...(deps.log ? { log: deps.log } : {}),
+  });
   // No model: a plain summary, and plugin-provided suggestions only.
-  if (!laneConfigured(deps.routing, "briefing")) return { date, summary: plainSummary(items), items, ...failed };
+  if (!hasModel) return { date, summary: plainSummary(items), items, ...failed };
 
   const open = deps.tasks.filter((t) => OPEN.includes(t.status)).map((t) => t.title);
   try {
     const draft = await generateStructured(Draft, {
-      model: deps.models.forLane(deps.routing, "briefing", { background: true }),
+      model: model(),
       instructions: joinSections(
         baseInstructions(
           deps.settings,
@@ -98,15 +111,19 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
         memories,
       ),
       prompt: [
-        "Items since the last briefing, numbered:",
-        items.length ? items.map((item, i) => `${i + 1}. [${item.source}/${item.kind}] ${item.text}${item.url ? ` <${item.url}>` : ""}`).join("\n") : "(none)",
+        "Items since the last briefing, numbered, each marked whether it needs the user today or can wait:",
+        items.length
+          ? items
+              .map((item, i) => `${i + 1}. [${item.source}/${item.kind}] [${item.priority === "needs_you" ? "needs you" : "can wait"}] ${item.text}${item.url ? ` <${item.url}>` : ""}`)
+              .join("\n")
+          : "(none)",
         "",
         open.length ? `Already delegated (do not propose these again): ${open.join("; ")}` : "",
         "Reply with a JSON object only:",
-        '{"summary": "2-4 sentences on what matters today",',
+        '{"summary": "2-4 sentences on what matters today, leading with what needs the user",',
         ' "suggestions": [{"ref": <item number>, "suggestion": "an instruction you could carry out on that item, e.g. Summarize the discussion in …"}],',
         ' "proposals": [{"why": "one short line on why this helps the user now", "instruction": "a complete, ready-to-run instruction for you"}]}',
-        "Suggest follow-ups only for the few items where acting is genuinely useful (at most 5).",
+        "Suggest follow-ups only for the few items where acting is genuinely useful (at most 5), above all those that need the user.",
         `Propose 1-${MAX_PROPOSALS} tasks drawn from the items and what you remember about the user. Each instruction must stand on its own: name the sources, links or repos it needs. You can read the web, feeds and GitHub; never propose payments or posting on the user's behalf.`,
       ]
         .filter(Boolean)
@@ -117,12 +134,16 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
     if (!draft) return { date, summary: plainSummary(items), items, ...failed };
 
     const byRef = new Map(draft.suggestions.map((s) => [s.ref, clean(s.suggestion)]));
+    // Proposals are z's own ideas, never something waiting on the user.
     const proposed: BriefItem[] = draft.proposals.slice(0, MAX_PROPOSALS).map((p, i) => ({
       id: `${PROPOSED_SOURCE}:${date}:${i}`,
       source: PROPOSED_SOURCE,
       kind: "followup",
       text: clean(p.why),
       suggestion: clean(p.instruction),
+      priority: "can_wait",
+      reason: "Proposed by z; optional.",
+      decidedBy: "model",
     }));
     return {
       date,

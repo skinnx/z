@@ -6,6 +6,7 @@ import {
   approvalPreview,
   Lane,
   memoryTerms,
+  NOT_CHECKED,
   Routing,
   Settings,
   STARTER_SKILLS,
@@ -23,6 +24,8 @@ import {
   type Memory,
   type MemoryStatus,
   type Notice,
+  type NoticeDelivery,
+  type NoticeQuestion,
   type ProviderConfig,
   type Skill,
   type Task,
@@ -55,6 +58,9 @@ export type TaskCall = {
   startedAt: string;
   finishedAt: string | null;
 };
+
+/** A notice delivery as stored: the contract's NoticeDelivery plus where it goes and the sent message's ref. */
+export type DeliveryRecord = NoticeDelivery & { address: string; threadId: string | null; ref: string | null };
 
 /** Stored question: the contract's TaskQuestion plus the `ask_person` call it answers. */
 export type StoredQuestion = TaskQuestion & { toolCallId: string };
@@ -191,6 +197,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     updatedAt: r.updated_at,
     ...publicQuestion(parse<StoredQuestion | null>(r.question, null)),
     failures: r.failures ?? 0,
+    missedPolicy: r.missed_policy === "skip" ? "skip" : "once",
   });
   const publicQuestion = (q: StoredQuestion | null) =>
     q ? { question: { question: q.question, choices: q.choices, askedAt: q.askedAt } } : { question: null };
@@ -215,8 +222,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
     insert: (t: Task) =>
       run(
-        `INSERT INTO tasks (id, title, instructions, schedule, tools, lane, mode, watch, status, result, error, events, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, title, instructions, schedule, tools, lane, mode, watch, status, result, error, events, next_run_at, created_at, updated_at, missed_policy)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         t.id,
         t.title,
         t.instructions,
@@ -232,6 +239,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         t.nextRunAt,
         t.createdAt,
         t.updatedAt,
+        t.missedPolicy ?? "once",
       ),
     update: (id: string, patch: Partial<Pick<Task, "title" | "status" | "result" | "error" | "nextRunAt" | "failures">>): Task | null => {
       const columns: Record<string, string> = {
@@ -294,6 +302,9 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         toolCallId,
       ),
     clearCalls: (id: string) => run("DELETE FROM task_calls WHERE task_id = ?", id),
+    /** Recurring tasks: hash of the last successful result, to skip notices that repeat it. */
+    resultHash: (id: string): string | null => (get("SELECT result_hash FROM tasks WHERE id = ?", id)?.result_hash as string | null) ?? null,
+    setResultHash: (id: string, hash: string | null) => run("UPDATE tasks SET result_hash = ? WHERE id = ?", hash, id),
     byStatus: (...statuses: Task["status"][]) =>
       all(`SELECT * FROM tasks WHERE status IN (${statuses.map(() => "?").join(",")})`, ...statuses).map(toTask),
     delete: (id: string) => run("DELETE FROM tasks WHERE id = ?", id).changes > 0,
@@ -362,7 +373,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     id: r.id,
     date: r.date,
     summary: r.summary,
-    items: parse<BriefItem[]>(r.items, []),
+    // Briefings from before triage: nothing sorted them, so they read as needing the user.
+    items: parse<Partial<BriefItem>[]>(r.items, []).map((i) => ({ priority: "needs_you", reason: NOT_CHECKED, decidedBy: "rule", ...i }) as BriefItem),
     ...(r.could_not_check ? { couldNotCheck: parse(r.could_not_check, []) } : {}),
     createdAt: r.created_at,
   });
@@ -776,6 +788,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     body: r.body,
     path: r.path,
     ...(r.approval_id ? { approvalId: r.approval_id } : {}),
+    ...(r.question ? { question: parse<NoticeQuestion>(r.question, { taskId: "", text: "", choices: [] }) } : {}),
     read: Boolean(r.read),
     createdAt: r.created_at,
   });
@@ -784,20 +797,93 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     list: (limit = 100): Notice[] => all("SELECT * FROM notices ORDER BY created_at DESC LIMIT ?", limit).map(toNotice),
     insert: (n: Notice) =>
       run(
-        "INSERT INTO notices (id, kind, title, body, path, approval_id, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notices (id, kind, title, body, path, approval_id, question, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         n.id,
         n.kind,
         n.title,
         n.body,
         n.path,
         n.approvalId ?? null,
+        n.question ? json(n.question) : null,
         n.read ? 1 : 0,
         n.createdAt,
       ),
+    get: (id: string): Notice | null => {
+      const r = get("SELECT * FROM notices WHERE id = ?", id);
+      return r ? toNotice(r) : null;
+    },
+    forApproval: (approvalId: string): Notice[] => all("SELECT * FROM notices WHERE approval_id = ?", approvalId).map(toNotice),
+    /** Question notices of a task that are still unanswered. */
+    openQuestions: (taskId: string): Notice[] =>
+      all(
+        "SELECT * FROM notices WHERE question IS NOT NULL AND json_extract(question, '$.taskId') = ? AND json_extract(question, '$.answer') IS NULL",
+        taskId,
+      ).map(toNotice),
+    setQuestion: (id: string, question: NoticeQuestion) => run("UPDATE notices SET question = ? WHERE id = ?", json(question), id),
     /** All when `ids` is omitted. */
     markRead: (ids?: string[]) => {
       if (!ids) return run("UPDATE notices SET read = 1 WHERE read = 0");
       for (const id of ids) run("UPDATE notices SET read = 1 WHERE id = ?", id);
+    },
+  };
+
+  // ─── Notice outbox: one delivery per (notice, target), retried with backoff ─
+
+  const toDelivery = (r: Row): DeliveryRecord => ({
+    id: r.id,
+    noticeId: r.notice_id,
+    target: r.target,
+    address: r.address,
+    threadId: r.thread_id ?? null,
+    status: r.status,
+    attempts: r.attempts,
+    nextAttemptAt: r.next_attempt_at ?? null,
+    lastError: r.last_error ?? null,
+    ref: r.ref ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  });
+
+  const outbox = {
+    /** Insert pending deliveries (a repeated (notice, target, address) is ignored). */
+    insert: (rows: Pick<DeliveryRecord, "id" | "noticeId" | "target" | "address" | "threadId" | "nextAttemptAt">[], at: string) => {
+      for (const d of rows) {
+        run(
+          `INSERT OR IGNORE INTO notice_deliveries (id, notice_id, target, address, thread_id, status, attempts, next_attempt_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
+          d.id,
+          d.noticeId,
+          d.target,
+          d.address,
+          d.threadId,
+          d.nextAttemptAt,
+          at,
+          at,
+        );
+      }
+    },
+    get: (id: string): DeliveryRecord | null => {
+      const r = get("SELECT * FROM notice_deliveries WHERE id = ?", id);
+      return r ? toDelivery(r) : null;
+    },
+    forNotice: (noticeId: string): DeliveryRecord[] =>
+      all("SELECT * FROM notice_deliveries WHERE notice_id = ? ORDER BY created_at, target", noticeId).map(toDelivery),
+    /** Pending deliveries due at `at` (ISO), oldest first. */
+    due: (at: string): DeliveryRecord[] =>
+      all("SELECT * FROM notice_deliveries WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY next_attempt_at", at).map(toDelivery),
+    /** When the earliest pending delivery is due, or null when none waits. */
+    nextDueAt: (): string | null =>
+      (get("SELECT MIN(next_attempt_at) AS at FROM notice_deliveries WHERE status = 'pending'")?.at as string | null) ?? null,
+    update: (id: string, patch: Partial<Pick<DeliveryRecord, "status" | "attempts" | "nextAttemptAt" | "lastError" | "ref">>, at: string) => {
+      const columns: Record<string, string> = { status: "status", attempts: "attempts", nextAttemptAt: "next_attempt_at", lastError: "last_error", ref: "ref" };
+      const entries = Object.entries(patch).filter(([k]) => k in columns);
+      if (!entries.length) return;
+      run(
+        `UPDATE notice_deliveries SET ${entries.map(([k]) => `${columns[k]} = ?`).join(", ")}, updated_at = ? WHERE id = ?`,
+        ...entries.map(([, v]) => (v ?? null) as SQLInputValue),
+        at,
+        id,
+      );
     },
   };
 
@@ -893,5 +979,5 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     push.vapid.get();
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, skills, plugins, threads, notices, push, connectors, logins, kv, schemaVersion, taskCounts, openAllSecrets };
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, skills, plugins, threads, notices, outbox, push, connectors, logins, kv, schemaVersion, taskCounts, openAllSecrets };
 }
