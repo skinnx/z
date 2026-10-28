@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, sleep } from "../util.ts";
-import { config, requestSignal, untilAuthorized } from "./shared.ts";
+import { config, requestSignal, step, untilAuthorized } from "./shared.ts";
 
 const API = "https://api.x.com/2";
 
@@ -346,6 +346,27 @@ export const xAdapter: ChannelAdapter = {
     { key: "userId", label: "Bot user id (optional, resolved from the token)" },
     { key: "pollSeconds", label: "Poll interval in seconds (default 60)" },
   ],
+  // From config and what the running poller saw: X's API is metered, and a refresh from here could race the poller's.
+  setup: async (runtime) => {
+    const portal = "https://developer.x.com/en/portal/dashboard";
+    const refreshToken = config(runtime, "refreshToken");
+    const clientId = config(runtime, "clientId");
+    const username = runtime.state.get("username");
+    const hasToken = Boolean(config(runtime, "bearerToken") || (refreshToken && clientId));
+    return [
+      step("x.token", "Access token", !hasToken ? "error" : username ? "done" : "todo", {
+        ...(username ? { detail: `@${username}` } : {}),
+        link: portal,
+      }),
+      step(
+        "x.refresh",
+        "Add a refresh token and client id so the 2-hour access token renews itself",
+        refreshToken && clientId ? "done" : refreshToken ? "error" : "todo",
+        { link: portal },
+      ),
+      step("x.mention", `Reply to a post with "@${username ?? "your bot"} is this true?"`, "info"),
+    ];
+  },
   start: async (runtime) => {
     const refreshToken = config(runtime, "refreshToken");
     const clientId = config(runtime, "clientId");
@@ -366,6 +387,7 @@ export const xAdapter: ChannelAdapter = {
     const expiryNote = xAuth(runtime).refreshable ? "" : " · no refresh token: the access token stops working 2 hours after it was issued";
     if (auth.first) runtime.status("ok", `Watching mentions of @${me!.username}${expiryNote}`);
     void auth.ready.then((ok) => {
+      if (ok) runtime.state.set("username", me!.username);
       if (ok) return poll(runtime, me!, signal);
     });
     return () => controller.abort();

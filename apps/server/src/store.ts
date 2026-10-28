@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
+  CHANNEL_ACTIVITY_MAX,
   ChannelLimits,
   approvalPreview,
   Lane,
@@ -15,6 +16,7 @@ import {
   type BotTurn,
   type BriefItem,
   type Briefing,
+  type ChannelActivity,
   type ChannelInput,
   type ConnectorInput,
   type ConnectorView,
@@ -499,6 +501,32 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
     set: (channelId: string, key: string, value: string) =>
       run("INSERT OR REPLACE INTO channel_state (channel_id, key, value) VALUES (?, ?, ?)", channelId, key, sealer.seal(value)),
+  };
+
+  /**
+   * The owner's view of what reached each bot (contract ChannelActivity), newest first. One sealed
+   * channel_state row per channel, so it goes when the channel is deleted. Repeated ignored or
+   * rejected events fold into the newest entry instead of pushing answers out.
+   */
+  const ACTIVITY_KEY = "z:activity";
+  const channelActivity = {
+    list: (channelId: string): ChannelActivity[] => {
+      try {
+        return parse(channelState.get(channelId, ACTIVITY_KEY), []);
+      } catch {
+        return [];
+      }
+    },
+    add: (channelId: string, entry: ChannelActivity) => {
+      // An answer that finishes after its channel was deleted must not leave a log behind.
+      if (!get("SELECT 1 AS x FROM channels WHERE id = ?", channelId)) return;
+      const list = channelActivity.list(channelId);
+      const top = list[0];
+      const folds = (entry.outcome === "ignored" || entry.outcome === "rejected") && top?.outcome === entry.outcome && top.detail === entry.detail;
+      if (folds) list[0] = { ...top, at: entry.at, count: top.count + entry.count };
+      else list.unshift(entry);
+      channelState.set(channelId, ACTIVITY_KEY, json(list.slice(0, CHANNEL_ACTIVITY_MAX)));
+    },
   };
 
   const memory = {
@@ -994,5 +1022,6 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     push.vapid.get();
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, skills, plugins, threads, notices, outbox, push, connectors, logins, kv, schemaVersion, taskCounts, openAllSecrets };
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, channelActivity, deliveries,
+ memory, memories, skills, plugins, threads, notices, outbox, push, connectors, logins, kv, schemaVersion, taskCounts, openAllSecrets };
 }

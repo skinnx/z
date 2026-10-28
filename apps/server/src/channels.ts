@@ -1,16 +1,22 @@
 /** Channel lifecycle: connect-mode adapters, inbound webhooks and bot dispatch. */
 import {
   answerMessage,
+  CHANNEL_PREVIEW_CHARS,
   describeError,
   linkCode,
   previewFits,
+  type ChannelActivity,
   type ChannelAdapter,
   type ChannelLimits,
+  type ChannelOutcome,
   type ChannelRuntime,
+  type ChannelSetupStep,
+  type ChannelTestResult,
   type ChannelView,
   type InboundMessage,
   type OutboundReply,
 } from "@z/core";
+import { signedHeaders } from "@z/plugins";
 import { approvalBody } from "./notify.ts";
 import type { Pairing } from "./owner.ts";
 import type { Runtime } from "./runtime.ts";
@@ -39,9 +45,14 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   const webhookUrl = (record: ChannelRecord) =>
     rt.env.publicUrl && adapterFor(record.kind)?.webhook ? `${rt.env.publicUrl}/hooks/${record.id}` : null;
 
+  // The server's own address, for calls from this machine (a wildcard bind is reached on loopback).
+  const host = ["0.0.0.0", "::", ""].includes(rt.env.host) ? "127.0.0.1" : rt.env.host;
+  const localBase = `http://${host.includes(":") ? `[${host}]` : host}:${rt.env.port}`;
+  const localWebhookUrl = (record: ChannelRecord) => (adapterFor(record.kind)?.webhook ? `${localBase}/hooks/${record.id}` : null);
+
   function view(record: ChannelRecord): ChannelView {
     const { config: _secret, ...rest } = record;
-    return { ...rest, webhookUrl: webhookUrl(record) };
+    return { ...rest, webhookUrl: webhookUrl(record), localWebhookUrl: localWebhookUrl(record) };
   }
 
   function emit(id: string) {
@@ -81,28 +92,81 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     return Math.max(1, Math.ceil(((gate.queue.length / limits.running + 1) * gate.averageMs) / 60_000));
   }
 
+  // ─── Activity log: the owner's view of what reached each bot ───────────────
+  const clip = (text: string) => {
+    const flat = text.replace(/\s+/g, " ").trim();
+    return flat.length > CHANNEL_PREVIEW_CHARS ? `${flat.slice(0, CHANNEL_PREVIEW_CHARS - 1)}…` : flat;
+  };
+
+  function logActivity(
+    channelId: string,
+    outcome: ChannelOutcome,
+    entry: { message?: InboundMessage; reply?: OutboundReply | null; started?: number; detail?: string | null } = {},
+  ) {
+    // Nothing of a message the bot wasn't asked about, or of a request it refused, is kept.
+    const kept = outcome !== "ignored" && outcome !== "rejected" ? entry.message : undefined;
+    const activity: ChannelActivity = {
+      at: new Date().toISOString(),
+      outcome,
+      author: kept ? clip(kept.author.name) : null,
+      // A pairing code is single-use, but still not worth keeping.
+      preview: kept ? clip(linkCode(kept.text) !== null ? kept.text.replace(/\d{6}/g, "••••••") : kept.text) : null,
+      reply: entry.reply ? clip(entry.reply.text) : null,
+      verdict: entry.reply?.verdict ?? null,
+      sources: entry.reply?.sources?.length ?? 0,
+      ms: entry.started === undefined ? null : Date.now() - entry.started,
+      detail: entry.detail ? clip(entry.detail) : null,
+      count: 1,
+    };
+    try {
+      store.channelActivity.add(channelId, activity);
+      bus.emit({ type: "channelActivity", channelId });
+    } catch (error) {
+      console.error(`[z] channel ${channelId}: could not log activity: ${describeError(error)}`);
+    }
+  }
+
   async function dispatch(channelId: string, message: InboundMessage): Promise<OutboundReply | null> {
+    const started = Date.now();
+    try {
+      const { reply, outcome, detail } = await route(channelId, message);
+      if (outcome) logActivity(channelId, outcome, { message, reply, started, detail: detail ?? null });
+      return reply;
+    } catch (error) {
+      logActivity(channelId, "error", { message, started, detail: describeError(error) });
+      throw error;
+    }
+  }
+
+  type Routed = { reply: OutboundReply | null; outcome: ChannelOutcome | null; detail?: string };
+  const answered = (reply: OutboundReply | null, message: InboundMessage, always: boolean): Routed => ({
+    reply,
+    outcome: reply ? "answered" : message.addressed || always ? "silent" : "ignored",
+  });
+
+  async function route(channelId: string, message: InboundMessage): Promise<Routed> {
     store.channels.touch(channelId);
     emit(channelId);
     const record = store.channels.get(channelId);
-    if (!record?.enabled) return null;
+    if (!record?.enabled) return { reply: null, outcome: null };
     // Handled before the model, addressed or not: pairing must not depend on an LLM.
     const code = linkCode(message.text);
-    if (code !== null) return { text: link(record, message, code), replyTo: message.messageId };
+    if (code !== null) return { reply: { text: link(record, message, code), replyTo: message.messageId }, outcome: "answered" };
     const owner = store.settings.get().owner;
     const exempt = owner?.channelId === channelId && owner.authorId === message.author.id;
     // Messages the bot won't answer cost nothing, and the owner is never capped.
-    if (exempt || !(message.addressed || record.always)) return answer(record, message);
+    if (exempt || !(message.addressed || record.always)) return answered(await answer(record, message), message, record.always);
 
     let gate = gates.get(channelId);
     if (!gate) gates.set(channelId, (gate = { running: 0, queue: [], averageMs: 30_000 }));
     const author = authorFor(channelId, message.author.id);
     const wait = overLimit(gate, author, record.limits);
     if (wait !== null) {
+      const detail = `Over a limit: may try again in ${wait} min`;
       // One reply per stretch over the cap, then quiet until the author is under it again.
-      if (author.busyNotified) return null;
+      if (author.busyNotified) return { reply: null, outcome: "limited", detail };
       author.busyNotified = true;
-      return { text: `I'm busy right now. Try again in ${wait} min.`, replyTo: message.messageId };
+      return { reply: { text: `I'm busy right now. Try again in ${wait} min.`, replyTo: message.messageId }, outcome: "limited", detail };
     }
     author.busyNotified = false;
     author.hits.push(Date.now());
@@ -112,7 +176,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       else await new Promise<void>((resolve) => gate.queue.push(resolve));
       const started = Date.now();
       try {
-        return await answer(record, message);
+        return answered(await answer(record, message), message, record.always);
       } finally {
         gate.averageMs = gate.averageMs * 0.8 + (Date.now() - started) * 0.2;
         // Hand the slot straight to the next in line, or free it.
@@ -213,9 +277,83 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
         release: (deliveryId) => void store.deliveries.release(record.id, deliveryId),
       },
       status: (status, detail) => setStatus(record.id, status, detail ?? null),
+      note: (outcome, detail) => recordNote(record.id, outcome, detail),
       log: (text) => console.log(`[z:channel:${record.id}] ${text}`),
       fetch,
     };
+  }
+
+  function recordNote(channelId: string, outcome: "ignored" | "rejected", detail?: string) {
+    logActivity(channelId, outcome, { detail: detail ?? null });
+  }
+
+  /** The adapter's next steps, then whether a first message has arrived. */
+  async function setupSteps(id: string): Promise<ChannelSetupStep[] | null> {
+    const record = store.channels.get(id);
+    if (!record) return null;
+    const adapter = adapterFor(record.kind);
+    if (!adapter) return [{ id: "plugin", label: `Turn on a plugin that provides "${record.kind}"`, status: "error" }];
+    let steps: ChannelSetupStep[] = [];
+    if (adapter.setup) {
+      try {
+        steps = await adapter.setup(runtimeFor(record), webhookUrl(record) ?? localWebhookUrl(record) ?? "");
+      } catch (error) {
+        steps = [{ id: "check", label: "Check the connection", status: "error", detail: describeError(error) }];
+      }
+    }
+    if (!record.enabled) steps.unshift({ id: "enabled", label: "Turn the channel on", status: "todo" });
+    const last = store.channelActivity.list(id).find((a) => a.outcome !== "rejected");
+    steps.push({
+      id: "first",
+      label: "Send the bot a first message",
+      status: record.lastEventAt ? "done" : "todo",
+      ...(last ? { detail: last.at } : {}),
+    });
+    return steps;
+  }
+
+  /** Sign a message with the channel's own secret and run it through `/hooks/:id`, as an integration would. */
+  async function testWebhook(id: string, text: string): Promise<ChannelTestResult | null> {
+    const record = store.channels.get(id);
+    if (!record) return null;
+    if (record.kind !== "webhook") throw new Error("Only webhook channels can be tested this way");
+    const secret = record.config.secret?.trim();
+    if (!secret) throw new Error("The channel has no signing secret");
+    const body = JSON.stringify({ text, author: { id: "z-test", name: "Test from z" }, threadId: `z-test-${crypto.randomUUID()}` });
+    const url = localWebhookUrl(record)!;
+    const started = Date.now();
+    const response = await hook(
+      id,
+      new Request(url, { method: "POST", headers: { "content-type": "application/json", ...signedHeaders(secret, body) }, body }),
+    );
+    const data = (await response.json().catch(() => ({}))) as {
+      reply?: string | null;
+      verdict?: ChannelTestResult["verdict"];
+      sources?: ChannelTestResult["sources"];
+      error?: string;
+      retryAfter?: number;
+    };
+    return {
+      status: response.status,
+      ms: Date.now() - started,
+      reply: data.reply ?? null,
+      verdict: data.verdict ?? null,
+      sources: data.sources ?? [],
+      error: response.ok ? null : (data.error ?? `HTTP ${response.status}`) + (data.retryAfter ? ` (retry in ${data.retryAfter} s)` : ""),
+    };
+  }
+
+  /** `ALL /hooks/:channelId` (some platforms verify with GET). */
+  async function hook(id: string, request: Request): Promise<Response> {
+    const record = store.channels.get(id);
+    const adapter = record?.enabled ? adapterFor(record.kind) : undefined;
+    if (!record || !adapter?.webhook) return Response.json({ error: "Unknown channel" }, { status: 404 });
+    try {
+      return await adapter.webhook(request, runtimeFor(record));
+    } catch (error) {
+      setStatus(id, "error", `Webhook failed: ${describeError(error)}`);
+      return Response.json({ error: "Webhook handler failed" }, { status: 500 });
+    }
   }
 
   async function stopConnection(id: string) {
@@ -309,18 +447,12 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       return true;
     },
 
-    /** `ALL /hooks/:channelId` (some platforms verify with GET). */
-    async hook(id: string, request: Request): Promise<Response> {
-      const record = store.channels.get(id);
-      const adapter = record?.enabled ? adapterFor(record.kind) : undefined;
-      if (!record || !adapter?.webhook) return Response.json({ error: "Unknown channel" }, { status: 404 });
-      try {
-        return await adapter.webhook(request, runtimeFor(record));
-      } catch (error) {
-        setStatus(id, "error", `Webhook failed: ${describeError(error)}`);
-        return Response.json({ error: "Webhook handler failed" }, { status: 500 });
-      }
-    },
+    hook,
+    /** Newest first; null when the channel doesn't exist. */
+    activity: (id: string) => (store.channels.get(id) ? store.channelActivity.list(id) : null),
+    setup: setupSteps,
+    test: testWebhook,
+
 
     stopAll: () => Promise.all([...connections.keys()].map(stopConnection)),
   };

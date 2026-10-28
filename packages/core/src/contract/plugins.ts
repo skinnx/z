@@ -17,8 +17,12 @@ export type PluginManifest = {
 export type AdapterManifest = {
   kind: ChannelKind;
   label: string;
-  /** Fields for ChannelInput.config, rendered as a form. A `toggle` field is on when its value is `on`. */
-  config: { key: string; label: string; secret: boolean; required: boolean; toggle?: boolean }[];
+  /**
+   * Fields for ChannelInput.config, rendered as a form. A `toggle` field is on when its value is `on`.
+   * `generate`: pre-fill a random secret on create. `legacy`: show only where it is already set.
+   */
+  config: { key: string; label: string; secret: boolean; required: boolean; toggle?: boolean; generate?: boolean; legacy?: boolean }[];
+
   /** Whether the platform calls us (needs Z_PUBLIC_URL) or we connect out. */
   mode: "webhook" | "connect";
 };

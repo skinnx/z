@@ -120,6 +120,9 @@ export function configRoutes({ rt, tasks, briefings, channels, setup }: Services
             secret: f.secret ?? false,
             required: f.required ?? false,
             ...(f.toggle ? { toggle: true } : {}),
+            ...(f.generate ? { generate: true } : {}),
+            ...(f.legacy ? { legacy: true } : {}),
+
           })),
           mode: a.webhook && !a.start ? "webhook" : "connect",
         }),

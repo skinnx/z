@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, sleep, truncate } from "../util.ts";
-import { config, pressed, requestSignal, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
+import { checked, config, pressed, requestSignal, shouldDispatch, step, untilAuthorized, withSources, type Action } from "./shared.ts";
 
 const API = "https://discord.com/api/v10";
 const GATEWAY = "wss://gateway.discord.gg";
@@ -186,6 +186,23 @@ async function checkToken(runtime: ChannelRuntime, signal: AbortSignal): Promise
   throw new Error(res.status === 401 ? `Discord rejected the bot token (${detail})` : `Discord GET /users/@me: ${res.status} ${detail}`);
 }
 
+async function discordGet<T>(runtime: ChannelRuntime, path: string): Promise<T> {
+  const res = await runtime.fetch(`${API}${path}`, {
+    headers: { authorization: `Bot ${config(runtime, "botToken")}` },
+    signal: requestSignal(),
+  });
+  if (!res.ok) {
+    const detail = ((await res.json().catch(() => ({}))) as { message?: string }).message ?? res.statusText;
+    throw new Error(res.status === 401 ? `Discord rejected the bot token (${detail})` : `Discord GET ${path}: ${res.status} ${detail}`);
+  }
+  return (await res.json()) as T;
+}
+
+/** Application flags: GATEWAY_MESSAGE_CONTENT (verified apps) or its _LIMITED form (under 100 servers). */
+const MESSAGE_CONTENT_FLAGS = (1 << 18) | (1 << 19);
+/** View Channels, Send Messages, Send Messages in Threads, Read Message History. */
+export const DISCORD_PERMISSIONS = String(1024 + 2048 + 65536 + 2 ** 38);
+
 type Session = { id: string; resumeUrl: string };
 type Closed = { code: number; reason: string; ready: boolean };
 
@@ -204,6 +221,28 @@ export const discordAdapter: ChannelAdapter = {
   },
   edit: async (runtime, threadId, ref, text) => {
     await postMessage(runtime, threadId, { content: truncate(text, 2000), allowed_mentions: { parse: [] }, components: [] }, ref);
+  },
+  setup: async (runtime) => {
+    const portal = "https://discord.com/developers/applications";
+    if (!config(runtime, "botToken")) return [step("discord.token", "Paste the bot token (Developer Portal → Bot → Reset Token)", "error", { link: portal })];
+    const app = await checked(() => discordGet<{ id: string; name: string; flags?: number; bot?: { username: string } }>(runtime, "/applications/@me"));
+    if (!app.ok) return [step("discord.token", "Bot token", "error", { detail: app.error, link: portal })];
+    const { id, name, flags = 0 } = app.value;
+    const appLink = `${portal}/${id}/bot`;
+    const guilds = await checked(() => discordGet<unknown[]>(runtime, "/users/@me/guilds?limit=200"));
+    return [
+      step("discord.token", "Bot token", "done", { detail: app.value.bot?.username ?? name }),
+      step("discord.intent", "Turn on Message Content Intent (Developer Portal → Bot)", flags & MESSAGE_CONTENT_FLAGS ? "done" : "todo", { link: appLink }),
+      step(
+        "discord.invite",
+        "Invite the bot to a server",
+        !guilds.ok ? "error" : guilds.value.length ? "done" : "todo",
+        {
+          value: `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot&permissions=${DISCORD_PERMISSIONS}`,
+          ...(guilds.ok ? (guilds.value.length ? { detail: `${guilds.value.length}` } : {}) : { detail: guilds.error }),
+        },
+      ),
+    ];
   },
   start: async (runtime) => {
     const token = config(runtime, "botToken");

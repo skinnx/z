@@ -1,4 +1,4 @@
-import { linkCode, type ChannelRuntime, type InboundMessage, type OutboundReply, type Source } from "@z/core";
+import { linkCode, type ChannelRuntime, type ChannelSetupStep, type InboundMessage, type OutboundReply, type Source } from "@z/core";
 import { backoff, errorMessage, sleep, truncate } from "../util.ts";
 
 /**
@@ -45,9 +45,28 @@ export async function imageDataUrl(runtime: ChannelRuntime, url: string, headers
   }
 }
 
-/** Unaddressed messages only matter when the channel answers everything, or to pair the owner (`/link <code>`). */
+/**
+ * Unaddressed messages only matter when the channel answers everything, or to pair the owner (`/link <code>`).
+ * The others are noted in the activity log as ignored (nothing of the message is kept).
+ */
 export function shouldDispatch(message: InboundMessage, runtime: ChannelRuntime): boolean {
-  return message.addressed || runtime.channel.always || linkCode(message.text) !== null;
+  const go = message.addressed || runtime.channel.always || linkCode(message.text) !== null;
+  if (!go) runtime.note?.("ignored", "Not addressed to the bot");
+  return go;
+}
+
+/** A setup step: what the adapter checked on the platform (see ChannelAdapter.setup). */
+export function step(id: string, label: string, status: ChannelSetupStep["status"], extra: Omit<ChannelSetupStep, "id" | "label" | "status"> = {}): ChannelSetupStep {
+  return { id, label, status, ...extra };
+}
+
+/** Run a setup check; a platform error becomes the step's detail instead of failing the checklist. */
+export async function checked<T>(check: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await check() };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
 }
 
 export type Action = { id: string; label: string; style?: "primary" | "danger" };

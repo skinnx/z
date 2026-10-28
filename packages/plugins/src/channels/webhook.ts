@@ -1,7 +1,7 @@
 import { RateLimitedError, type ChannelAdapter, type ChannelRuntime, type InboundMessage } from "@z/core";
 import { z } from "zod";
 import { errorMessage, hmacSha256Hex, safeEqual } from "../util.ts";
-import { config, pressed, requestSignal } from "./shared.ts";
+import { config, pressed, requestSignal, step } from "./shared.ts";
 
 /** Public http(s) image URLs; the server downloads them for the model. */
 const Images = z.array(z.url({ protocol: /^https?$/ })).max(4).optional();
@@ -120,9 +120,20 @@ export const webhookAdapter: ChannelAdapter = {
   kind: "webhook",
   label: "Webhook (JSON)",
   config: [
-    { key: "secret", label: "Signing secret (HMAC-SHA256, see README)", secret: true, required: true },
+    { key: "secret", label: "Signing secret (HMAC-SHA256)", secret: true, required: true, generate: true },
     { key: "notifyUrl", label: "Notify URL (optional): receives signed owner notices as JSON POSTs" },
-    { key: "legacySecret", label: "Legacy mode: also accept the bare secret in X-Z-Secret, unsigned", toggle: true },
+    { key: "legacySecret", label: "Legacy mode: also accept the bare secret in X-Z-Secret, unsigned", toggle: true, legacy: true },
+  ],
+  setup: async (runtime, hookUrl) => [
+    step("webhook.secret", "Keep the signing secret in your integration", config(runtime, "secret") ? "done" : "error"),
+    step("webhook.url", runtime.webhookUrl ? "POST signed JSON to this URL" : "POST signed JSON to this URL (this machine only)", runtime.webhookUrl ? "done" : "info", {
+      value: hookUrl,
+      ...(runtime.webhookUrl ? {} : { detail: "Set Z_PUBLIC_URL for a URL other machines can reach" }),
+    }),
+    step("webhook.notify", "Notify URL for owner notices (optional)", config(runtime, "notifyUrl") ? "done" : "info"),
+    ...(config(runtime, "legacySecret") === "on"
+      ? [step("webhook.legacy", "Sign requests, then turn off legacy mode", "todo")]
+      : []),
   ],
   // `id` names the notice message (the same on every retry, and the X-Z-Delivery); a later
   // `notice.update` with the same `id` replaces its text and removes its actions.
@@ -144,7 +155,10 @@ export const webhookAdapter: ChannelAdapter = {
     const text = await request.text();
     if (Buffer.byteLength(text) > MAX_BODY_BYTES) return Response.json({ error: "Body too large" }, { status: 413 });
     const verified = verify(request.headers, text, secret, config(runtime, "legacySecret") === "on");
-    if (!verified.ok) return Response.json({ error: verified.error }, { status: 401 });
+    if (!verified.ok) {
+      runtime.note?.("rejected", verified.error);
+      return Response.json({ error: verified.error }, { status: 401 });
+    }
 
     let action: z.output<typeof WebhookAction> | null;
     let body: z.output<typeof WebhookBody> | null = null;

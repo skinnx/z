@@ -22,6 +22,7 @@ import type {
   BriefSourceItem,
   ChannelInput,
   ChannelKind,
+  ChannelSetupStep,
   InboundMessage,
   OutboundReply,
   Risk,
@@ -29,7 +30,18 @@ import type {
 
 /** `toggle`: an on/off switch in the channel form, stored as `on` (adapter config only). */
 /** `multiline`: a list, one entry per line (rendered as a text area). */
-export type SettingField = { key: string; label: string; secret?: boolean; required?: boolean; toggle?: boolean; multiline?: boolean };
+/** `generate`: the channel form pre-fills a new random secret (32 bytes, hex) and offers it to copy once. */
+/** `legacy`: only shown on a channel where it is already set (a compatibility switch, not for new setups). */
+export type SettingField = {
+  key: string;
+  label: string;
+  secret?: boolean;
+  required?: boolean;
+  toggle?: boolean;
+  multiline?: boolean;
+  generate?: boolean;
+  legacy?: boolean;
+};
 
 export type ToolContext = {
   /** This plugin's settings, already decrypted. */
@@ -108,6 +120,12 @@ export type ChannelRuntime = {
   };
   /** Report health to the UI. */
   status: (status: "ok" | "error" | "idle", detail?: string) => void;
+  /**
+   * Activity log for an inbound event that never reaches `dispatch`: `ignored` (not addressed to the
+   * bot; nothing of the message is kept) or `rejected` (refused before reading: bad signature or secret).
+   * Messages passed to `dispatch` are logged by the server.
+   */
+  note?: (outcome: "ignored" | "rejected", detail?: string) => void;
   log: (text: string) => void;
   fetch: typeof fetch;
 };
@@ -136,6 +154,12 @@ export type ChannelAdapter = {
    * offered when the complete approval preview fits. Omit when the platform has no practical limit.
    */
   noticeLimit?: number;
+  /**
+   * The platform's next steps after saving, checked live (token valid, bot name, scopes, webhook
+   * registered). `hookUrl` is the public hook URL, or the local one when Z_PUBLIC_URL is unset.
+   * Should finish within a few seconds and never throw for a platform error (report it as a step).
+   */
+  setup?: (runtime: ChannelRuntime, hookUrl: string) => Promise<ChannelSetupStep[]>;
   /** Start a long-lived connection (polling, gateway). Returns a stop function. */
   start?: (runtime: ChannelRuntime) => Promise<() => void | Promise<void>>;
 };

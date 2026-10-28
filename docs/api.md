@@ -117,6 +117,9 @@ A chat message or task whose text starts with `/<name>` runs with that skill. `t
 | `GET /api/channels` | | `ChannelView[]` |
 | `PUT /api/channels/:id` | `ChannelInput` | `ChannelView`; `config` keys merge (empty string removes one); omitted `limits` keep the stored ones |
 | `DELETE /api/channels/:id` | | `{ ok: true }` |
+| `GET /api/channels/:id/activity` | | `ChannelActivity[]`, newest first: the last 20 inbound events with their outcome (`answered`, `silent`, `ignored`, `limited`, `error`, `rejected`), a 120-character preview of the message and reply (none for ignored or rejected ones), verdict and time taken. Repeated ignored or rejected events fold into one entry with a `count`. Stored sealed, deleted with the channel |
+| `GET /api/channels/:id/setup` | | `ChannelSetupStep[]`: the platform's next steps, checked live (token, bot name, scopes, webhook registration), ending with whether a first message arrived |
+| `POST /api/channels/:id/test` | `{ text }` | `ChannelTestResult` `{ status, ms, reply, verdict, sources, error }`: webhook channels only; z signs the message with the channel's secret and runs it through `/hooks/:id`, so it counts against the channel's limits like any caller |
 | `POST /hooks/:channelId` | adapter-defined | adapter-defined; for `webhook` channels see [security](security.md#webhook-signing) and the [README](../README.md#webhooks) |
 
 ### Connectors
@@ -171,7 +174,7 @@ data:
 ```
 
 - One `ready` event when the stream opens.
-- Unnamed (`message`) events whose `data` is one `LiveEvent`: `{ type: "task", task }`, `{ type: "approval", approval }`, `{ type: "briefing", briefing }`, `{ type: "channel", channel }`, `{ type: "notice", notice }` or `{ type: "connector", connector }`. Each carries the whole object after the change.
+- Unnamed (`message`) events whose `data` is one `LiveEvent`: `{ type: "task", task }`, `{ type: "approval", approval }`, `{ type: "briefing", briefing }`, `{ type: "channel", channel }`, `{ type: "channelActivity", channelId }` (refetch that channel's activity), `{ type: "notice", notice }` or `{ type: "connector", connector }`. Each carries the whole object after the change.
 - A `ping` event after 15 seconds without events, to keep proxies from closing the stream.
 
 There is no replay: events sent while you were disconnected are gone, so re-read the lists you care about after reconnecting.

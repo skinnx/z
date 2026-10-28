@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, safeEqual, sha256Hex, sleep, truncate } from "../util.ts";
-import { config, imageDataUrl, pressed, requestSignal, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
+import { checked, config, imageDataUrl, pressed, requestSignal, shouldDispatch, step, untilAuthorized, withSources, type Action } from "./shared.ts";
 
 type TgUser = { id: number; is_bot: boolean; first_name: string; last_name?: string; username?: string };
 type TgEntity = { type: string; offset: number; length: number; user?: TgUser };
@@ -25,6 +25,7 @@ export type TgMessage = {
 export type TgCallbackQuery = { id: string; from: TgUser; message?: TgMessage; data?: string };
 export type TgUpdate = { update_id: number; message?: TgMessage; callback_query?: TgCallbackQuery };
 export type TgBot = { id: number; username: string };
+type TgMe = TgBot & { can_join_groups?: boolean; can_read_all_group_messages?: boolean };
 
 function displayName(user: TgUser | undefined): string {
   if (!user) return "unknown";
@@ -307,6 +308,7 @@ export const telegramAdapter: ChannelAdapter = {
   webhook: async (request, runtime) => {
     if (!config(runtime, "botToken")) return new Response("Not configured", { status: 503 });
     if (!safeEqual(request.headers.get("x-telegram-bot-api-secret-token") ?? "", webhookSecret(runtime))) {
+      runtime.note?.("rejected", "Wrong X-Telegram-Bot-Api-Secret-Token");
       return new Response("Forbidden", { status: 401 });
     }
     const update = (await request.json().catch(() => null)) as TgUpdate | null;
@@ -314,6 +316,35 @@ export const telegramAdapter: ChannelAdapter = {
     // Answer immediately: Telegram redelivers on slow or failed responses.
     processInBackground(runtime, update);
     return new Response("ok");
+  },
+  setup: async (runtime, hookUrl) => {
+    if (!config(runtime, "botToken")) return [step("telegram.token", "Paste the bot token from @BotFather", "error", { link: "https://t.me/BotFather" })];
+    const me = await checked(() => call<TgMe>(runtime, "getMe", {}));
+    if (!me.ok) return [step("telegram.token", "Bot token", "error", { detail: me.error, link: "https://t.me/BotFather" })];
+    const bot = me.value;
+    const steps = [step("telegram.token", "Bot token", "done", { detail: `@${bot.username}`, link: `https://t.me/${bot.username}` })];
+    if (runtime.webhookUrl) {
+      const info = await checked(() => call<{ url: string; last_error_message?: string; pending_update_count?: number }>(runtime, "getWebhookInfo", {}));
+      const set = info.ok && info.value.url === runtime.webhookUrl;
+      steps.push(
+        step("telegram.webhook", "Telegram calls z at its webhook", !info.ok || info.value.last_error_message ? "error" : set ? "done" : "todo", {
+          value: hookUrl,
+          ...(info.ok ? (info.value.last_error_message ? { detail: info.value.last_error_message } : {}) : { detail: info.error }),
+        }),
+      );
+    } else {
+      steps.push(step("telegram.polling", "z fetches messages itself (long polling): no public URL needed", "done"));
+    }
+    steps.push(
+      runtime.channel.always && !bot.can_read_all_group_messages
+        ? step("telegram.privacy", "Turn off privacy mode so the bot sees every group message (@BotFather → /setprivacy → Disable)", "todo", {
+            link: "https://t.me/BotFather",
+          })
+        : step("telegram.groups", `Add @${bot.username} to a group and mention it, or message it directly`, "info", {
+            link: `https://t.me/${bot.username}?startgroup=true`,
+          }),
+    );
+    return steps;
   },
   start: async (runtime) => {
     const controller = new AbortController();
