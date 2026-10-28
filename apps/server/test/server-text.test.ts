@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { collectBriefItems, english, MAX_CONSECUTIVE_FAILURES, type Notice, type ServerText } from "@z/core";
 import { createBriefings } from "../src/briefings.ts";
-import { notify } from "../src/notify.ts";
+import { approvalBodyMsg, approvalComplete, channelMessage, notify, pushPayload } from "../src/notify.ts";
 import { loginVault } from "../src/plugins.ts";
 import { memoryNotice } from "../src/plugins/memory.ts";
 import { boot, cleanup, scriptedModel, statusOf, tempDir, testPlugin, until } from "./harness.ts";
@@ -63,17 +63,42 @@ test("server text: review, failed and question notices carry keys and the task t
   assert.deepEqual(question.body, { key: "noticeQuestionBody", params: { question: "Which channel?" } }, "button choices are not repeated in the body");
 });
 
-test("server text: approval notices word the title and the 'Asking because' prefix, never the preview", async () => {
+test("server text: approval notices name the task and say the action in plain words, never the tool id or JSON", async () => {
   const z = setup();
   z.store.settings.set({ ...z.store.settings.get(), approvals: { test_send: "ask" } });
   z.model.push({ call: "test_send", input: { to: "ana" } });
   const task = z.tasks.create(oneShot);
   await until(() => statusOf(z.store, task.id) === "waiting", "waiting");
+  const notice = latest(z, (x) => x.kind === "approval")!;
+  const n = keys(notice);
   const approval = z.store.approvals.forTask(task.id)[0]!;
-  const n = keys(latest(z, (x) => x.kind === "approval"));
   assert.deepEqual(n.title, { key: "noticeApproval", params: { title: task.title } });
-  assert.equal(n.body?.key, "noticeApprovalBody");
-  assert.equal((n.body?.params as { preview: string }).preview, approval.preview.fullText);
+  const reason = approval.reason ? { reason: approval.reason } : {};
+  assert.deepEqual(n.body, { key: "noticeApprovalBody", params: { ...reason, action: "Send a message to ana", details: "To: ana" } });
+  assert.ok(!notice.body.includes("test_send") && !notice.body.includes("{"), notice.body);
+  assert.ok(approvalComplete(approval));
+  assert.equal(pushPayload(notice, true).approvalId, approval.id);
+});
+
+test("server text: a tool with no summary or structured input gets a plain line and no Approve button outside the app", () => {
+  const approval = {
+    tool: "acme__create_record",
+    summary: 'acme__create_record({"fields":{"a":1}})',
+    reason: null,
+    preview: { kind: "change" as const, fields: [{ label: "Name", value: "Q3" }, { label: "Fields", value: '{\n  "a": 1\n}' }], fullText: "" },
+  };
+  const body = approvalBodyMsg(approval);
+  assert.deepEqual(body, {
+    key: "noticeApprovalBody",
+    params: { action: { key: "approvalUseTool", params: { tool: "Create record" } }, details: "Name: Q3", more: { key: "approvalMore" } },
+  });
+  const text = english(body);
+  assert.ok(!text.includes("acme__") && !text.includes("{"), text);
+  assert.equal(approvalComplete(approval), false);
+  const notice: Notice = { id: "n", kind: "approval", title: "Approval needed · Q3", body: text, path: "/", approvalId: "a", read: false, createdAt: "" };
+  const push = pushPayload(notice, false);
+  assert.equal(push.truncated, true, "the device opens z instead of approving");
+  assert.equal(channelMessage(notice, "", 4000, false).actions, undefined, "no Approve / Deny buttons on the channel");
 });
 
 test("server text: recurring done, failing and paused notices carry keys; paused has its failure count", async () => {

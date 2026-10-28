@@ -136,7 +136,9 @@ export const vi: DictOf<typeof en> = {
   cnRetrying: (p) => `${p.detail} · thử lại sau ${p.seconds} giây`,
 
   noticeApproval: (p) => `Cần duyệt · ${p.title}`,
-  noticeApprovalBody: (p) => [p.reason ? `Hỏi vì ${p.reason}` : "", p.preview].filter(Boolean).join("\n\n"),
+  noticeApprovalBody: (p) => [p.reason ? `Hỏi vì ${p.reason}` : "", p.action, p.details ?? "", p.more ?? ""].filter(Boolean).join("\n\n"),
+  approvalUseTool: (p) => `Dùng ${p.tool}`,
+  approvalMore: "Còn chi tiết khác trong z: hãy mở để xem.",
   noticeQuestion: (p) => `Câu hỏi · ${p.title}`,
   noticeQuestionBody: (p) => `${p.question}${p.choices?.length ? `\nLựa chọn: ${p.choices.join(" / ")}` : ""}`,
   noticeDone: (p) => `Xong · ${p.title}`,

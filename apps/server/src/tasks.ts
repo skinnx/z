@@ -14,6 +14,7 @@ import {
   runTask,
   runWatch,
   english,
+  NoModelConfiguredError,
   say,
   withAnswer,
   withApprovalResponses,
@@ -33,6 +34,7 @@ import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
 
 const CONCURRENCY = 2;
+const NO_MODEL = new NoModelConfiguredError().message;
 
 /** A request that conflicts with the task's state (409); `msg` lets the app word it. */
 export class ConflictError extends Error {
@@ -209,7 +211,10 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
    * `quiet` (no_update, or a watch) suppresses the completion notice, and so does a result that repeats
    * the last successful run's (whitespace-normalized hash), unless this run ends a failure streak.
    */
-  function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed", quiet = false) {
+  function finish(task: Task, given: { result?: string; error: string | null; errorMsg?: ServerText }, status: "done" | "failed", quiet = false) {
+    // z's own "no model" error (core words it in English, also inside a failed run) gets its message key.
+    const patch = given.error === NO_MODEL ? { ...given, errorMsg: say("errNoModel") } : given;
+    const errorText = (max: number) => (patch.errorMsg ? patch.errorMsg : clip(patch.error || "", max));
     const path = `/tasks?task=${task.id}`;
     if (task.schedule) {
       if (status === "done") {
@@ -231,13 +236,13 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
           kind: "task",
           status: "paused",
           title: say("noticePaused", { title: titleOf(task) }),
-          body: say("noticePausedBody", { failures, error: patch.error ? clip(patch.error, 300) : say("unknown") }),
+          body: say("noticePausedBody", { failures, error: patch.errorMsg ?? (patch.error ? clip(patch.error, 300) : say("unknown")) }),
           path,
         });
         return;
       }
       update(task.id, { ...patch, status: "scheduled", failures, nextRunAt: nextRun(task.schedule) });
-      if (failures === 1) notify({ kind: "task", status: "failed", title: say("noticeFailing", { title: titleOf(task) }), body: clip(patch.error || "", 300), path });
+      if (failures === 1) notify({ kind: "task", status: "failed", title: say("noticeFailing", { title: titleOf(task) }), body: errorText(300), path });
       return;
     }
     update(task.id, { ...patch, status: status === "done" ? "review" : "failed", nextRunAt: null });
@@ -246,7 +251,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
       kind: "task",
       status: status === "done" ? "review" : "failed",
       title: say(status === "done" ? "noticeReview" : "noticeFailed", { title: titleOf(task) }),
-      body: clip((status === "done" ? patch.result : patch.error) || "", 300),
+      body: status === "done" ? clip(patch.result || "", 300) : errorText(300),
       path,
     });
   }

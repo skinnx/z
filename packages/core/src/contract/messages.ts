@@ -137,7 +137,11 @@ export const serverEn = {
 
   // ─── Notices (Notice.titleMsg / bodyMsg) ───
   noticeApproval: (p: { title: string }) => `Approval needed · ${p.title}`,
-  noticeApprovalBody: (p: { reason?: string; preview: string }) => [p.reason ? `Asking because ${p.reason}` : "", p.preview].filter(Boolean).join("\n\n"),
+  /** `action`: the tool's one-line summary; `details`: the preview's plain fields; `more`: set when some were left for the app. */
+  noticeApprovalBody: (p: { reason?: string; action: string; details?: string; more?: string }) =>
+    [p.reason ? `Asking because ${p.reason}` : "", p.action, p.details ?? "", p.more ?? ""].filter(Boolean).join("\n\n"),
+  approvalUseTool: (p: { tool: string }) => `Use ${p.tool}`,
+  approvalMore: "More details in z: open it to review them.",
   noticeQuestion: (p: { title: string }) => `Question · ${p.title}`,
   noticeQuestionBody: (p: { question: string; choices?: string[] }) => `${p.question}${p.choices?.length ? `\nChoices: ${p.choices.join(" / ")}` : ""}`,
   noticeDone: (p: { title: string }) => `Done · ${p.title}`,

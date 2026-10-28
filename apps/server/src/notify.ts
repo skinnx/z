@@ -135,35 +135,71 @@ export function settleQuestion(taskId: string, answer: string | null) {
 }
 
 /** An approval notice's body: why it asks, then the whole preview. */
-export function approvalBody(approval: Pick<Approval, "reason" | "preview">): string {
+export function approvalBody(approval: ApprovalText): string {
   return english(approvalBodyMsg(approval));
 }
 
-/** The same as a message key: "Asking because" is worded by the app; the reason and preview stay as written. */
-export function approvalBodyMsg(approval: Pick<Approval, "reason" | "preview">): ServerText {
-  return say("noticeApprovalBody", { ...(approval.reason ? { reason: approval.reason } : {}), preview: approval.preview.fullText });
+type ApprovalText = Pick<Approval, "tool" | "summary" | "reason" | "preview">;
+
+/** A summary or value that is raw tool input (`tool({...})`, JSON) rather than words a person reads. */
+const isRaw = (approval: ApprovalText) => approval.summary.startsWith(`${approval.tool}(`);
+const RAW_VALUE = /^\s*[[{]/;
+
+/** `gmail_send_email` → "Gmail send email" (connector tools: the part after `__`). */
+const toolName = (tool: string) => {
+  const words = (tool.split("__").pop() ?? tool).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : tool;
+};
+
+/**
+ * Whether the plain-language notice shows the whole action. When the tool has no summary of its own or
+ * an argument is structured data, the notice leaves the raw part to the app, and push and channels
+ * offer no Approve button for it (approve only what you can see).
+ */
+export function approvalComplete(approval: ApprovalText): boolean {
+  return !isRaw(approval) && !approval.preview.fields.some((f) => RAW_VALUE.test(f.value));
+}
+
+/**
+ * The approval notice's body: why it asks, what it will do in a line, then the preview's plain fields.
+ * Never the tool id or JSON input: those stay in the app's approval card.
+ */
+export function approvalBodyMsg(approval: ApprovalText): ServerText {
+  const plain = approval.preview.fields.filter((f) => !RAW_VALUE.test(f.value));
+  const block = (f: { label: string; value: string }) => f.label === "Body" || f.value.includes("\n") || f.value.length > 80;
+  const lines = plain.filter((f) => !block(f)).map((f) => `${f.label}: ${f.value}`);
+  const blocks = plain.filter(block).map((f) => (f.label === "Body" ? f.value : `${f.label}:\n${f.value}`));
+  const details = [lines.join("\n"), ...blocks].filter((s) => s.trim()).join("\n\n");
+  return say("noticeApprovalBody", {
+    ...(approval.reason ? { reason: approval.reason } : {}),
+    action: isRaw(approval) ? say("approvalUseTool", { tool: toolName(approval.tool) }) : approval.summary,
+    ...(details ? { details } : {}),
+    ...(approvalComplete(approval) ? {} : { more: say("approvalMore") }),
+  });
 }
 
 /**
  * The push payload: Approve / Deny only when the complete body fits; otherwise marked truncated.
  * A question with one or two short choices carries them, when the whole question fits.
  */
-export function pushPayload({ id, kind, title, body, path, approvalId, question }: Notice): PushPayload {
+export function pushPayload({ id, kind, title, body, path, approvalId, question }: Notice, complete = true): PushPayload {
   if (question && !question.answer && buttonable(question.choices, MAX_PUSH_CHOICES) && previewFits(body, PUSH_BODY_MAX)) {
     return { id, kind, title, body, path, question: { taskId: question.taskId, choices: question.choices } };
   }
   if (!approvalId) return { id, kind, title, body: clip(body, PUSH_BODY_MAX), path };
+  if (!complete) return { id, kind, title, body: clip(body, PUSH_BODY_MAX), path, approvalId, truncated: true };
   if (previewFits(body, PUSH_BODY_MAX)) return { id, kind, title, body, path, approvalId };
   return { id, kind, title, body: `${clip(body, PUSH_BODY_MAX - OPEN_TO_REVIEW.length - 2)}\n\n${OPEN_TO_REVIEW}`, path, approvalId, truncated: true };
 }
 
 /** The owner-channel message: buttons only when title, complete body and link fit `limit`. */
-export function channelMessage({ title, body, approvalId, question }: Notice, link: string, limit: number): Parameters<Channels["send"]>[2] {
+export function channelMessage({ title, body, approvalId, question }: Notice, link: string, limit: number, complete = true): Parameters<Channels["send"]>[2] {
   const text = `${title}\n${body}${link}`;
   if (question && !question.answer && buttonable(question.choices) && previewFits(text, limit)) {
     return { text, actions: question.choices.map((label, i) => ({ id: `answer:${question.taskId}:${i}`, label })) };
   }
   if (!approvalId) return { text };
+  if (!complete) return { text };
   if (previewFits(text, limit)) {
     return {
       text,
@@ -187,6 +223,11 @@ export function createOutbox(rt: Pick<Runtime, "store" | "env">, { push, channel
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
 
+  /** Whether an approval notice shows the whole action (see approvalComplete); other notices always do. */
+  const complete = (notice: Notice) => {
+    const approval = notice.approvalId ? store.approvals.get(notice.approvalId) : null;
+    return !approval || approvalComplete(approval);
+  };
   const linkFor = (notice: Notice) => (rt.env.publicUrl ? `\n${rt.env.publicUrl}${notice.path}` : "");
   const label = (d: DeliveryRecord, notice: Notice | null) =>
     `${notice?.kind ?? "?"} notice ${d.noticeId.slice(0, 8)} → ${d.target === "push" ? `push ${hostOf(d.address)}` : `channel ${d.address}`}`;
@@ -213,11 +254,11 @@ export function createOutbox(rt: Pick<Runtime, "store" | "env">, { push, channel
     try {
       let ref: string | null = null;
       if (d.target === "push") {
-        if ((await push.deliver(d.address, pushPayload(notice))) === "gone") {
+        if ((await push.deliver(d.address, pushPayload(notice, complete(notice)))) === "gone") {
           return store.outbox.update(d.id, { status: "dropped", attempts, nextAttemptAt: null, lastError: "device unsubscribed" }, iso(now()));
         }
       } else {
-        const message = channelMessage(notice, linkFor(notice), channels.noticeLimit(d.address));
+        const message = channelMessage(notice, linkFor(notice), channels.noticeLimit(d.address), complete(notice));
         ref = await channels.send(d.address, d.threadId ?? "", { ...message, id: d.id });
       }
       store.outbox.update(d.id, { status: "sent", attempts, nextAttemptAt: null, lastError: null, ref }, iso(now()));
