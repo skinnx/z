@@ -1,17 +1,19 @@
 import type { BriefItem, Briefing, Task } from "@z/core";
 import { ArrowUpRight, Brain, Check, CircleAlert, Hand, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { usePendingApprovals } from "../api/approvals.ts";
 import { useBriefing, useGenerateBriefing } from "../api/briefing.ts";
 import { useMemories } from "../api/memories.ts";
 import { useMarkRead, useNotices } from "../api/notices.ts";
 import { useProviders } from "../api/providers.ts";
 import { useSettings } from "../api/settings.ts";
+import { useSetup } from "../api/setup.ts";
 import { useCreateTask, useTasks } from "../api/tasks.ts";
 import { ApprovalCard } from "../components/approval-card.tsx";
 import { Source } from "../components/ai-elements/sources.tsx";
 import { Composer } from "../components/composer.tsx";
+import { SetupChecklistView } from "../components/setup-checklist.tsx";
 import { TaskQuestion } from "../components/task-question.tsx";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
@@ -25,7 +27,8 @@ import { Dialog } from "../ui/dialog.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 
-const FIRST_RUN_KEY = "z.first-run-redirected";
+/** Set when the owner chose to continue past the first-run checklist, for this tab session. */
+const FIRST_RUN_KEY = "z.first-run-skipped";
 /** BriefItem source of tasks the briefing proposes (core `PROPOSED_SOURCE`). */
 const PROPOSED_SOURCE = "proposed";
 
@@ -33,6 +36,8 @@ export default function Today() {
   const t = useT();
   const approvals = usePendingApprovals();
   const providers = useProviders();
+  const setup = useSetup();
+  const [skipSetup, setSkipSetup] = useState(() => Boolean(sessionStorage.getItem(FIRST_RUN_KEY)));
   const [params, setParams] = useSearchParams();
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -43,10 +48,28 @@ export default function Today() {
     }
   }, [params, setParams]);
 
-  // First run: without a provider nothing works, so the models screen comes first (once).
-  if (providers.data && providers.data.length === 0 && !sessionStorage.getItem(FIRST_RUN_KEY)) {
-    sessionStorage.setItem(FIRST_RUN_KEY, "1");
-    return <Navigate to="/models" replace />;
+  // First run: until a chat model has actually answered, nothing works, so the checklist is the screen.
+  const chat = setup.data?.rows.find((r) => r.id === "chat_model");
+  if (chat && chat.state !== "ready" && !skipSetup) {
+    return (
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6 md:px-8 md:py-10">
+        <h1 className="sr-only">{t.nav_today}</h1>
+        <SetupChecklistView autoCheck />
+        <p className="text-sm text-fg-muted">{t.setupFirstRun}</p>
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              sessionStorage.setItem(FIRST_RUN_KEY, "1");
+              setSkipSetup(true);
+            }}
+          >
+            {t.continueAnyway}
+          </Button>
+        </div>
+      </div>
+    );
   }
   const noProviders = providers.data?.length === 0;
   const pending = approvals.data ?? [];

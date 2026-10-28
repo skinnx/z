@@ -16,10 +16,12 @@ import { NotificationsPanel } from "./panels/notifications.tsx";
 import { PersonalizationPanel } from "./panels/personalization.tsx";
 import { ReachPanel } from "./panels/reach.tsx";
 import { SecurityPanel } from "./panels/security.tsx";
+import { SetupPanel } from "./panels/setup.tsx";
 import { SourcesPanel } from "./panels/sources.tsx";
 import { SECTIONS, sectionIcon, sectionLabel, useSettingsRoute, type SectionId } from "./route.ts";
 
 const panels: Record<SectionId, ComponentType> = {
+  setup: SetupPanel,
   general: GeneralPanel,
   personalization: PersonalizationPanel,
   notifications: NotificationsPanel,
@@ -38,7 +40,7 @@ export default function SettingsBody({ phone, titleId }: { phone: boolean; title
   const [selected, setSelected] = useState<SectionId | null>(route.section);
   useEffect(() => setSelected(route.section), [route.section]);
   const drilled = !phone || selected !== null;
-  const active: SectionId = selected ?? "general";
+  const active: SectionId = selected ?? SECTIONS[0];
   const root = useRef<HTMLDivElement>(null);
   const last = useRef<SectionId | null>(null);
 

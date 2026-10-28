@@ -1,7 +1,8 @@
 /** Take everything with you, or wipe chats and memories. */
-import { Download, Trash2 } from "lucide-react";
+import { ClipboardCopy, Download, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useExportData } from "../../api/data.ts";
+import { useCopyDiagnostics, useDownloadDiagnostics } from "../../api/setup.ts";
 import { useDeleteAllThreads, useThreads } from "../../api/threads.ts";
 import { useT } from "../../i18n.ts";
 import { Confirm } from "../../ui/alert-dialog.tsx";
@@ -16,6 +17,7 @@ export function DataPanel() {
     <>
       <RowGroup>
         <ExportRow />
+        <DiagnosticsRow />
       </RowGroup>
       <RowGroup>
         <DeleteChatsRow />
@@ -55,6 +57,34 @@ function ExportRow() {
           {busy ? <Spinner /> : <Download aria-hidden />}
           {busy ? t.exporting : t.export}
         </Button>
+      )}
+    </Row>
+  );
+}
+
+/** For asking for help: what runs, what's set up, recent server logs. Redacted on the server. */
+function DiagnosticsRow() {
+  const t = useT();
+  const copy = useCopyDiagnostics();
+  const download = useDownloadDiagnostics();
+  return (
+    <Row label={t.diagnostics} hint={t.diagnosticsHint}>
+      {({ labelId }) => (
+        <>
+          <Button
+            size="sm"
+            aria-describedby={labelId}
+            disabled={copy.isPending}
+            onClick={() => copy.mutate(undefined, { onSuccess: () => notify("success", t.diagnosticsCopied), onError: notifyError })}
+          >
+            {copy.isPending ? <Spinner /> : <ClipboardCopy aria-hidden />}
+            {t.copyDiagnostics}
+          </Button>
+          <Button size="sm" variant="ghost" aria-describedby={labelId} disabled={download.isPending} onClick={() => download.mutate(undefined, { onError: notifyError })}>
+            {download.isPending ? <Spinner /> : <Download aria-hidden />}
+            {t.download}
+          </Button>
+        </>
       )}
     </Row>
   );
