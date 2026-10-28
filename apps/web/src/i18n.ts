@@ -320,6 +320,7 @@ const en = {
   addedAt: (when: string) => `Added ${when}`,
   // connectors (MCP data sources)
   nav_connect: "Sources",
+  connectorIdHint: (id: string) => `Tools show up to z as mcp_${id}_…`,
   connectSource: "Connect a source",
   group_connectors: "Sources",
   connectedSources: "Connected",
@@ -688,6 +689,7 @@ const vi: Dict = {
   testSent: (n) => `Đã gửi tới ${n} thiết bị`,
   addedAt: (when) => `Thêm ${when}`,
   nav_connect: "Nguồn dữ liệu",
+  connectorIdHint: (id) => `z thấy các công cụ dưới tên mcp_${id}_…`,
   connectSource: "Kết nối một nguồn",
   group_connectors: "Nguồn dữ liệu",
   connectedSources: "Đã kết nối",

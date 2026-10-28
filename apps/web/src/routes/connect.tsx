@@ -49,7 +49,7 @@ export default function Connect() {
   useEffect(() => {
     const id = params.get("connector") ?? params.get("open");
     const error = params.get("error");
-    if (!id && !error) return;
+    if ((!id && !error) || connectors.isPending) return;
     const key = params.toString();
     if (handled.current === key) return;
     handled.current = key;
@@ -64,17 +64,19 @@ export default function Connect() {
   }, [params, setParams, connectors, refresh, t]);
 
   const list = connectors.data ?? [];
-  const failed = (connectors.error && !connectors.data && connectors) || (presets.error && !presets.data && presets);
+  // The open dialog follows live updates (status after sign-in, refreshed tools).
+  const live = editing?.connector ? (list.find((c) => c.id === editing.connector?.id) ?? editing.connector) : null;
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8 md:py-10">
       <h1 className="sr-only">{t.nav_connect}</h1>
       {presets.isPending || connectors.isPending ? (
         <Loading label={t.loading} className="h-64" />
-      ) : failed && failed.error ? (
-        <LoadError error={failed.error} onRetry={() => void failed.refetch()} retryLabel={t.retry} />
+      ) : connectors.error && !connectors.data ? (
+        <LoadError error={connectors.error} onRetry={() => void connectors.refetch()} retryLabel={t.retry} />
       ) : (
         <>
+          {presets.error && !presets.data && <LoadError error={presets.error} onRetry={() => void presets.refetch()} retryLabel={t.retry} />}
           <Gallery presets={presets.data ?? []} connectors={list} onPick={(preset) => setEditing({ preset, connector: null })} />
           {list.length > 0 && (
             <Section label={t.connectedSources} icon={<Cable aria-hidden />}>
@@ -101,17 +103,17 @@ export default function Connect() {
           title={
             editing && (
               <>
-                <Monogram text={editing.connector?.label ?? editing.preset?.label ?? "+"} className="size-7 rounded-lg text-[0.6875rem] normal-case" />
-                <span className="truncate">{editing.connector?.label ?? editing.preset?.label ?? t.customServer}</span>
+                <Monogram text={editing.connector?.label ?? (editing.preset?.url ? editing.preset.label : "+")} className="size-7 rounded-lg text-[0.6875rem] normal-case" />
+                <span className="truncate">{editing.connector?.label ?? (editing.preset?.url ? editing.preset.label : t.customServer)}</span>
               </>
             )
           }
         >
           {editing && (
             <ConnectorForm
-              key={editing.connector?.id ?? editing.preset?.id ?? "custom"}
+              key={editing.connector ? `edit:${editing.connector.id}` : `new:${editing.preset?.id ?? "custom"}`}
               preset={editing.preset}
-              connector={editing.connector}
+              connector={live}
               onSaved={(c) => setEditing((e) => (e ? { ...e, connector: c } : e))}
               onDone={() => setEditing(null)}
             />
@@ -126,7 +128,9 @@ export default function Connect() {
 function Gallery({ presets, connectors, onPick }: { presets: ConnectorPreset[]; connectors: ConnectorView[]; onPick: (p: ConnectorPreset | null) => void }) {
   const t = useT();
   const hosts = useMemo(() => new Set(connectors.map((c) => urlHost(c.urlDisplay))), [connectors]);
-  const groups = CATEGORIES.map((cat) => ({ cat, items: presets.filter((p) => p.category === cat) })).filter((g) => g.items.length > 0);
+  // The catalog's URL-less entry is "any MCP server": it gets its own tile at the end.
+  const custom = presets.find((p) => !p.url) ?? null;
+  const groups = CATEGORIES.map((cat) => ({ cat, items: presets.filter((p) => p.category === cat && p.url) })).filter((g) => g.items.length > 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -134,7 +138,7 @@ function Gallery({ presets, connectors, onPick }: { presets: ConnectorPreset[]; 
         const Icon = categoryIcon[cat];
         return (
           <Section key={cat} label={t[`cat_${cat}`]} icon={<Icon aria-hidden />}>
-            <ul className="grid grid-cols-1 gap-2 min-[25rem]:grid-cols-2 md:grid-cols-3">
+            <ul className="grid grid-cols-2 gap-2 md:grid-cols-3">
               {items.map((p) => (
                 <li key={p.id} className="min-w-0">
                   <PresetTile preset={p} connected={hosts.has(urlHost(p.url))} onClick={() => onPick(p)} />
@@ -145,9 +149,9 @@ function Gallery({ presets, connectors, onPick }: { presets: ConnectorPreset[]; 
         );
       })}
       <Section label={t.cat_custom} icon={<Plus aria-hidden />}>
-        <ul className="grid grid-cols-1 gap-2 min-[25rem]:grid-cols-2 md:grid-cols-3">
-          <li className="min-w-0">
-            <Tile onClick={() => onPick(null)} className="border-dashed border-line-strong">
+        <ul className="grid grid-cols-2 gap-2 md:grid-cols-3">
+          <li className="col-span-2 min-w-0 md:col-span-1">
+            <Tile onClick={() => onPick(custom)} className="border-dashed border-line-strong">
               <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-soft text-accent-text">
                 <Plus className="size-4" />
               </span>
@@ -168,7 +172,7 @@ function PresetTile({ preset: p, connected, onClick }: { preset: ConnectorPreset
   const Auth = authIcon[p.auth];
   return (
     <Tile onClick={onClick}>
-      <Monogram text={p.label} className="size-9 rounded-lg text-xs normal-case" />
+      <Monogram text={p.label} className="hidden size-9 rounded-lg text-xs normal-case sm:inline-flex" />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
           <span className="truncate text-sm font-medium">{p.label}</span>
@@ -347,7 +351,7 @@ function ToolRow({ connector, tool }: { connector: ConnectorView; tool: Connecto
           </p>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
         <Segmented<Risk>
           label={`${t.riskLabel}: ${name}`}
           size="sm"
@@ -405,7 +409,8 @@ function ConnectorForm({
 
   // Until the user types their own, the label names what the URL points at (e.g. "GitMCP vercel/ai").
   const shown = template ? placeholders(template).filter((n) => !isSecretName(n)).map((n) => vars[n]?.trim()).filter(Boolean) : [];
-  const label = labelDraft ?? [preset?.label ?? "", shown.join("/")].filter(Boolean).join(" ");
+  // A custom server is named after its host until the user names it.
+  const label = labelDraft ?? (preset?.url ? [preset.label, shown.join("/")].filter(Boolean).join(" ") : isHttpUrl(url.trim()) ? urlHost(url.trim()) : "");
   const id = idDraft ?? uniqueId(slug(label) || preset?.id || "", taken);
   const idValid = /^[a-z0-9][a-z0-9-]{0,31}$/.test(id);
   const idTaken = !editing && taken.includes(id);
@@ -413,6 +418,8 @@ function ConnectorForm({
   const missingVars = template ? placeholders(template).some((n) => !vars[n]?.trim()) : false;
   const urlOk = editing ? true : !!finalUrl && !missingVars && isHttpUrl(finalUrl);
   const formId = useId();
+  // Some presets take an optional key without being "headers" auth (e.g. Context7's higher rate limits).
+  const showHeaders = auth === "headers" || (auth === "none" && (!!presetHeader || (connector?.headerKeys.length ?? 0) > 0));
 
   const submit = () => {
     if (!idValid || idTaken || !urlOk || !label.trim()) return;
@@ -426,16 +433,15 @@ function ConnectorForm({
       risks: connector?.risks ?? {},
       ...(finalUrl ? { url: finalUrl } : {}),
     };
-    const typed = headers.filter((h) => h.name.trim() && h.value);
-    if (auth === "headers") {
-      // Only what was typed is sent; a blank stored value keeps it (omit headers entirely when nothing changed).
-      const names = headers.filter((h) => h.name.trim()).map((h) => h.name.trim());
-      const unchanged = typed.length === 0 && sameSet(names, connector?.headerKeys ?? []);
-      if (!unchanged) {
-        input.headers = Object.fromEntries(
-          typed.map((h) => [h.name.trim(), presetHeader && h.name.trim() === presetHeader.name ? headerValue(presetHeader.template, h.value) : h.value]),
-        );
+    if (showHeaders) {
+      // Per key: a typed value sets it, "" removes a stored one, anything left blank keeps what is stored.
+      const patch: Record<string, string> = {};
+      for (const h of headers) {
+        const name = h.name.trim();
+        if (name && h.value) patch[name] = presetHeader && name === presetHeader.name ? headerValue(presetHeader.template, h.value) : h.value;
       }
+      for (const name of connector?.headerKeys ?? []) if (!headers.some((h) => h.stored && h.name === name)) patch[name] = "";
+      if (Object.keys(patch).length) input.headers = patch;
     } else if (connector?.headerKeys.length) {
       input.headers = {};
     }
@@ -484,7 +490,7 @@ function ConnectorForm({
         <Field label={t.label}>
           <Input required value={label} maxLength={64} onValueChange={setLabelDraft} />
         </Field>
-        <Field label={t.id} description={editing ? undefined : t.idHint} error={!idValid ? t.idInvalid : idTaken ? t.idTaken : undefined}>
+        <Field label={t.id} description={editing ? undefined : t.connectorIdHint(idValid ? id : "id")} error={!idValid ? t.idInvalid : idTaken ? t.idTaken : undefined}>
           <Input
             required
             disabled={editing}
@@ -547,7 +553,7 @@ function ConnectorForm({
         </div>
       </div>
 
-      {auth === "headers" && <HeaderFields rows={headers} onChange={setHeaders} preset={presetHeader} />}
+      {showHeaders && <HeaderFields rows={headers} onChange={setHeaders} preset={presetHeader} required={auth === "headers"} />}
       {auth === "oauth" && !connector && (
         <p className="flex items-start gap-2 text-sm text-fg-muted">
           <ExternalLink aria-hidden className="mt-0.5 size-4 shrink-0" />
@@ -625,7 +631,17 @@ function TemplateUrl({ template, values, onChange }: { template: string; values:
   );
 }
 
-function HeaderFields({ rows, onChange, preset }: { rows: HeaderRow[]; onChange: (rows: HeaderRow[]) => void; preset: { name: string; template: string; label: string } | null }) {
+function HeaderFields({
+  rows,
+  onChange,
+  preset,
+  required,
+}: {
+  rows: HeaderRow[];
+  onChange: (rows: HeaderRow[]) => void;
+  preset: { name: string; template: string; label: string } | null;
+  required: boolean;
+}) {
   const t = useT();
   const update = (i: number, patch: Partial<HeaderRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
@@ -634,21 +650,27 @@ function HeaderFields({ rows, onChange, preset }: { rows: HeaderRow[]; onChange:
       {rows.map((row, i) => {
         const fromPreset = preset && row.name === preset.name;
         return (
-          <div key={i} className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] sm:items-start">
-            <Field label={t.headerName}>
-              <Input value={row.name} disabled={row.stored || !!fromPreset} onValueChange={(v) => update(i, { name: v })} spellCheck={false} placeholder="Authorization" className="font-mono text-sm" />
-            </Field>
+          <div
+            key={i}
+            className={cn("grid gap-3 sm:items-start", fromPreset ? "sm:grid-cols-[minmax(0,1fr)_auto]" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto]")}
+          >
+            {/* The preset already names its header; only the secret is asked for. */}
+            {!fromPreset && (
+              <Field label={t.headerName}>
+                <Input value={row.name} disabled={row.stored} onValueChange={(v) => update(i, { name: v })} spellCheck={false} placeholder="Authorization" className="font-mono text-sm" />
+              </Field>
+            )}
             <Field
               label={fromPreset ? preset.label : t.headerValue}
-              description={row.stored ? t.keepSecret : fromPreset && preset.template !== "{token}" ? t.headerSent(`${preset.name}: ${preset.template}`) : undefined}
+              description={row.stored ? t.keepSecret : fromPreset && !/^\{[^{}]+\}$/.test(preset.template) ? t.headerSent(`${preset.name}: ${preset.template}`) : undefined}
             >
               <Input
                 type="password"
                 autoComplete="off"
-                required={!row.stored && i === 0}
+                required={required && !row.stored && i === 0}
                 value={row.value}
                 onValueChange={(v) => update(i, { value: v })}
-                placeholder={row.stored ? "••••••••" : t.required}
+                placeholder={row.stored ? "••••••••" : required && i === 0 ? t.required : t.optional}
                 spellCheck={false}
                 className="font-mono text-sm"
               />
@@ -683,11 +705,3 @@ function isHttpUrl(s: string): boolean {
     return false;
   }
 }
-
-function sameSet(a: string[], b: string[]): boolean {
-  const lower = (x: string[]) => new Set(x.map((s) => s.toLowerCase()));
-  const A = lower(a);
-  const B = lower(b);
-  return A.size === B.size && [...A].every((x) => B.has(x));
-}
-

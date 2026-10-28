@@ -37,7 +37,7 @@ export function Segmented<V extends string>({
           value={o.value}
           aria-label={o.ariaLabel}
           className={cn(
-            "inline-flex min-w-0 flex-1 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 font-medium text-fg-muted transition-colors [&_svg]:size-4",
+            "inline-flex min-w-0 flex-1 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 font-medium text-fg-muted transition-colors [&_svg]:size-4 [&_svg]:shrink-0",
             size === "sm" ? "h-7 text-xs" : "h-8 text-sm",
             "hover:text-fg data-pressed:bg-surface data-pressed:text-fg data-pressed:shadow-sm data-pressed:ring-1 data-pressed:ring-line",
           )}
