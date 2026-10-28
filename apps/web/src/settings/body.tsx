@@ -17,6 +17,7 @@ import { PersonalizationPanel } from "./panels/personalization.tsx";
 import { ReachPanel } from "./panels/reach.tsx";
 import { SecurityPanel } from "./panels/security.tsx";
 import { SetupPanel } from "./panels/setup.tsx";
+import { SkillsPanel } from "./panels/skills.tsx";
 import { SourcesPanel } from "./panels/sources.tsx";
 import { SECTIONS, sectionIcon, sectionLabel, useSettingsRoute, type SectionId } from "./route.ts";
 
@@ -24,6 +25,7 @@ const panels: Record<SectionId, ComponentType> = {
   setup: SetupPanel,
   general: GeneralPanel,
   personalization: PersonalizationPanel,
+  skills: SkillsPanel,
   notifications: NotificationsPanel,
   reach: ReachPanel,
   sources: SourcesPanel,

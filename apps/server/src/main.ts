@@ -15,6 +15,7 @@ import { startDelivery } from "./notify.ts";
 import { createPairing } from "./owner.ts";
 import { createPluginRegistry, loadPlugins } from "./plugins.ts";
 import { memoryPlugin } from "./plugins/memory.ts";
+import { tasksPlugin } from "./plugins/tasks.ts";
 import { createPush } from "./push.ts";
 import { channelRoutes } from "./routes/channels.ts";
 import { chatRoutes } from "./routes/chat.ts";
@@ -25,6 +26,7 @@ import { dataRoutes } from "./routes/data.ts";
 import { loginRoutes } from "./routes/logins.ts";
 import { memoryRoutes } from "./routes/memory.ts";
 import { reachRoutes } from "./routes/reach.ts";
+import { skillRoutes } from "./routes/skills.ts";
 import { workRoutes } from "./routes/work.ts";
 import { createRuntime } from "./runtime.ts";
 import { setupRoutes } from "./routes/setup.ts";
@@ -40,7 +42,7 @@ installRedaction();
 const env = loadEnv();
 const store = createStore(openDatabase(env.dataDir), createSealer(env.masterKey));
 store.openAllSecrets();
-const plugins = createPluginRegistry(await loadPlugins(env.plugins, [memoryPlugin(store)]), store);
+const plugins = createPluginRegistry(await loadPlugins(env.plugins, [memoryPlugin(store), tasksPlugin(() => tasks)]), store);
 const bus = createBus();
 const connectors = createConnectors(env, store, bus);
 const rt = createRuntime(env, store, plugins, bus, connectors);
@@ -64,7 +66,7 @@ app.onError((error, c) => {
 const api = new Hono();
 api.use("*", auth(env.token));
 api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
-for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes, loginRoutes, setupRoutes]) {
+for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes, loginRoutes, setupRoutes, skillRoutes]) {
   api.route("/", routes(services));
 }
 api.all("*", (c) => c.json({ error: "Not found" }, 404));

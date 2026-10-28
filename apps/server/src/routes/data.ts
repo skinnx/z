@@ -21,6 +21,7 @@ export function dataRoutes({ rt, channels, connectors }: Services) {
       approvals: store.approvals.list(),
       briefings: store.briefings.all(),
       memories: store.memories.list(),
+      skills: store.skills.list(),
       threads: store.threads.all(),
       notices: store.notices.list(Number.MAX_SAFE_INTEGER),
     };

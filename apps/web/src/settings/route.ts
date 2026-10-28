@@ -1,16 +1,17 @@
 /** Settings open over any screen, addressed by `?settings=<section>`. */
-import { Bell, Cable, ClipboardCheck, Database, Lock, RadioTower, Settings2, ShieldCheck, Sparkles, type LucideIcon } from "lucide-react";
+import { Bell, Cable, ClipboardCheck, Database, Lock, RadioTower, Settings2, ShieldCheck, Sparkles, SquareSlash, type LucideIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { useLocation, useNavigate, type Location } from "react-router";
 import type { Dict } from "../i18n.ts";
 
-export const SECTIONS = ["setup", "general", "personalization", "notifications", "reach", "sources", "approvals", "data", "security"] as const;
+export const SECTIONS = ["setup", "general", "personalization", "skills", "notifications", "reach", "sources", "approvals", "data", "security"] as const;
 export type SectionId = (typeof SECTIONS)[number];
 
 export const sectionIcon: Record<SectionId, LucideIcon> = {
   setup: ClipboardCheck,
   general: Settings2,
   personalization: Sparkles,
+  skills: SquareSlash,
   notifications: Bell,
   reach: RadioTower,
   sources: Cable,
