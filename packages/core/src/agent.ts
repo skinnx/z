@@ -4,7 +4,8 @@ import { approvalPreview, reviewModel } from "./approvals.ts";
 import type { ApprovalPreview, Memory, Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
 import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
-import { describeError, laneConfigured, type ModelResolver } from "./providers.ts";
+import { fitToContext, modelSummarizer } from "./context.ts";
+import { describeError, laneConfigured, laneRefs, type ModelResolver } from "./providers.ts";
 import { pendingQuestion, runSignals, runTools, runToolsHint, runToolsStop, type PendingQuestion } from "./run-tools.ts";
 import { buildTools, summarizeCall, toolNotes, type ActivePlugin, type ToolCallEnd, type ToolCallStart } from "./tools.ts";
 
@@ -74,37 +75,48 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
     onEnd: (call) => call.risk !== "read" && opts.onToolEnd?.(call),
   });
   const tools = { ...built.tools, ...runTools({ ask: true }) };
+  const instructions = joinSections(
+    baseInstructions(
+      deps.settings,
+      new Date(),
+      "You are working on a task the user delegated to you while they are away. " +
+        "Use the available tools when they help. Some tools need the user's approval; " +
+        "if a call is denied, adapt or explain what you could not do. " +
+        "Finish with a concise report of what you did and found." +
+        runToolsHint({ ask: true }) +
+        memoryHint(built.tools),
+    ),
+    memoryPrompt(deps.memories, task.instructions),
+    toolNotes(deps.plugins, built),
+  );
   let stepInput: ModelMessage[] = messages;
 
   try {
+    // A task resumed after approvals or answers carries its whole history; only what the model sees shrinks.
+    // `messages` (the full history) is what gets persisted.
+    const fit = await fitToContext(messages, {
+      window: deps.models.contextWindow(laneRefs(deps.routing, task.lane)),
+      instructions,
+      summarize: laneConfigured(deps.routing, "fast") ? modelSummarizer(deps.models.forLane(deps.routing, "fast"), opts.signal) : undefined,
+      log: deps.log,
+    });
+    const sent = fit.messages;
     const result = await generateText({
       model: deps.models.forLane(deps.routing, task.lane, {
         background: true,
         onCall: ({ ref, usage }) =>
           opts.onEvent({ type: "model", at: at(), model: ref, tokens: usage.inputTokens + usage.outputTokens }),
       }),
-      instructions: joinSections(
-        baseInstructions(
-          deps.settings,
-          new Date(),
-          "You are working on a task the user delegated to you while they are away. " +
-            "Use the available tools when they help. Some tools need the user's approval; " +
-            "if a call is denied, adapt or explain what you could not do. " +
-            "Finish with a concise report of what you did and found." +
-            runToolsHint({ ask: true }) +
-            memoryHint(built.tools),
-        ),
-        memoryPrompt(deps.memories, task.instructions),
-        toolNotes(deps.plugins, built),
-      ),
-      messages,
+      instructions,
+      messages: sent,
       tools,
       toolApproval: built.approval,
       stopWhen: [stepCountIs(MAX_AGENT_STEPS), runToolsStop],
       abortSignal: opts.signal,
       maxRetries: 1,
       onStepStart: (step) => {
-        stepInput = step.messages;
+        // Earlier steps of this run follow the (possibly compacted) prefix the model was sent.
+        stepInput = [...messages, ...step.messages.slice(sent.length)];
       },
       onStepEnd: (step) => {
         opts.onMessages?.([...stepInput, ...step.response.messages]);

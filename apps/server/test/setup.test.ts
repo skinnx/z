@@ -30,8 +30,7 @@ const servers: Server[] = [];
 afterEach(() => {
   for (const s of servers.splice(0)) s.close();
   for (const d of dirs.splice(0)) cleanup(d);
-  delete process.env.Z_TOKEN;
-  delete process.env.HOST;
+  for (const name of ["Z_TOKEN", "Z_HOST", "Z_PUBLIC_URL"]) delete process.env[name];
 });
 
 /** The real server pieces over a temp data dir, with the setup and config routes mounted. */
@@ -39,6 +38,7 @@ function boot(envVars: Record<string, string> = {}) {
   const dir = tempDir();
   dirs.push(dir);
   process.env.Z_DATA_DIR = dir;
+  for (const name of ["Z_TOKEN", "Z_HOST", "Z_PUBLIC_URL"]) delete process.env[name];
   Object.assign(process.env, envVars);
   const env = loadEnv();
   const store = createStore(openDatabase(env.dataDir), createSealer(env.masterKey));
@@ -140,8 +140,8 @@ test("setup: a fresh install is honest about what is missing", async () => {
   assert.equal(row(list, "chat_model").state, "needs_setup");
   assert.deepEqual(row(list, "chat_model").fix, { label: "Add a provider", path: "/models" });
   assert.equal(row(list, "lanes").state, "needs_setup");
-  // No HOST: listening on every interface without Z_TOKEN.
-  assert.equal(row(list, "token").state, "needs_setup");
+  // Loopback by default: no token needed.
+  assert.equal(row(list, "token").state, "ready");
   assert.equal(row(list, "public_url").state, "optional");
   assert.equal(row(list, "push").state, "needs_setup");
   assert.equal(row(list, "owner").state, "optional");
@@ -155,9 +155,14 @@ test("setup: a fresh install is honest about what is missing", async () => {
 });
 
 test("setup: token row follows the bind address and token strength", async () => {
-  assert.equal(row(JSON.parse((await boot({ HOST: "127.0.0.1" }).call("GET", "/setup")).text), "token").state, "optional");
-  assert.equal(row(JSON.parse((await boot({ Z_TOKEN: "short" }).call("GET", "/setup")).text), "token").state, "needs_setup");
-  assert.equal(row(JSON.parse((await boot({ Z_TOKEN: "0123456789abcdef0123456789abcdef" }).call("GET", "/setup")).text), "token").state, "ready");
+  const tokenRow = async (vars: Record<string, string>) => row(JSON.parse((await boot(vars).call("GET", "/setup")).text), "token");
+  const exposed = await tokenRow({ Z_HOST: "0.0.0.0" });
+  assert.equal(exposed.state, "ready");
+  assert.match(exposed.detail, /generated a token in .*access\.token/);
+  assert.equal((await tokenRow({ Z_TOKEN: "short" })).state, "needs_setup");
+  assert.equal((await tokenRow({ Z_TOKEN: "0123456789abcdef0123456789abcdef" })).state, "ready");
+  // Loopback, but a tunnel forwards a public address to it.
+  assert.equal((await tokenRow({ Z_PUBLIC_URL: "https://z.example.com" })).state, "needs_setup");
 });
 
 test("setup: a chat model is ready only after it answered a live test", async () => {

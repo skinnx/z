@@ -10,6 +10,7 @@ import { describeError, laneRefs, parseModelRef, testModel, type Lane, type Mode
 import pkg from "../package.json" with { type: "json" };
 import type { Channels } from "./channels.ts";
 import type { Connectors } from "./connectors.ts";
+import { accessTokenFile, isLoopback } from "./env.ts";
 import type { Push } from "./push.ts";
 import type { Runtime } from "./runtime.ts";
 import { redactJson } from "./secrets.ts";
@@ -25,7 +26,6 @@ const CHECKED_AT_KEY = "setup.checkedAt";
 const MASTER_ACK_KEY = "setup.masterKeyBackedUp";
 
 const LANE_NAMES: Record<Exclude<Lane, "chat">, string> = { agent: "Tasks", briefing: "Briefing", fast: "Quick checks", bot: "Channel bot" };
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 type Probe = { ok: boolean; detail: string; at: string };
 type LaneResult = { state: SetupState; detail: string };
@@ -50,10 +50,10 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
 
   const masterFingerprint = () => createHash("sha256").update(env.masterKey).digest("hex").slice(0, 16);
 
-  const reachable = () => {
+  /** A public URL off this machine means something (a tunnel, a proxy) forwards the world to z. */
+  const publicRemote = () => {
     const publicHost = env.publicUrl ? safeHost(env.publicUrl) : null;
-    const boundLocal = env.host !== null && LOOPBACK.has(env.host);
-    return { boundLocal, publicRemote: publicHost !== null && !LOOPBACK.has(publicHost) };
+    return publicHost !== null && !isLoopback(publicHost.replace(/^\[|\]$/g, ""));
   };
 
   /** One lane's chain against the cached tests: any answering model makes it ready. */
@@ -122,24 +122,31 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
 
     // ─── Access token when reachable beyond this computer ───
     const security = { label: "Open security", path: "/?settings=security" };
-    const { boundLocal, publicRemote } = reachable();
-    if (env.token) {
+    const where = `${env.host}:${env.port}`;
+    const label = "Access token";
+    if (env.tokenSource === "env" && env.token) {
       out.push(
         env.token.length < 16
-          ? { id: "token", label: "Access token (Z_TOKEN)", state: "needs_setup", detail: `Z_TOKEN is only ${env.token.length} characters. Use 32 or more random ones (openssl rand -hex 32).`, fix: null }
-          : { id: "token", label: "Access token (Z_TOKEN)", state: "ready", detail: "Every API request must carry the token.", fix: null },
+          ? { id: "token", label, state: "needs_setup", detail: `Z_TOKEN is only ${env.token.length} characters. Use 32 or more random ones (openssl rand -hex 32).`, fix: null }
+          : { id: "token", label, state: "ready", detail: `Z_TOKEN is set: every API request to ${where} must carry it.`, fix: null },
       );
-    } else if (boundLocal && !publicRemote) {
-      out.push({ id: "token", label: "Access token (Z_TOKEN)", state: "optional", detail: `Only this computer can reach z (HOST=${env.host}).`, fix: null });
-    } else {
-      const why = publicRemote
-        ? `z has a public address (${origin(env.publicUrl!)}) but no token`
-        : `z listens on every network interface (port ${env.port}) without a token`;
+    } else if (env.tokenSource === "generated") {
       out.push({
         id: "token",
-        label: "Access token (Z_TOKEN)",
+        label,
+        state: "ready",
+        detail: `z listens on ${where}, beyond this computer, so it generated a token in ${accessTokenFile(env.dataDir)}. Enter it in the web app, or set Z_TOKEN to choose your own.`,
+        fix: security,
+      });
+    } else if (!publicRemote()) {
+      out.push({ id: "token", label, state: "ready", detail: `Only this computer can reach z (Z_HOST=${env.host}), so no token is needed.`, fix: null });
+    } else {
+      // Loopback behind a tunnel or reverse proxy: the public address reaches z with no token at all.
+      out.push({
+        id: "token",
+        label,
         state: "needs_setup",
-        detail: `${why}: anyone who reaches it can spend your provider keys. Set Z_TOKEN (openssl rand -hex 32), or HOST=127.0.0.1 to keep z on this computer.`,
+        detail: `z listens on ${where} only, but ${origin(env.publicUrl!)} forwards to it without a token: anyone can spend your provider keys. Set Z_TOKEN (openssl rand -hex 32).`,
         fix: security,
       });
     }
@@ -152,7 +159,7 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
     if (env.publicUrl) {
       const host = safeHost(env.publicUrl);
       const at = origin(env.publicUrl);
-      if (!host || (!env.publicUrl.startsWith("https://") && !LOOPBACK.has(host))) {
+      if (!host || (!env.publicUrl.startsWith("https://") && !isLoopback(host.replace(/^\[|\]$/g, "")))) {
         out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "needs_setup", detail: `${at} is not https; platforms and OAuth providers only call https addresses.`, fix: null });
       } else if (!probe) {
         out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "not_checked", detail: `${at}. Check again to test that it reaches this server.`, fix: null });
@@ -264,8 +271,11 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
           calls++;
           const result = await testModel(providers.find((p) => p.id === providerId)!, modelId, MODEL_TIMEOUT_MS);
           check = toCheck(result);
+          // A 429 or a slow free tier says nothing new: an earlier answer still stands.
+          const previous = checks()[ref];
+          if (!check.ok && (check.rateLimited || check.timedOut) && previous?.ok) check = previous;
+          else saveCheck(ref, check);
           tested.set(ref, check);
-          saveCheck(ref, check);
         }
         if (check.ok) break;
       }
