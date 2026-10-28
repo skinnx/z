@@ -1,6 +1,7 @@
 /** The proactive agent: run a Task as a tool loop that pauses for approvals. */
 import { generateText, stepCountIs, type ModelMessage } from "ai";
-import type { Memory, Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
+import { approvalPreview, reviewModel } from "./approvals.ts";
+import type { ApprovalPreview, Memory, Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
 import { memoryPrompt } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, laneConfigured, type ModelResolver } from "./providers.ts";
@@ -25,6 +26,9 @@ export type ApprovalRequestInfo = {
   risk: Risk;
   input: unknown;
   summary: string;
+  preview: ApprovalPreview;
+  /** Completes "Asking because …" when the safety floor or the reviewer asked. */
+  reason: string | null;
 };
 
 export type RunOutcome =
@@ -49,6 +53,12 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
   const built = buildTools(deps.plugins, {
     policy: deps.settings.approvals,
     only: task.tools,
+    reviewer: {
+      mode: deps.settings.reviewer,
+      model: reviewModel(deps.models, deps.routing),
+      onReview: (tool, verdict) =>
+        opts.onEvent({ type: "step", at: at(), text: verdict.decision === "proceed" ? `Reviewer let ${tool} run: ${verdict.reason}` : `Asking before ${tool} because ${verdict.reason}` }),
+    },
     log: deps.log,
     onCall: (call) => opts.onEvent({ type: "tool", at: at(), ...call }),
   });
@@ -92,12 +102,15 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
         const req = part as Extract<typeof part, { type: "tool-approval-request" }>;
         const name = req.toolCall.toolName;
         const info = built.info[name];
+        const summary = summarizeCall(info, name, req.toolCall.input);
         return {
           toolApprovalId: req.approvalId,
           tool: name,
           risk: info?.risk ?? "external",
           input: req.toolCall.input,
-          summary: summarizeCall(info, name, req.toolCall.input),
+          summary,
+          preview: approvalPreview(name, req.toolCall.input, { summary }),
+          reason: req.reason?.trim() || null,
         } satisfies ApprovalRequestInfo;
       });
 

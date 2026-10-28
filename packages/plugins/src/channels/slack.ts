@@ -212,6 +212,8 @@ export const slackAdapter: ChannelAdapter = {
     { key: "signingSecret", label: "Signing secret", secret: true, required: true },
   ],
   // Owner notices go to the conversation itself (top level), not into the pairing thread.
+  // With buttons the text goes in one section block (3000 characters, after mrkdwn escaping).
+  noticeLimit: 2900,
   send: async (runtime, threadId, message) => {
     const [channel] = threadId.split(":");
     await slackApi(runtime, "chat.postMessage", {

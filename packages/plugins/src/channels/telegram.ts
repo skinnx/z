@@ -282,6 +282,7 @@ export const telegramAdapter: ChannelAdapter = {
     { key: "botToken", label: "Bot token (from @BotFather)", secret: true, required: true },
     { key: "webhookSecret", label: "Webhook secret (optional)", secret: true },
   ],
+  noticeLimit: 4096,
   send: async (runtime, threadId, message) => {
     const [chatId, topic] = threadId.split(":");
     await call(runtime, "sendMessage", {

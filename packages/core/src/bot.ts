@@ -111,7 +111,7 @@ export async function answerMessage(message: InboundMessage, deps: BotDeps): Pro
 function botTools(deps: BotDeps): ToolSet {
   const built = buildTools(deps.plugins, { policy: deps.settings.approvals, readOnly: true, publicOnly: true, log: deps.log });
   for (const [name, info] of Object.entries(built.info)) {
-    if (info.risk !== "read" || !info.tool.public || built.approval[name] !== "not-applicable") {
+    if (info.risk !== "read" || !info.tool.public || built.gates[name] !== "open") {
       throw new Error(`Bot tool "${name}" is not a public read tool`);
     }
   }

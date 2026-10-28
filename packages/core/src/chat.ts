@@ -8,6 +8,7 @@ import {
   streamText,
   type UIMessage,
 } from "ai";
+import { reviewModel } from "./approvals.ts";
 import { fitEachStep, fitToContext, modelSummarizer, type ContextSummary } from "./context.ts";
 import type { ContextReport, Memory, ModelRef, Routing, Settings } from "./contract.ts";
 import { memoryPrompt } from "./memory.ts";
@@ -42,7 +43,11 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
   const refs = request.model ? [request.model] : laneRefs(deps.routing, "chat");
   const model = deps.models.chain(refs);
   const window = deps.models.contextWindow(refs);
-  const built = buildTools(deps.plugins, { policy: deps.settings.approvals, log: deps.log });
+  const built = buildTools(deps.plugins, {
+    policy: deps.settings.approvals,
+    reviewer: { mode: deps.settings.reviewer, model: reviewModel(deps.models, deps.routing) },
+    log: deps.log,
+  });
   const instructions = joinSections(
     baseInstructions(
       deps.settings,

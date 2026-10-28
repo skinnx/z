@@ -16,7 +16,7 @@ import {
 } from "@z/core";
 import type { ModelMessage } from "ai";
 import type { z } from "zod";
-import { clip, notify } from "./notify.ts";
+import { approvalBody, clip, notify } from "./notify.ts";
 import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
 
@@ -92,7 +92,7 @@ export function createTasks(rt: Runtime) {
           events.push({ type: "approval", at: approval.createdAt, approvalId: approval.id });
           bus.emit({ type: "approval", approval });
           const title = store.tasks.get(id)?.title ?? task.title;
-          notify({ kind: "approval", title: `Approval needed · ${clip(title, 80)}`, body: approval.summary, path: "/", approvalId: approval.id });
+          notify({ kind: "approval", title: `Approval needed · ${clip(title, 80)}`, body: approvalBody(approval), path: "/", approvalId: approval.id });
         }
         store.tasks.appendEvents(id, events);
         update(id, { status: "waiting" });

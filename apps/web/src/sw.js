@@ -63,6 +63,8 @@ self.addEventListener("push", (event) => {
   } catch {
     data = { body: event.data ? event.data.text() : "" };
   }
+  // A truncated body is not the whole action: never offer to approve it from the notification.
+  const actionable = Boolean(data.approvalId) && data.truncated !== true;
   event.waitUntil(
     labels().then((t) =>
       self.registration.showNotification(data.title || "z", {
@@ -70,9 +72,9 @@ self.addEventListener("push", (event) => {
         tag: data.approvalId || data.id,
         icon: ICON,
         badge: BADGE,
-        data: { path: data.path || "/", approvalId: data.approvalId, body: data.body || "" },
+        data: { path: data.path || "/", approvalId: data.approvalId, truncated: data.truncated === true, body: data.body || "" },
         requireInteraction: Boolean(data.approvalId),
-        actions: data.approvalId
+        actions: actionable
           ? [
               { action: "approve", title: t.approve },
               { action: "deny", title: t.deny },
@@ -85,9 +87,9 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   const notification = event.notification;
-  const { path = "/", approvalId, body = "" } = notification.data || {};
+  const { path = "/", approvalId, truncated = false, body = "" } = notification.data || {};
   notification.close();
-  if (approvalId && (event.action === "approve" || event.action === "deny")) {
+  if (approvalId && !truncated && (event.action === "approve" || event.action === "deny")) {
     event.waitUntil(decide(approvalId, event.action === "approve", path, body));
   } else {
     event.waitUntil(openApp(path));
