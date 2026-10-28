@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { ConnectorInput, ConnectorPreset, ConnectorView, Risk } from "@z/core";
+import type { ConnectorInput, ConnectorPreset, ConnectorView, OAuthStart, Risk } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
@@ -72,15 +72,27 @@ export function useConnectOAuth() {
       const tab = window.open("about:blank", "_blank");
       if (tab) tab.opener = null;
       try {
-        const { authorizationUrl } = await api<{ authorizationUrl: string }>(`${path(id)}/oauth`, { method: "POST" });
-        if (tab && !tab.closed) tab.location.href = authorizationUrl;
-        else window.location.assign(authorizationUrl);
-        return authorizationUrl;
+        const start = await api<OAuthStart>(`${path(id)}/oauth`, { method: "POST" });
+        if (tab && !tab.closed) tab.location.href = start.authorizationUrl;
+        else window.location.assign(start.authorizationUrl);
+        return start;
       } catch (e) {
         tab?.close();
         throw e;
       }
     },
+    // The server now holds a pending sign-in: show the paste box.
+    onSuccess: (_, id) => queryClient.setQueryData<ConnectorView[]>(keys.connectors, (list) => list?.map((c) => (c.id === id ? { ...c, signInPending: true } : c))),
+  });
+}
+
+/** Finish a sign-in by pasting the address the browser ended on (callback not reachable). */
+export function useCompleteOAuth() {
+  return useMutation({
+    mutationFn: ({ id, url }: { id: string; url: string }) => api<ConnectorView>(`${path(id)}/oauth/complete`, { method: "POST", body: { url } }),
+    onSuccess: put,
+    // A rejected paste may have used up the state or changed the status; show what the server has now.
+    onError: () => void queryClient.invalidateQueries({ queryKey: keys.connectors }),
   });
 }
 

@@ -436,8 +436,21 @@ export type ConnectorView = Omit<z.output<typeof ConnectorInput>, "headers" | "u
   tools: ConnectorTool[];
   /** Present when auth is `oauth` and a token is stored. */
   oauth: { connected: boolean; scope: string | null; expiresAt: string | null } | null;
+  /** An OAuth sign-in was started and its callback hasn't arrived yet (it can be pasted instead). */
+  signInPending: boolean;
   updatedAt: string;
 };
+
+/** Start of an OAuth sign-in. `redirectUri` is where the browser lands after approving. */
+export type OAuthStart = { authorizationUrl: string; redirectUri: string };
+
+/**
+ * Finish a sign-in whose callback can't reach z (no Z_PUBLIC_URL, LAN or Tailscale installs): the
+ * owner pastes the address the browser ended on. The state in it must be this connector's
+ * pending one, and is single use like the real callback.
+ */
+export const OAuthCompleteInput = z.object({ url: z.string().trim().min(1).max(4096) });
+export type OAuthCompleteInput = z.infer<typeof OAuthCompleteInput>;
 
 /** A one-tap starting point in the UI. Static catalog shipped with z. */
 export type ConnectorPreset = {
@@ -665,9 +678,12 @@ export type Diagnostics = {
 // GET    /api/connector-presets            → ConnectorPreset[]
 // GET    /api/connectors                   → ConnectorView[]
 // PUT    /api/connectors/:id ConnectorInput → ConnectorView   (saves, connects, lists tools)
-// DELETE /api/connectors/:id               → { ok: true }    (also revokes stored OAuth tokens locally)
+// DELETE /api/connectors/:id               → { ok: true }    (drops stored OAuth tokens; revokes them at the
+//                                            authorization server in the background, RFC 7009, best effort)
 // POST   /api/connectors/:id/refresh       → ConnectorView   (reconnect and re-list tools)
-// POST   /api/connectors/:id/oauth         → { authorizationUrl: string }  (start OAuth; open it in a new tab)
+// POST   /api/connectors/:id/oauth         → OAuthStart      (start OAuth; open authorizationUrl in a new tab)
+// POST   /api/connectors/:id/oauth/complete OAuthCompleteInput → ConnectorView  (paste the callback URL;
+//                                            400 { error } on a wrong/used/expired state or a rejected code)
 // GET    /oauth/callback?code&state        → redirects to `/connect?connector=<id>` (no /api prefix; no bearer needed, state-verified)
 // GET    /api/export                       → JSON attachment `z-export-<date>.json`: everything except secrets
 //                                            (settings, routing, provider/channel/connector views, tasks, approvals,
