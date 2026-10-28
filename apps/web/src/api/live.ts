@@ -2,7 +2,7 @@ import type { Approval, ChannelView, ConnectorView, LiveEvent, Notice, Task } fr
 import { useEffect } from "react";
 import { t } from "../i18n.ts";
 import { notify } from "../ui/toast.tsx";
-import { eventsUrl, token } from "./client.ts";
+import { authRequired, eventsUrl, token, unreachable } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
 const TYPES = ["task", "approval", "briefing", "channel", "notice", "connector"] as const;
@@ -63,8 +63,14 @@ export function useLiveEvents(go: (path: string) => void) {
     // After a reconnect, anything may have changed while we were away.
     let opened = false;
     source.onopen = () => {
+      unreachable.set(false);
       if (opened) void queryClient.invalidateQueries();
       opened = true;
+    };
+    // The browser retries on its own; until then the shell says the server can't be reached.
+    source.onerror = () => {
+      // (A missing token fails the stream too; the token dialog covers that.)
+      if (source.readyState !== EventSource.OPEN && !authRequired.get()) unreachable.set(true);
     };
     return () => source.close();
   }, [tok, go]);

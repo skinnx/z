@@ -8,6 +8,7 @@ import { RouterProvider } from "react-router/dom";
 import { queryClient } from "./api/query.ts";
 import { startPwa } from "./lib/pwa.ts";
 import { isSection } from "./settings/route.ts";
+import { RootError, RouteError } from "./shell/offline.tsx";
 import { Shell } from "./shell/shell.tsx";
 import { Toaster } from "./ui/toast.tsx";
 import { TooltipProvider } from "./ui/tooltip.tsx";
@@ -29,18 +30,25 @@ const router = createBrowserRouter([
   {
     path: "/",
     element: <Shell />,
+    errorElement: <RootError />,
     children: [
-      { index: true, element: <Today /> },
-      { path: "chat/:id?", element: <Chat /> },
-      { path: "tasks", element: <Tasks /> },
-      // Settings open over any screen (`?settings=<section>`); the old pages land on Today with them open.
-      { path: "settings/:section?", element: <SettingsRedirect /> },
-      { path: "memory", element: <Navigate to="/?settings=personalization" replace /> },
-      { path: "channels", element: <Channels /> },
-      { path: "models", element: <Models /> },
-      { path: "connect", element: <Connect /> },
-      { path: "plugins", element: <Plugins /> },
-      { path: "*", element: <Navigate to="/" replace /> },
+      {
+        // A screen that fails (e.g. its chunk can't load offline or after a redeploy) shows inside the shell.
+        errorElement: <RouteError />,
+        children: [
+          { index: true, element: <Today /> },
+          { path: "chat/:id?", element: <Chat /> },
+          { path: "tasks", element: <Tasks /> },
+          // Settings open over any screen (`?settings=<section>`); the old pages land on Today with them open.
+          { path: "settings/:section?", element: <SettingsRedirect /> },
+          { path: "memory", element: <Navigate to="/?settings=personalization" replace /> },
+          { path: "channels", element: <Channels /> },
+          { path: "models", element: <Models /> },
+          { path: "connect", element: <Connect /> },
+          { path: "plugins", element: <Plugins /> },
+          { path: "*", element: <Navigate to="/" replace /> },
+        ],
+      },
     ],
   },
 ]);

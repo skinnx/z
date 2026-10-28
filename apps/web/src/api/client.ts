@@ -6,6 +6,15 @@ export const token = createStored<string>("z.token", () => "", (v): v is string 
 /** Set when the server answered 401; the token dialog listens to it. */
 export const authRequired = createSignal(false);
 
+/**
+ * True while the z server can't be reached: the last request failed to connect, the live stream
+ * dropped, or the browser is offline. Any answer from the server clears it. The shell shows one bar for it.
+ */
+export const unreachable = createSignal(typeof navigator !== "undefined" && navigator.onLine === false);
+if (typeof window !== "undefined") {
+  window.addEventListener("offline", () => unreachable.set(true));
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -35,8 +44,10 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
     });
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    unreachable.set(true);
     throw new ApiError(0, "offline");
   }
+  unreachable.set(false);
   if (res.status === 401) authRequired.set(true);
   const text = await res.text();
   const data: unknown = text ? safeJson(text) : null;

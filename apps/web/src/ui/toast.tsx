@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { t } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { buttonClass } from "./button.tsx";
+import { errorText } from "./card.tsx";
 
 /** One manager for the whole app, usable outside React (live events, mutations). */
 export const toastManager = BaseToast.createToastManager();
@@ -27,8 +28,7 @@ export function notify(
 }
 
 export function notifyError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  notify("error", t().error, message === "offline" ? t().offline : message);
+  notify("error", t().error, errorText(error, t()));
 }
 
 const icons: Record<Kind, ReactNode> = {

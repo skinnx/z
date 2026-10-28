@@ -1,4 +1,7 @@
 import { Button as BaseButton } from "@base-ui/react/button";
+import { ExternalLink } from "lucide-react";
+import type { ReactNode } from "react";
+import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -37,6 +40,33 @@ type Props = Omit<BaseButton.Props, "className"> & {
 
 export function Button({ variant, size, className, type = "button", ...props }: Props) {
   return <BaseButton type={type} className={buttonClass(variant, size, className)} {...props} />;
+}
+
+/** A link styled as a quiet button that opens another site in a new tab, and says so to screen readers. */
+export function ExternalLinkButton({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
+  const t = useT();
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className={buttonClass("ghost", "md", cn("text-accent-text hover:bg-accent-soft", className))}>
+      {children}
+      <ExternalLink aria-hidden className="size-3.5!" />
+      <span className="sr-only">({t.opensNewTab})</span>
+    </a>
+  );
+}
+
+/** A whole list row that is one button (inside a Card's divided list); its focus ring is drawn inside. */
+export function RowButton({ className, type = "button", ...props }: Omit<BaseButton.Props, "className"> & { className?: string }) {
+  return (
+    <BaseButton
+      type={type}
+      className={cn(
+        "flex min-h-16 w-full items-center gap-3 px-4 py-3 text-start transition-colors hover:bg-subtle/60",
+        "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
 /** A tappable card: a whole tile that is one button (galleries, pickers). */

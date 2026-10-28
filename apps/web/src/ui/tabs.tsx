@@ -2,9 +2,15 @@ import { Tabs as BaseTabs } from "@base-ui/react/tabs";
 import type { ReactNode } from "react";
 import { cn } from "../lib/cn.ts";
 
+/**
+ * Focus rings for tabs and their (focusable) panels, drawn inside so scroll containers don't clip them.
+ * No `outline-none` here: in Tailwind v4 it sets the outline style to none, which `outline-2` alone can't undo.
+ */
+export const tabFocusClass = "focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-accent";
+
 export const TabsRoot = BaseTabs.Root;
 export const TabPanel = ({ className, ...props }: Omit<BaseTabs.Panel.Props, "className"> & { className?: string }) => (
-  <BaseTabs.Panel className={cn("outline-none", className)} {...props} />
+  <BaseTabs.Panel className={cn("rounded-md", tabFocusClass, className)} {...props} />
 );
 
 export function TabList({ tabs, label }: { tabs: { value: string; label: ReactNode; count?: number; icon?: ReactNode }[]; label: string }) {
@@ -14,7 +20,10 @@ export function TabList({ tabs, label }: { tabs: { value: string; label: ReactNo
         <BaseTabs.Tab
           key={tab.value}
           value={tab.value}
-          className="flex h-11 items-center gap-2 px-3 text-sm font-medium text-fg-muted outline-none hover:text-fg data-active:text-fg focus-visible:rounded-md focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent [&_svg]:size-4"
+          className={cn(
+            "flex h-11 shrink-0 items-center gap-2 px-3 text-sm font-medium whitespace-nowrap text-fg-muted hover:text-fg data-active:text-fg focus-visible:rounded-md [&_svg]:size-4",
+            tabFocusClass,
+          )}
         >
           {tab.icon}
           {tab.label}
