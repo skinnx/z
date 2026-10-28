@@ -1,13 +1,14 @@
 /** The proactive agent: run a Task as a tool loop that pauses for approvals. */
 import { generateText, stepCountIs, type ModelMessage } from "ai";
 import { approvalPreview, reviewModel } from "./approvals.ts";
-import type { ApprovalPreview, Memory, Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
+import type { ApprovalPreview, Risk, Routing, Settings, Skill, Task, TaskEvent } from "./contract.ts";
 import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { fitToContext, modelSummarizer } from "./context.ts";
 import { describeError, laneConfigured, laneRefs, type ModelResolver } from "./providers.ts";
 import { pendingQuestion, runSignals, runTools, runToolsHint, runToolsStop, type PendingQuestion } from "./run-tools.ts";
-import { buildTools, summarizeCall, toolNotes, type ActivePlugin, type ToolCallEnd, type ToolCallStart } from "./tools.ts";
+import { describeOffer, invokedSkill, narrowing, offerTools, pluginLabels, skillOnly, skillPrompt } from "./skills.ts";
+import { buildTools, listTools, summarizeCall, toolNotes, type ActivePlugin, type ToolCallEnd, type ToolCallStart } from "./tools.ts";
 
 export const MAX_AGENT_STEPS = 12;
 
@@ -18,6 +19,8 @@ export type AgentDeps = {
   plugins: ActivePlugin[];
   /** The owner's long-term memories. Owner-facing runs only; never set for channel bots. */
   memories?: MemoryRecall;
+  /** The owner's skills; a task whose instructions start with `/<name>` runs with that skill. */
+  skills?: Skill[];
   log?: (text: string) => void;
 };
 
@@ -60,9 +63,10 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
     ? opts.messages
     : [{ role: "user", content: task.instructions }];
 
+  const invoked = invokedSkill(task.instructions, deps.skills);
   const built = buildTools(deps.plugins, {
     policy: deps.settings.approvals,
-    only: task.tools,
+    only: skillOnly(invoked?.skill, deps.plugins, task.tools),
     reviewer: {
       mode: deps.settings.reviewer,
       model: reviewModel(deps.models, deps.routing),
@@ -74,7 +78,12 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
     onStart: (call) => call.risk !== "read" && opts.onToolStart?.(call),
     onEnd: (call) => call.risk !== "read" && opts.onToolEnd?.(call),
   });
-  const tools = { ...built.tools, ...runTools({ ask: true }) };
+  const zTools = runTools({ ask: true });
+  const tools = { ...built.tools, ...zTools };
+  const offer = offerTools(built, { request: invoked?.rest || task.instructions, skill: invoked?.skill, labels: pluginLabels(deps.plugins), enabled: listTools(deps.plugins).length });
+  deps.log?.(describeOffer(offer));
+  const narrow = narrowing(offer, { always: Object.keys(zTools), log: deps.log });
+  const request = invoked?.rest || task.instructions;
   const instructions = joinSections(
     baseInstructions(
       deps.settings,
@@ -86,7 +95,8 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
         runToolsHint({ ask: true }) +
         memoryHint(built.tools),
     ),
-    memoryPrompt(deps.memories, task.instructions),
+    memoryPrompt(deps.memories, request),
+    invoked && skillPrompt(invoked.skill),
     toolNotes(deps.plugins, built),
   );
   let stepInput: ModelMessage[] = messages;
@@ -111,6 +121,8 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
       messages: sent,
       tools,
       toolApproval: built.approval,
+      prepareStep: () => ({ activeTools: narrow.activeTools() }),
+      repairToolCall: narrow.repairToolCall,
       stopWhen: [stepCountIs(MAX_AGENT_STEPS), runToolsStop],
       abortSignal: opts.signal,
       maxRetries: 1,

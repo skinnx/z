@@ -262,6 +262,11 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     view,
     sync,
     syncAll: () => Promise.all(store.channels.list().map((c) => sync(c.id))),
+    /** Whether the platform must call us (webhook-only adapter), so the channel needs Z_PUBLIC_URL. */
+    needsPublicUrl: (kind: string) => {
+      const adapter = adapterFor(kind);
+      return Boolean(adapter?.webhook && !adapter.start);
+    },
 
     async remove(id: string): Promise<boolean> {
       await (locks.get(id) ?? Promise.resolve());
@@ -277,17 +282,31 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       return (record && adapterFor(record.kind)?.noticeLimit) || Number.POSITIVE_INFINITY;
     },
 
-    /** Unprompted message to a thread (owner notices). Throws when the channel cannot send. */
-    async send(id: string, threadId: string, message: OutboundNotice): Promise<void> {
+    /**
+     * Unprompted message to a thread (owner notices). Throws when the channel cannot send.
+     * Resolves to the platform's message ref when the adapter can edit it later.
+     */
+    async send(id: string, threadId: string, message: OutboundNotice): Promise<string | null> {
       const record = store.channels.get(id);
       const adapter = record?.enabled ? adapterFor(record.kind) : undefined;
       if (!record || !adapter?.send) throw new Error(`Channel ${id} is missing, disabled or cannot send`);
       try {
-        await adapter.send(runtimeFor(record), threadId, message);
+        const sent = await adapter.send(runtimeFor(record), threadId, message);
+        if (record.status === "error") setStatus(id, "ok", null);
+        return adapter.edit && sent ? sent.ref : null;
       } catch (error) {
         setStatus(id, "error", `Could not reach the owner: ${describeError(error)}`);
         throw error;
       }
+    },
+
+    /** Replace a sent notice's text and drop its buttons. False when the channel cannot edit. */
+    async edit(id: string, threadId: string, ref: string, text: string): Promise<boolean> {
+      const record = store.channels.get(id);
+      const adapter = record?.enabled ? adapterFor(record.kind) : undefined;
+      if (!record || !adapter?.edit) return false;
+      await adapter.edit(runtimeFor(record), threadId, ref, text);
+      return true;
     },
 
     /** `ALL /hooks/:channelId` (some platforms verify with GET). */

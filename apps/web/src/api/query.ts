@@ -30,10 +30,12 @@ export const keys = {
   threads: ["threads"] as const,
   notices: ["notices"] as const,
   memories: ["memories"] as const,
+  skills: ["skills"] as const,
   /** Without `q`: every search, for invalidation. */
   memorySearch: (q?: string) => (q === undefined ? (["memories", "search"] as const) : (["memories", "search", q] as const)),
   connectors: ["connectors"] as const,
   connectorPresets: ["connector-presets"] as const,
+  setup: ["setup"] as const,
   thread: (id: string) => ["thread", id] as const,
 };
 

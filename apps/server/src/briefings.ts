@@ -19,9 +19,14 @@ export function createBriefings(rt: Runtime) {
     rt.store.briefings.insert(briefing);
     rt.bus.emit({ type: "briefing", briefing });
     const proposals = briefing.items.filter((i) => i.source === PROPOSED_SOURCE).length;
+    const needsYou = briefing.items.filter((i) => i.priority === "needs_you").length;
+    const parts = [
+      needsYou ? `${needsYou} need${needsYou === 1 ? "s" : ""} you` : "",
+      proposals ? `${proposals} task${proposals === 1 ? "" : "s"} worth delegating` : "",
+    ].filter(Boolean);
     notify({
       kind: "briefing",
-      title: proposals ? `Your briefing · ${proposals} task${proposals === 1 ? "" : "s"} worth delegating` : "Your briefing",
+      title: ["Your briefing", ...parts].join(" · "),
       body: clip(briefing.summary, 300),
       path: "/",
     });

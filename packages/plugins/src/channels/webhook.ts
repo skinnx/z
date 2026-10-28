@@ -1,4 +1,4 @@
-import { RateLimitedError, type ChannelAdapter, type InboundMessage } from "@z/core";
+import { RateLimitedError, type ChannelAdapter, type ChannelRuntime, type InboundMessage } from "@z/core";
 import { z } from "zod";
 import { errorMessage, hmacSha256Hex, safeEqual } from "../util.ts";
 import { config, pressed } from "./shared.ts";
@@ -64,10 +64,9 @@ export function signature(secret: string, timestamp: string, delivery: string, b
   return `v1=${hmacSha256Hex(secret, `${timestamp}.${delivery}.${body}`)}`;
 }
 
-/** Headers for a signed POST of `body` (outbound owner notices). */
-export function signedHeaders(secret: string, body: string, now = Date.now()): Record<string, string> {
+/** Headers for a signed POST of `body` (outbound owner notices). Pass `delivery` to keep it stable across retries. */
+export function signedHeaders(secret: string, body: string, now = Date.now(), delivery: string = crypto.randomUUID()): Record<string, string> {
   const timestamp = String(Math.floor(now / 1000));
-  const delivery = crypto.randomUUID();
   return { "x-z-timestamp": timestamp, "x-z-delivery": delivery, "x-z-signature": signature(secret, timestamp, delivery, body) };
 }
 
@@ -97,6 +96,26 @@ export function verify(
   return { ok: true, delivery };
 }
 
+/** A signed POST to the channel's notifyUrl; throws unless it answers 2xx. */
+async function notifyPost(runtime: ChannelRuntime, payload: unknown, delivery: string) {
+  const url = config(runtime, "notifyUrl");
+  if (!url) throw new Error("notifyUrl is not configured");
+  const secret = config(runtime, "secret");
+  const body = JSON.stringify(payload);
+  const res = await runtime.fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...signedHeaders(secret, body, Date.now(), delivery),
+      ...(config(runtime, "legacySecret") === "on" ? { "x-z-secret": secret } : {}),
+    },
+    body,
+    signal: AbortSignal.timeout(15_000),
+  });
+  await res.body?.cancel();
+  if (!res.ok) throw new Error(`notifyUrl answered ${res.status}`);
+}
+
 export const webhookAdapter: ChannelAdapter = {
   kind: "webhook",
   label: "Webhook (JSON)",
@@ -105,23 +124,15 @@ export const webhookAdapter: ChannelAdapter = {
     { key: "notifyUrl", label: "Notify URL (optional): receives signed owner notices as JSON POSTs" },
     { key: "legacySecret", label: "Legacy mode: also accept the bare secret in X-Z-Secret, unsigned", toggle: true },
   ],
+  // `id` names the notice message (the same on every retry, and the X-Z-Delivery); a later
+  // `notice.update` with the same `id` replaces its text and removes its actions.
   send: async (runtime, threadId, message) => {
-    const url = config(runtime, "notifyUrl");
-    if (!url) throw new Error("notifyUrl is not configured");
-    const secret = config(runtime, "secret");
-    const body = JSON.stringify({ type: "notice", threadId, text: message.text, actions: message.actions ?? [] });
-    const res = await runtime.fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...signedHeaders(secret, body),
-        ...(config(runtime, "legacySecret") === "on" ? { "x-z-secret": secret } : {}),
-      },
-      body,
-      signal: AbortSignal.timeout(15_000),
-    });
-    await res.body?.cancel();
-    if (!res.ok) throw new Error(`notifyUrl answered ${res.status}`);
+    const id = message.id ?? crypto.randomUUID();
+    await notifyPost(runtime, { type: "notice", id, threadId, text: message.text, actions: message.actions ?? [] }, id);
+    return { ref: id };
+  },
+  edit: async (runtime, threadId, ref, text) => {
+    await notifyPost(runtime, { type: "notice.update", id: ref, threadId, text, actions: [] }, `${ref}.update`);
   },
   webhook: async (request, runtime) => {
     const secret = config(runtime, "secret");

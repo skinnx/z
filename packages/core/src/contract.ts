@@ -157,6 +157,8 @@ export const TaskInput = z.object({
    * it runs on `schedule` and only raises a Notice when something new matters.
    */
   mode: z.enum(["do", "watch"]).default("do"),
+  /** A run missed while the server was down: see MissedPolicy under "Delivery & missed runs". */
+  missedPolicy: z.enum(["once", "skip"]).default("once"),
 });
 export type TaskInput = z.input<typeof TaskInput>;
 
@@ -187,11 +189,14 @@ export type Task = {
   nextRunAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Recurring tasks: what a run missed while z was down does (absent on old rows: "once"). */
+  missedPolicy?: MissedPolicy;
 } & TaskLifecycleFields;
 
 // ─── Briefing: the morning summary ──────────────────────────────────────────
 
-export type BriefItem = {
+/** An item as a briefing source gathers it, before triage. */
+export type BriefSourceItem = {
   id: string;
   /** Source plugin id, e.g. `rss`, `github`, `tasks`. */
   source: string;
@@ -200,6 +205,42 @@ export type BriefItem = {
   url?: string;
   /** Suggested follow-up the user can turn into a task with one tap. */
   suggestion?: string;
+  /** Facts the source knows for certain; triage rules may act on them, only ever to say "can wait". */
+  signals?: BriefSignals;
+};
+
+/**
+ * What a source knows about an item without reading it. Each one, when set, settles the item as
+ * "can wait" with no model call; anything a source is unsure of stays unset and the model reads the
+ * item. There is deliberately no "urgent" signal: what needs the user does not share keywords.
+ */
+export type BriefSignals = {
+  /** The source itself files it as a newsletter or promotion (a mail provider's Promotions tab). List headers alone are not enough: a security report through a mailing list carries them too. */
+  promotional?: boolean;
+  /** Opened by an automated account (`dependabot[bot]`) for routine upkeep. Not set for alerts or failures, which bots and `noreply` senders send too. */
+  bot?: boolean;
+  /** An automated check that passed. Failures are left to the model. */
+  ciPassed?: boolean;
+  /** The user has already seen it. */
+  read?: boolean;
+  /** The thread is closed or merged. */
+  closed?: boolean;
+  /** z is already working on it (a queued, running or scheduled task). */
+  delegated?: boolean;
+};
+
+/** Whether an item needs the user today. */
+export type BriefPriority = "needs_you" | "can_wait";
+
+/** Cap on `BriefItem.reason`. */
+export const BRIEF_REASON_MAX = 140;
+
+export type BriefItem = BriefSourceItem & {
+  priority: BriefPriority;
+  /** One line a person would accept, at most `BRIEF_REASON_MAX` characters. */
+  reason: string;
+  /** `rule`: settled by a signal, or not checked (no model, or the model left it out; always `needs_you`). */
+  decidedBy: "rule" | "model";
 };
 
 export type Briefing = {
@@ -441,8 +482,21 @@ export type ConnectorView = Omit<z.output<typeof ConnectorInput>, "headers" | "u
   tools: ConnectorTool[];
   /** Present when auth is `oauth` and a token is stored. */
   oauth: { connected: boolean; scope: string | null; expiresAt: string | null } | null;
+  /** An OAuth sign-in was started and its callback hasn't arrived yet (it can be pasted instead). */
+  signInPending: boolean;
   updatedAt: string;
 };
+
+/** Start of an OAuth sign-in. `redirectUri` is where the browser lands after approving. */
+export type OAuthStart = { authorizationUrl: string; redirectUri: string };
+
+/**
+ * Finish a sign-in whose callback can't reach z (no Z_PUBLIC_URL, LAN or Tailscale installs): the
+ * owner pastes the address the browser ended on. The state in it must be this connector's
+ * pending one, and is single use like the real callback.
+ */
+export const OAuthCompleteInput = z.object({ url: z.string().trim().min(1).max(4096) });
+export type OAuthCompleteInput = z.infer<typeof OAuthCompleteInput>;
 
 /** A one-tap starting point in the UI. Static catalog shipped with z. */
 export type ConnectorPreset = {
@@ -546,8 +600,12 @@ export type TaskLifecycleFields = {
 export const TaskAnswer = z.object({ text: z.string().trim().min(1).max(4000) });
 export type TaskAnswer = z.input<typeof TaskAnswer>;
 
-/** A notice for a question: answer buttons on push and the owner channel. */
-export type NoticeQuestion = { taskId: string; choices: string[] };
+/**
+ * A notice for a question: answer buttons in the app, on push and on the owner channel. Stored with
+ * the notice, so the buttons survive a reload; `answer` is set once it was answered anywhere
+ * (`""` when the question was withdrawn: the task was run again, cancelled or deleted).
+ */
+export type NoticeQuestion = { taskId: string; text: string; choices: string[]; answer?: string };
 
 /** A plugin briefing source that failed. */
 export type CouldNotCheck = { source: string; reason: string };
@@ -557,6 +615,137 @@ export type CouldNotCheck = { source: string; reason: string };
 // POST   /api/tasks/:id/resolve            → Task   (review | interrupted → done)
 
 // ─── End task engine ────────────────────────────────────────────────────────
+
+// ─── Setup checklist & diagnostics ──────────────────────────────────────────
+// Ready means it was seen working (a model answered, a channel connected), never just "configured".
+// (Idea from CopilotKit OpenDuet's setup checks, MIT; re-implemented for z.)
+
+/**
+ * - ready:       checked and working
+ * - needs_setup: missing, or checked and failing (`detail` carries the real error)
+ * - not_checked: configured but not tested yet, or the check was inconclusive (rate limited, timed out)
+ * - optional:    not needed for what is set up now
+ */
+export type SetupState = "ready" | "needs_setup" | "not_checked" | "optional";
+
+export type SetupRow = {
+  /** `chat_model`, `lanes`, `token`, `public_url`, `push`, `owner`, `master_key`, `channel:<id>`, `connector:<id>`. */
+  id: string;
+  label: string;
+  state: SetupState;
+  detail: string;
+  /** Where to fix it in the app; null when the fix is outside z (an environment variable). */
+  fix: { label: string; path: string } | null;
+  /** The owner confirms this one themselves (backing up the master key): button label for POST /api/setup/:id/ack. */
+  ack?: string;
+};
+
+export type SetupChecklist = {
+  rows: SetupRow[];
+  /** When the live checks (POST /api/setup/check) last ran; null when never. */
+  checkedAt: string | null;
+};
+
+/** A cached live model test, per model ref. */
+export type ModelCheck = { ok: boolean; error?: string; rateLimited?: boolean; timedOut?: boolean; latencyMs?: number; at: string };
+
+/** What "Copy diagnostics" hands to whoever helps: no secrets, no URLs beyond their origin. */
+export type Diagnostics = {
+  generatedAt: string;
+  version: string;
+  runtime: { node: string; sqlite: string; os: string; arch: string; uptimeSeconds: number };
+  schemaVersion: number;
+  server: { authToken: boolean; publicOrigin: string | null; bind: string; plugins: number };
+  setup: SetupChecklist;
+  providers: { id: string; kind: ProviderKind; enabled: boolean; origin: string | null; hasKey: boolean; models: number }[];
+  modelChecks: Record<string, ModelCheck>;
+  routing: Routing;
+  channels: { id: string; kind: ChannelKind; enabled: boolean; status: string; statusDetail: string | null; lastEventAt: string | null }[];
+  connectors: { id: string; origin: string; auth: ConnectorAuth; enabled: boolean; status: string; statusDetail: string | null; tools: number }[];
+  tasks: Record<string, number>;
+  /** The last 200 server log lines, secrets already replaced by `[secret:<last4>]`. */
+  logs: { at: string; stream: "stdout" | "stderr"; line: string }[];
+};
+
+// Routes (also listed under HTTP API):
+// GET    /api/setup                        → SetupChecklist   (cached results only; no model calls)
+// POST   /api/setup/check                  → SetupChecklist   (re-runs the live model tests with a short timeout, re-probes the rest)
+// POST   /api/setup/:id/ack                → SetupChecklist   (rows with `ack` only)
+// GET    /api/diagnostics                  → JSON attachment `z-diagnostics-<date>.json` (Diagnostics)
+
+// ─── End setup checklist ────────────────────────────────────────────────────
+// ─── Skills: reusable instructions the owner invokes with /name ─────────────
+// Adapted from CopilotKit/OpenDuet (MIT), `openbot/examples/openduet/skills.yaml`: a skill adds no
+// capability. Its `tools` only narrow what a run is offered; the approval policy still decides.
+
+/** The slug typed after `/`. */
+export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export const MAX_SKILL_INSTRUCTIONS = 8000;
+
+export const SkillInput = z.object({
+  name: z.string().regex(SKILL_NAME, "lowercase letters, digits and dashes"),
+  description: z.string().trim().min(1).max(200),
+  instructions: z.string().trim().min(1).max(MAX_SKILL_INSTRUCTIONS),
+  /**
+   * Tool names (`web_search`) or globs (`mcp_<connector>_*`, `web_*`). Empty: the run's usual tools.
+   * Naming a tool grants nothing: it is intersected with what the approval policy exposes.
+   */
+  tools: z.array(z.string().regex(/^[A-Za-z0-9_*-]{1,80}$/)).max(64).default([]),
+});
+export type SkillInput = z.input<typeof SkillInput>;
+
+export type Skill = z.output<typeof SkillInput> & { id: string; createdAt: string; updatedAt: string };
+
+// Routes (also listed under HTTP API):
+// GET    /api/skills                       → Skill[]   (by name)
+// POST   /api/skills        SkillInput     → Skill     (409 when the name is taken)
+// PUT    /api/skills/:id    SkillInput     → Skill
+// DELETE /api/skills/:id                   → { ok: true }
+// A chat message or task whose text starts with `/<name>` runs with that skill.
+
+// ─── End skills ─────────────────────────────────────────────────────────────
+// ─── Delivery & missed runs: durable notice outbox, recurring de-dup, catch-up ─
+// One block for how notices reach the owner reliably and what a recurring task does after downtime.
+
+/**
+ * Every notice gets one delivery per target (each Web Push device, the paired owner channel), stored
+ * before anything is sent. A failed attempt is retried after DELIVERY_BACKOFF_MS[attempt - 1]; after
+ * MAX_DELIVERY_ATTEMPTS it is `failed`. Waiting deliveries resume after a restart.
+ * - dropped: no longer worth sending: its approval was decided, its question answered, the push
+ *            device is gone (404/410) or the owner channel changed.
+ * Once an approval is decided or a question answered anywhere, sent channel messages are edited to
+ * show the outcome (without buttons) where the adapter can edit.
+ */
+export type DeliveryStatus = "pending" | "sent" | "failed" | "dropped";
+export const DELIVERY_BACKOFF_MS = [30_000, 120_000, 600_000, 3_600_000, 21_600_000] as const;
+export const MAX_DELIVERY_ATTEMPTS = 6;
+
+export type NoticeDelivery = {
+  id: string;
+  noticeId: string;
+  target: "push" | "channel";
+  status: DeliveryStatus;
+  attempts: number;
+  /** When the next attempt is due (pending only). */
+  nextAttemptAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * A recurring task's run that fell while z was down. `once` (default): run it once at startup
+ * (never once per missed slot) when the miss is at most MISSED_RUN_WINDOW_MS old; older misses, and
+ * every miss under `skip`, are skipped with a step in the task's events.
+ */
+export type MissedPolicy = "once" | "skip";
+export const MISSED_RUN_WINDOW_MS = 24 * 3600_000;
+
+// Recurring `do` tasks notify on success only when the run did not call `no_update` and its result
+// (whitespace-normalized, compared by hash) differs from the last successful run's, or the run ends a
+// failure streak. The first failure of a streak always notifies (see "Task engine").
+
+// ─── End delivery & missed runs ─────────────────────────────────────────────
 
 // ─── HTTP API ───────────────────────────────────────────────────────────────
 // All JSON. Errors: `{ error: string }` with a 4xx/5xx status.
@@ -611,19 +800,30 @@ export type CouldNotCheck = { source: string; reason: string };
 // GET    /api/connector-presets            → ConnectorPreset[]
 // GET    /api/connectors                   → ConnectorView[]
 // PUT    /api/connectors/:id ConnectorInput → ConnectorView   (saves, connects, lists tools)
-// DELETE /api/connectors/:id               → { ok: true }    (also revokes stored OAuth tokens locally)
+// DELETE /api/connectors/:id               → { ok: true }    (drops stored OAuth tokens; revokes them at the
+//                                            authorization server in the background, RFC 7009, best effort)
 // POST   /api/connectors/:id/refresh       → ConnectorView   (reconnect and re-list tools)
-// POST   /api/connectors/:id/oauth         → { authorizationUrl: string }  (start OAuth; open it in a new tab)
+// POST   /api/connectors/:id/oauth         → OAuthStart      (start OAuth; open authorizationUrl in a new tab)
+// POST   /api/connectors/:id/oauth/complete OAuthCompleteInput → ConnectorView  (paste the callback URL;
+//                                            400 { error } on a wrong/used/expired state or a rejected code)
 // GET    /oauth/callback?code&state        → redirects to `/connect?connector=<id>` (no /api prefix; no bearer needed, state-verified)
 // GET    /api/export                       → JSON attachment `z-export-<date>.json`: everything except secrets
 //                                            (settings, routing, provider/channel/connector views, tasks, approvals,
-//                                            briefings, memories, threads, notices)
+//                                            briefings, memories, skills, threads, notices)
 // DELETE /api/threads                      → { deleted: number }   (all chat threads)
 // DELETE /api/memories                     → { deleted: number }   (all memories)
 // GET    /api/logins                       → LoginView[]      (saved sign-ins; passwords and TOTP secrets never leave)
 // POST   /api/logins        LoginInput     → LoginView        (409 when the origin already has one)
 // PUT    /api/logins/:id    LoginUpdate    → LoginView
 // DELETE /api/logins/:id                   → { ok: true }
+// GET    /api/setup                        → SetupChecklist   (see "Setup checklist")
+// POST   /api/setup/check                  → SetupChecklist
+// POST   /api/setup/:id/ack                → SetupChecklist
+// GET    /api/diagnostics                  → JSON attachment Diagnostics (no secrets)
+// GET    /api/skills                       → Skill[]          (see "Skills")
+// POST   /api/skills        SkillInput     → Skill
+// PUT    /api/skills/:id    SkillInput     → Skill
+// DELETE /api/skills/:id                   → { ok: true }
 // GET    /api/events                       → text/event-stream of LiveEvent
 // POST   /hooks/:channelId                 → adapter defined (inbound platform webhooks)
 //   webhook kind: X-Z-Timestamp (unix s), X-Z-Delivery (unique id), X-Z-Signature `v1=<hex HMAC-SHA256(secret,

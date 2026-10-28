@@ -10,7 +10,7 @@ import {
   type ToolUIPart,
   type UIMessage,
 } from "ai";
-import { Check, ChevronsUpDown, CircleAlert, Copy, Cpu, KeyRound, ListCollapse, MessageSquarePlus, RefreshCw, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
+import { Check, ChevronsUpDown, CircleAlert, Copy, Cpu, KeyRound, ListCollapse, MessageSquarePlus, RefreshCw, ShieldCheck, Sparkles, SquareSlash, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, NavLink, useLocation, useNavigate, useParams } from "react-router";
 import { authHeaders, authRequired } from "../api/client.ts";
@@ -44,12 +44,15 @@ import {
   ModelSelectorList,
   type ModelSelectorGroupData,
 } from "../components/ai-elements/model-selector.tsx";
-import { PromptInput, PromptInputButton, PromptInputFooter, PromptInputSubmit, PromptInputTextarea, PromptInputTools } from "../components/ai-elements/prompt-input.tsx";
+import { PromptInput, PromptInputButton, PromptInputFooter, PromptInputSubmit, PromptInputTools } from "../components/ai-elements/prompt-input.tsx";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "../components/ai-elements/reasoning.tsx";
 import { Shimmer } from "../components/ai-elements/shimmer.tsx";
 import { Source, Sources, SourcesContent, SourcesTrigger } from "../components/ai-elements/sources.tsx";
 import { Suggestion, Suggestions } from "../components/ai-elements/suggestion.tsx";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "../components/ai-elements/tool.tsx";
+import { SkillTextarea, withSkill } from "../components/skill-menu.tsx";
+import { splitSkill, useSkills } from "../api/skills.ts";
+import type { Skill } from "@z/core";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
@@ -199,6 +202,7 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
 
   const busy = status === "submitted" || status === "streaming";
   const [text, setText] = useState("");
+  const [skill, setSkill] = useState<Skill | null>(null);
   const [stopped, setStopped] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const noProviders = providers.data?.length === 0;
@@ -207,10 +211,11 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
     inputRef.current?.focus();
   }, []);
 
-  const send = (value: string) => {
-    const trimmed = value.trim();
+  const send = () => {
+    const trimmed = withSkill(skill, text);
     if (!trimmed || busy) return;
     setText("");
+    setSkill(null);
     setStopped(false);
     if (initial.length === 0 && messages.length === 0) {
       // A brand new thread becomes visible in the list as soon as the server has it.
@@ -306,13 +311,18 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
       <ChatAnnouncer messages={messages} status={status} stopped={stopped} />
 
       <div className="bg-bg px-3 pt-2 pb-3">
-        <PromptInput className="mx-auto max-w-3xl" onSubmit={({ text: value }) => send(value)}>
-          <PromptInputTextarea
+        <PromptInput className="mx-auto max-w-3xl" onSubmit={() => send()}>
+          <SkillTextarea
             ref={inputRef}
             label={t.messagePlaceholder}
-            placeholder={t.messagePlaceholder}
+            placeholder={skill ? skill.description : t.messagePlaceholder}
             value={text}
-            onChange={(e) => setText(e.currentTarget.value)}
+            onValueChange={setText}
+            skill={skill}
+            onSkillChange={(next) => {
+              setSkill(next);
+              inputRef.current?.focus();
+            }}
             aria-describedby="chat-newline-hint"
           />
           <span id="chat-newline-hint" className="sr-only">
@@ -327,7 +337,7 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
               onStop={() => {
                 setStopped(true);
                 void stop();
-              }} disabled={!text.trim()} />
+              }} disabled={!text.trim() && !skill} />
           </PromptInputFooter>
         </PromptInput>
       </div>
@@ -440,12 +450,24 @@ function ChatMessage({
   actions: React.ReactNode;
 }) {
   const t = useT();
+  const skills = useSkills();
   if (message.role === "user") {
+    const invoked = splitSkill(textOf(message), skills.data);
     return (
       <Message from="user">
         <MessageContent>
           <span className="sr-only">{t.you}: </span>
-          {textOf(message)}
+          {invoked ? (
+            <>
+              <span className="me-1.5 inline-flex h-6 items-center gap-1 rounded-md bg-accent-soft px-1.5 align-[1px] font-mono text-[0.8125rem] text-accent">
+                <SquareSlash aria-hidden className="size-3.5" />
+                {invoked.skill.name}
+              </span>
+              {invoked.rest}
+            </>
+          ) : (
+            textOf(message)
+          )}
         </MessageContent>
       </Message>
     );

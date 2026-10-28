@@ -2,7 +2,9 @@ import { ArrowUp, CalendarClock, CalendarDays, Radar, Repeat, Terminal, Timer, Z
 import { useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useNavigate } from "react-router";
 import { useCreateTask } from "../api/tasks.ts";
-import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from "./ai-elements/prompt-input.tsx";
+import type { Skill } from "@z/core";
+import { PromptInput, PromptInputFooter, PromptInputSubmit } from "./ai-elements/prompt-input.tsx";
+import { SkillTextarea, withSkill } from "./skill-menu.tsx";
 import { useT } from "../i18n.ts";
 import { isValidCron, toCron, watchCron, type Preset, type WatchEvery } from "../lib/cron.ts";
 import { Field, Input } from "../ui/field.tsx";
@@ -29,6 +31,7 @@ export function Composer({
   const navigate = useNavigate();
   const create = useCreateTask();
   const [text, setText] = useState(initial);
+  const [skill, setSkill] = useState<Skill | null>(null);
   const [mode, setMode] = useState<Mode>("once");
   const [every, setEvery] = useState<WatchEvery>("hourly");
   const [time, setTime] = useState("08:00");
@@ -39,7 +42,7 @@ export function Composer({
   const needsCron = watch ? every === "custom" : mode === "custom";
   const needsTime = watch ? every === "daily" : mode === "daily" || mode === "weekdays";
   const cronError = needsCron && cron.trim() !== "" && !isValidCron(cron) ? t.cronInvalid : undefined;
-  const canSubmit = text.trim().length > 0 && !cronError && !(needsCron && !cron.trim()) && !create.isPending;
+  const canSubmit = (text.trim().length > 0 || skill !== null) && !cronError && !(needsCron && !cron.trim()) && !create.isPending;
   const modes: { value: Mode; label: string; icon: ReactNode }[] = [
     { value: "once", label: t.sched_once, icon: <Zap aria-hidden /> },
     { value: "daily", label: t.sched_daily, icon: <Repeat aria-hidden /> },
@@ -52,10 +55,11 @@ export function Composer({
     if (!canSubmit) return;
     const schedule = watch ? watchCron(every, time, cron) : toCron(mode as Preset, time, cron);
     create.mutate(
-      { instructions: text.trim(), ...(schedule ? { schedule } : {}), ...(watch ? { mode: "watch" as const } : {}) },
+      { instructions: withSkill(skill, text), ...(schedule ? { schedule } : {}), ...(watch ? { mode: "watch" as const } : {}) },
       {
         onSuccess: (task) => {
           setText("");
+          setSkill(null);
           notify("success", watch ? t.watchStarted : schedule ? t.taskScheduled : t.taskQueued, task.title, {
             label: t.showDetails,
             onClick: () => navigate(`/tasks?task=${encodeURIComponent(task.id)}`),
@@ -74,13 +78,18 @@ export function Composer({
       onSubmit={() => submit()}
       className="rounded-(--radius-card)"
     >
-      <PromptInputTextarea
+      <SkillTextarea
         ref={inputRef}
         label={t.instructions}
         autoFocus={autoFocus}
         value={text}
-        onChange={(e) => setText(e.currentTarget.value)}
-        placeholder={watch ? t.watchPlaceholder : t.delegatePlaceholder}
+        onValueChange={setText}
+        skill={skill}
+        onSkillChange={(next) => {
+          setSkill(next);
+          inputRef?.current?.focus();
+        }}
+        placeholder={skill ? skill.description : watch ? t.watchPlaceholder : t.delegatePlaceholder}
         aria-describedby={hintId}
         className="min-h-28 pt-4 text-base"
       />
