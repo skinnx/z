@@ -25,21 +25,18 @@ function serviceWorker(): Plugin {
   };
 }
 
+const proxy = {
+  // Connector OAuth builds its redirect URI from the request origin: keep the browser's host so
+  // the provider sends the user back through this dev server (first match wins, so it leads).
+  "/api/connectors": { target: api, changeOrigin: false },
+  "/oauth": { target: api, changeOrigin: false },
+  "/api": { target: api, changeOrigin: true },
+  "/hooks": { target: api, changeOrigin: true },
+};
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), serviceWorker()],
   build: { chunkSizeWarningLimit: 600 },
-  server: {
-    proxy: {
-      "/api": { target: api, changeOrigin: true },
-      "/hooks": { target: api, changeOrigin: true },
-      "/oauth": { target: api, changeOrigin: true },
-    },
-  },
-  preview: {
-    proxy: {
-      "/api": { target: api, changeOrigin: true },
-      "/hooks": { target: api, changeOrigin: true },
-      "/oauth": { target: api, changeOrigin: true },
-    },
-  },
+  server: { proxy },
+  preview: { proxy },
 });
