@@ -3,8 +3,11 @@ import { describeError } from "@z/core";
 import type { Runtime } from "./runtime.ts";
 import { buildPushRequest, generateVapidKeys, vapidPublicKey, type VapidKeys } from "./webpush.ts";
 
-/** What the service worker receives. Never secrets or tool inputs: just enough to show and act. */
-export type PushPayload = { id: string; kind: string; title: string; body: string; path: string; approvalId?: string };
+/**
+ * What the service worker receives. Never secrets: an approval's body is its preview, with secret-named
+ * arguments masked. `truncated`: the body is not the whole action, so the worker offers no Approve.
+ */
+export type PushPayload = { id: string; kind: string; title: string; body: string; path: string; approvalId?: string; truncated?: boolean };
 
 export type Push = ReturnType<typeof createPush>;
 

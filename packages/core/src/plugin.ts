@@ -105,6 +105,11 @@ export type ChannelAdapter = {
     threadId: string,
     message: { text: string; actions?: { id: string; label: string; style?: "primary" | "danger" }[] },
   ) => Promise<void>;
+  /**
+   * Longest `text` that `send` delivers whole when it carries actions. Approve buttons are only
+   * offered when the complete approval preview fits. Omit when the platform has no practical limit.
+   */
+  noticeLimit?: number;
   /** Start a long-lived connection (polling, gateway). Returns a stop function. */
   start?: (runtime: ChannelRuntime) => Promise<() => void | Promise<void>>;
 };

@@ -1,6 +1,7 @@
 /** Streaming chat for the web UI, using the AI SDK's native tool-approval flow. */
 import { convertToModelMessages, generateId, stepCountIs, streamText, type UIMessage } from "ai";
 import type { Memory, ModelRef, Routing, Settings } from "./contract.ts";
+import { reviewModel } from "./approvals.ts";
 import { memoryPrompt } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, type ModelResolver } from "./providers.ts";
@@ -27,7 +28,11 @@ export type ChatRequest = {
 
 export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<Response> {
   const model = request.model ? deps.models.chain([request.model]) : deps.models.forLane(deps.routing, "chat");
-  const built = buildTools(deps.plugins, { policy: deps.settings.approvals, log: deps.log });
+  const built = buildTools(deps.plugins, {
+    policy: deps.settings.approvals,
+    reviewer: { mode: deps.settings.reviewer, model: reviewModel(deps.models, deps.routing) },
+    log: deps.log,
+  });
 
   const result = streamText({
     model,

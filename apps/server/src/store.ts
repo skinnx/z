@@ -1,6 +1,7 @@
 /** SQLite persistence. Secrets go through the sealer and never leave as plaintext views. */
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
+  approvalPreview,
   Lane,
   Routing,
   Settings,
@@ -229,6 +230,9 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     risk: r.risk,
     input: parse(r.input, null),
     summary: r.summary,
+    // Rows from before previews existed get one rebuilt from the stored input.
+    preview: parse(r.preview, null) ?? approvalPreview(r.tool, parse(r.input, null), { summary: r.summary }),
+    reason: r.reason ?? null,
     status: r.status,
     createdAt: r.created_at,
     decidedAt: r.decided_at,
@@ -248,8 +252,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     note: (id: string): string | null => get("SELECT note FROM approvals WHERE id = ?", id)?.note ?? null,
     insert: (a: Approval) =>
       run(
-        `INSERT INTO approvals (id, task_id, tool_approval_id, tool, risk, input, summary, status, created_at, decided_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO approvals (id, task_id, tool_approval_id, tool, risk, input, summary, preview, reason, status, created_at, decided_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         a.id,
         a.taskId,
         a.toolApprovalId,
@@ -257,6 +261,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         a.risk,
         json(a.input),
         a.summary,
+        json(a.preview),
+        a.reason,
         a.status,
         a.createdAt,
         a.decidedAt,
