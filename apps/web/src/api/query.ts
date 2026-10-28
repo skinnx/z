@@ -1,4 +1,5 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, type QueryKey } from "@tanstack/react-query";
+import { notifyError } from "../ui/toast.tsx";
 import { ApiError } from "./client.ts";
 
 export const queryClient = new QueryClient({
@@ -40,6 +41,27 @@ export const keys = {
   setup: ["setup"] as const,
   thread: (id: string) => ["thread", id] as const,
 };
+
+/**
+ * Mutation options that show the change at once: `apply` rewrites the cached list before the request
+ * goes out; a failure puts the list back, says why in a toast and refetches what the server has.
+ * The callbacks live on the mutation, so they run even if the component that started it is gone.
+ */
+export function optimisticList<T, V>(key: QueryKey, apply: (list: T[], vars: V) => T[]) {
+  return {
+    onMutate: async (vars: V) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<T[]>(key);
+      if (previous) queryClient.setQueryData<T[]>(key, apply(previous, vars));
+      return { previous };
+    },
+    onError: (error: unknown, _vars: V, ctx: { previous?: T[] } | undefined) => {
+      if (ctx?.previous) queryClient.setQueryData(key, ctx.previous);
+      notifyError(error);
+      void queryClient.invalidateQueries({ queryKey: key });
+    },
+  };
+}
 
 /** Insert or replace an item in a cached list, by id. */
 export function upsert<T extends { id: string }>(list: T[] | undefined, item: T, prepend = true): T[] {

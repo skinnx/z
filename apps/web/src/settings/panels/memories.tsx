@@ -207,13 +207,13 @@ function ReviewRow({ memory }: { memory: Memory }) {
         <MemoryMeta memory={memory} />
       </div>
       <div className="flex items-center justify-end gap-1 sm:pt-1">
-        <IconButton label={t.discardMemory} size="icon-sm" className="hover:text-danger" disabled={remove.isPending} onClick={() => remove.mutate(memory.id, { onError: notifyError })}>
+        <IconButton label={t.discardMemory} size="icon-sm" className="hover:text-danger" disabled={remove.isPending} onClick={() => remove.mutate(memory.id)}>
           <X aria-hidden />
         </IconButton>
         <IconButton label={t.edit} size="icon-sm" onClick={() => setEditing(true)}>
           <Pencil aria-hidden />
         </IconButton>
-        <Button size="sm" variant="primary" disabled={confirm.isPending} onClick={() => confirm.mutate(memory.id, { onError: notifyError })}>
+        <Button size="sm" variant="primary" disabled={confirm.isPending} onClick={() => confirm.mutate(memory.id)}>
           {confirm.isPending ? <Spinner /> : <Check aria-hidden />}
           {t.confirmMemory}
         </Button>
@@ -248,7 +248,7 @@ function MemoryRow({ memory }: { memory: Memory }) {
         size="icon-sm"
         className={cn(memory.pinned && "text-accent-text")}
         disabled={pin.isPending}
-        onClick={() => pin.mutate({ id: memory.id, pinned: !memory.pinned }, { onError: notifyError })}
+        onClick={() => pin.mutate({ id: memory.id, pinned: !memory.pinned })}
       >
         <Pin aria-hidden className={cn(memory.pinned && "fill-current")} />
       </IconButton>
@@ -263,7 +263,7 @@ function MemoryRow({ memory }: { memory: Memory }) {
         }
         title={t.forgetConfirm}
         confirmLabel={t.forget}
-        onConfirm={() => remove.mutateAsync(memory.id).then(() => undefined, notifyError)}
+        onConfirm={() => remove.mutateAsync(memory.id).then(() => undefined, () => undefined)}
       />
     </li>
   );

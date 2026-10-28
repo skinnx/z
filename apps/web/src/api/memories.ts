@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import type { Memory } from "@z/core";
 import { api } from "./client.ts";
-import { keys, queryClient, upsert } from "./query.ts";
+import { keys, optimisticList, queryClient, upsert } from "./query.ts";
 
 export function useMemories() {
   return useQuery({ queryKey: keys.memories, queryFn: () => api<Memory[]>("/memories") });
@@ -32,6 +32,7 @@ export function useSaveMemory() {
 
 export function useConfirmMemory() {
   return useMutation({
+    ...optimisticList<Memory, string>(keys.memories, (list, id) => list.map((m) => (m.id === id ? { ...m, status: "active" as const } : m))),
     mutationFn: (id: string) => api<Memory>(`/memories/${encodeURIComponent(id)}/confirm`, { method: "POST" }),
     onSuccess: put,
   });
@@ -39,6 +40,7 @@ export function useConfirmMemory() {
 
 export function usePinMemory() {
   return useMutation({
+    ...optimisticList<Memory, { id: string; pinned: boolean }>(keys.memories, (list, { id, pinned }) => list.map((m) => (m.id === id ? { ...m, pinned } : m))),
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) => api<Memory>(`/memories/${encodeURIComponent(id)}/pin`, { body: { pinned } }),
     onSuccess: put,
   });
@@ -46,6 +48,7 @@ export function usePinMemory() {
 
 export function useDeleteMemory() {
   return useMutation({
+    ...optimisticList<Memory, string>(keys.memories, (list, id) => list.filter((m) => m.id !== id)),
     mutationFn: (id: string) => api<{ ok: true }>(`/memories/${encodeURIComponent(id)}`, { method: "DELETE" }),
     onSuccess: (_, id) => {
       queryClient.setQueryData<Memory[]>(keys.memories, (list) => list?.filter((m) => m.id !== id));

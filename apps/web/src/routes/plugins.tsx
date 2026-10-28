@@ -13,7 +13,7 @@ import { Disclosure } from "../ui/collapsible.tsx";
 import { Field, Input, Textarea } from "../ui/field.tsx";
 import { Page } from "../ui/page.tsx";
 import { Switch } from "../ui/switch.tsx";
-import { notify, notifyError } from "../ui/toast.tsx";
+import { notify } from "../ui/toast.tsx";
 
 export default function Plugins() {
   const t = useT();
@@ -66,7 +66,7 @@ function PluginCard({ plugin: p }: { plugin: PluginManifest }) {
           aria-label={`${t.enabled}: ${p.name}`}
           checked={p.enabled}
           disabled={save.isPending}
-          onCheckedChange={(enabled) => save.mutate({ id: p.id, enabled }, { onError: notifyError })}
+          onCheckedChange={(enabled) => save.mutate({ id: p.id, enabled })}
         />
       </div>
 
@@ -97,7 +97,6 @@ function PluginCard({ plugin: p }: { plugin: PluginManifest }) {
                     setValues({});
                     notify("success", t.saved, p.name);
                   },
-                  onError: notifyError,
                 },
               );
             }}

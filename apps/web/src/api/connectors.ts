@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ConnectorInput, ConnectorPreset, ConnectorView, OAuthStart, Risk } from "@z/core";
 import { api } from "./client.ts";
-import { keys, queryClient, upsert } from "./query.ts";
+import { keys, optimisticList, queryClient, upsert } from "./query.ts";
 
 const path = (id: string) => `/connectors/${encodeURIComponent(id)}`;
 const put = (c: ConnectorView) => queryClient.setQueryData<ConnectorView[]>(keys.connectors, (list) => upsert(list, c, false));
@@ -19,6 +19,21 @@ export function useConnectors() {
 export function useSaveConnector() {
   return useMutation({
     mutationFn: (input: ConnectorInput) => api<ConnectorView>(path(input.id), { method: "PUT", body: input }),
+    onSuccess: put,
+  });
+}
+
+/**
+ * Turn a connector on or off. The switch flips at once (turning on reads as connecting) while the
+ * server reconnects; a failure flips it back with a toast.
+ */
+export function useSetConnectorEnabled() {
+  return useMutation({
+    mutationFn: ({ connector, enabled }: { connector: ConnectorView; enabled: boolean }) =>
+      api<ConnectorView>(path(connector.id), { method: "PUT", body: connectorInput(connector, { enabled }) }),
+    ...optimisticList<ConnectorView, { connector: ConnectorView; enabled: boolean }>(keys.connectors, (list, { connector, enabled }) =>
+      list.map((c) => (c.id === connector.id ? { ...c, enabled, status: enabled ? "connecting" : "disabled" } : c)),
+    ),
     onSuccess: put,
   });
 }

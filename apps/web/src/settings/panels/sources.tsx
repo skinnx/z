@@ -1,7 +1,7 @@
 /** Connected MCP sources at a glance: status, on/off, and the way to the full Sources screen. */
 import type { ConnectorView } from "@z/core";
 import { Cable, Plus } from "lucide-react";
-import { connectorInput, useConnectors, useSaveConnector } from "../../api/connectors.ts";
+import { useConnectors, useSetConnectorEnabled } from "../../api/connectors.ts";
 import { useT } from "../../i18n.ts";
 import { cn } from "../../lib/cn.ts";
 import { statusDot } from "../../lib/connectors.ts";
@@ -9,7 +9,6 @@ import { Button } from "../../ui/button.tsx";
 import { Empty, Loading, LoadError } from "../../ui/card.tsx";
 import { Row, RowGroup } from "../../ui/row.tsx";
 import { Switch } from "../../ui/switch.tsx";
-import { notifyError } from "../../ui/toast.tsx";
 import { useSettingsRoute } from "../route.ts";
 
 export function SourcesPanel() {
@@ -49,7 +48,7 @@ export function SourcesPanel() {
 
 function SourceRow({ connector: c, onManage }: { connector: ConnectorView; onManage: () => void }) {
   const t = useT();
-  const save = useSaveConnector();
+  const setEnabled = useSetConnectorEnabled();
   return (
     <Row
       label={
@@ -73,10 +72,10 @@ function SourceRow({ connector: c, onManage }: { connector: ConnectorView; onMan
           <Switch
             aria-labelledby={labelId}
             aria-describedby={hintId}
-            // Optimistic: connecting can take seconds; a failure falls back to the stored value.
-            checked={save.isPending ? (save.variables.enabled ?? c.enabled) : c.enabled}
-            disabled={save.isPending}
-            onCheckedChange={(enabled) => save.mutate(connectorInput(c, { enabled }), { onError: notifyError })}
+            // Optimistic: connecting can take seconds; a failure flips it back.
+            checked={c.enabled}
+            disabled={setEnabled.isPending}
+            onCheckedChange={(enabled) => setEnabled.mutate({ connector: c, enabled })}
           />
         </>
       )}

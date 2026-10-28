@@ -7,7 +7,6 @@ import { relativeTime, json } from "../lib/format.ts";
 import { riskIcon, riskTone } from "../lib/icons.tsx";
 import { cn } from "../lib/cn.ts";
 import { Disclosure } from "../ui/collapsible.tsx";
-import { notifyError } from "../ui/toast.tsx";
 import { CodeBlock } from "./ai-elements/code-block.tsx";
 import { Confirmation, ConfirmationAction, ConfirmationActions, ConfirmationRequest, ConfirmationTitle } from "./ai-elements/confirmation.tsx";
 
@@ -33,7 +32,7 @@ export function ApprovalCard({ approval, taskTitle }: { approval: Approval; task
   const decide = useDecide();
   const Icon = riskIcon[approval.risk];
   const run = (approve: boolean, remember = false) =>
-    decide.mutate({ id: approval.id, decision: { approve, remember } }, { onError: notifyError });
+    decide.mutate({ id: approval.id, decision: { approve, remember } });
   const state = approval.status === "pending" ? "approval-requested" : approval.status === "denied" ? "output-denied" : "approval-responded";
 
   return (

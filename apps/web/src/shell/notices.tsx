@@ -127,14 +127,8 @@ function NoticeApproval({ notice }: { notice: Notice }) {
   const run = (approve: boolean) =>
     decide.mutate(
       { id: notice.approvalId!, decision: { approve } },
-      {
-        onError: (error) => {
-          notifyError(error);
-          // Decided elsewhere a moment ago: show what happened.
-          void queryClient.invalidateQueries({ queryKey: keys.notices });
-          void queryClient.invalidateQueries({ queryKey: keys.approvals });
-        },
-      },
+      // Decided elsewhere a moment ago: show what happened (the mutation toasts and restores approvals).
+      { onError: () => void queryClient.invalidateQueries({ queryKey: keys.notices }) },
     );
   return (
     <div role="group" aria-label={noticeTitle(notice, t)} className="flex flex-wrap gap-2 px-3 pb-3 ps-10">

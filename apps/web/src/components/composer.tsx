@@ -12,7 +12,7 @@ import { withZone, zoneHint } from "../lib/timezones.ts";
 import { useSettings } from "../api/settings.ts";
 import { Field, Input } from "../ui/field.tsx";
 import { Select } from "../ui/select.tsx";
-import { notify, notifyError } from "../ui/toast.tsx";
+import { notify } from "../ui/toast.tsx";
 import { Segmented } from "../ui/toggle-group.tsx";
 
 /** "watch" is a standing check: it runs on a schedule and only speaks up when something new matches. */
@@ -34,6 +34,8 @@ export function Composer({
   const navigate = useNavigate();
   const create = useCreateTask();
   const [text, setText] = useState(initial);
+  const textRef = useRef(text);
+  textRef.current = text;
   const [skill, setSkill] = useState<Skill | null>(null);
   const [mode, setMode] = useState<Mode>("once");
   const [every, setEvery] = useState<WatchEvery>("hourly");
@@ -48,7 +50,7 @@ export function Composer({
   const needsCron = watch ? every === "custom" : mode === "custom";
   const needsTime = watch ? every === "daily" : mode === "daily" || mode === "weekdays";
   const cronError = needsCron && cron.trim() !== "" && !isValidCron(cron) ? t.cronInvalid : undefined;
-  const canSubmit = (text.trim().length > 0 || skill !== null) && !cronError && !(needsCron && !cron.trim()) && !create.isPending;
+  const canSubmit = (text.trim().length > 0 || skill !== null) && !cronError && !(needsCron && !cron.trim());
   const modes: { value: Mode; label: string; icon: ReactNode }[] = [
     { value: "once", label: t.sched_once, icon: <Zap aria-hidden /> },
     { value: "daily", label: t.sched_daily, icon: <Repeat aria-hidden /> },
@@ -60,12 +62,15 @@ export function Composer({
   function submit() {
     if (!canSubmit) return;
     const schedule = watch ? watchCron(every, time, cron) : toCron(mode as Preset, time, cron);
-    create.mutate(
-      { instructions: withSkill(skill, text), ...(schedule ? { schedule } : {}), ...(watch ? { mode: "watch" as const } : {}) },
-      {
-        onSuccess: (task) => {
-          setText("");
-          setSkill(null);
+    // Handed off at once: the box clears and the task shows as queued while the request is out.
+    // A failure (toasted by the mutation) puts the words back, unless something new was typed since.
+    const draft = { text, skill };
+    setText("");
+    setSkill(null);
+    create
+      .mutateAsync({ instructions: withSkill(skill, text), ...(schedule ? { schedule } : {}), ...(watch ? { mode: "watch" as const } : {}) })
+      .then(
+        (task) => {
           const when = schedule && task.nextRunAt ? ` · ${t.nextRunAt(withZone(dateTime(task.nextRunAt)))}` : "";
           notify("success", watch ? t.watchStarted : schedule ? t.taskScheduled : t.taskQueued, `${task.title}${when}`, {
             label: t.showDetails,
@@ -73,9 +78,12 @@ export function Composer({
           });
           onDone?.();
         },
-        onError: notifyError,
-      },
-    );
+        () => {
+          if (textRef.current !== "") return;
+          setText(draft.text);
+          setSkill(draft.skill);
+        },
+      );
   }
 
   return (
