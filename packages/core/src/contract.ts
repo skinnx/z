@@ -309,7 +309,8 @@ export type ConnectorAuth = z.infer<typeof ConnectorAuth>;
 export const ConnectorInput = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
   label: z.string().min(1).max(64),
-  url: z.url(),
+  /** Required when creating; omit on update to keep the stored URL. */
+  url: z.url().optional(),
   transport: z.enum(["http", "sse"]).default("http"),
   auth: ConnectorAuth.default("none"),
   /** Static headers (e.g. `Authorization`, `x-api-key`). Write-only like provider keys; omit to keep, `{}` clears. */
@@ -334,7 +335,12 @@ export type ConnectorTool = {
   riskSource: "hint" | "default" | "user";
 };
 
-export type ConnectorView = Omit<z.output<typeof ConnectorInput>, "headers"> & {
+export type ConnectorView = Omit<z.output<typeof ConnectorInput>, "headers" | "url"> & {
+  /**
+   * The URL with path and query hidden (`https://mcp.zapier.com/…`): some services embed
+   * the secret in the URL, so the full URL is write-only like headers. PUT without `url` keeps it.
+   */
+  urlDisplay: string;
   /** Header names that have a stored value; values are never returned. */
   headerKeys: string[];
   status: "connected" | "connecting" | "needs_auth" | "error" | "disabled";
