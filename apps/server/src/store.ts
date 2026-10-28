@@ -6,6 +6,7 @@ import {
   approvalPreview,
   Lane,
   memoryTerms,
+  NOT_CHECKED,
   Routing,
   Settings,
   STARTER_SKILLS,
@@ -372,7 +373,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     id: r.id,
     date: r.date,
     summary: r.summary,
-    items: parse<BriefItem[]>(r.items, []),
+    // Briefings from before triage: nothing sorted them, so they read as needing the user.
+    items: parse<Partial<BriefItem>[]>(r.items, []).map((i) => ({ priority: "needs_you", reason: NOT_CHECKED, decidedBy: "rule", ...i }) as BriefItem),
     ...(r.could_not_check ? { couldNotCheck: parse(r.could_not_check, []) } : {}),
     createdAt: r.created_at,
   });
