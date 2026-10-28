@@ -1,4 +1,4 @@
-import type { ProviderKind, Routing } from "@z/core";
+import type { ProviderKind } from "@z/core";
 
 /** Model ids may contain ":" themselves (`llm7:gpt-oss:20b`), so split on the first one only. */
 export function splitRef(ref: string): { provider: string; model: string } {
@@ -66,12 +66,3 @@ export function presetFor(kind: ProviderKind, baseURL?: string): ProviderPreset 
     PRESETS[PRESETS.length - 1]!
   );
 }
-
-/** One-tap onboarding: LLM7 serves every lane, with fallbacks inside the same provider. */
-export const LLM7_ROUTING: Routing = {
-  chat: ["llm7:gpt-oss:20b", "llm7:codestral-latest"],
-  agent: ["llm7:gpt-oss:20b", "llm7:nemotron-3-nano:30b"],
-  briefing: ["llm7:gpt-oss:20b", "llm7:codestral-latest"],
-  bot: ["llm7:codestral-latest", "llm7:gpt-oss:20b"],
-  fast: ["llm7:codestral-latest"],
-};

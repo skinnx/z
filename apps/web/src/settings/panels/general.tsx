@@ -1,10 +1,11 @@
 import type { Settings } from "@z/core";
-import { ArrowUpRight, AtSign, Clock, Languages, Monitor, Moon, Sun } from "lucide-react";
+import { ArrowUpRight, AtSign, Clock, Languages, LocateFixed, Monitor, Moon, Sun } from "lucide-react";
 import { useMemo } from "react";
 import { useSaveSetting, useSettings } from "../../api/settings.ts";
 import { locale, useT, type Locale } from "../../i18n.ts";
 import { isValidCron, parseCron } from "../../lib/cron.ts";
 import { theme, type ThemePref } from "../../lib/theme.ts";
+import { canonicalZone, deviceZone, zoneCity, zoneHint, zoneLabel, zoneList, zoneMatches, zoneOffset } from "../../lib/timezones.ts";
 import { Button } from "../../ui/button.tsx";
 import { Combobox } from "../../ui/combobox.tsx";
 import { Input } from "../../ui/field.tsx";
@@ -70,13 +71,17 @@ function ThemeRow() {
 function LanguageRow() {
   const t = useT();
   const lang = locale.use();
+  const { save } = useSaveSetting();
   return (
     <Row label={t.language}>
       {({ labelId }) => (
         <Select<Locale>
           aria-labelledby={labelId}
           value={lang}
-          onChange={(v) => locale.set(v)}
+          onChange={(v) => {
+            locale.set(v);
+            save({ language: v }); // for what z writes away from this browser
+          }}
           className="w-44"
           options={[
             { value: "en", label: "English", icon: <Languages aria-hidden /> },
@@ -129,25 +134,36 @@ function HandleRow({ value }: { value: string }) {
   );
 }
 
+/** Search by city, country, old name or offset; "Use this device's" when it differs. */
 function TimezoneRow({ value }: { value: string }) {
   const t = useT();
   const { save, saved } = useSaveSetting();
-  const zones = useMemo(() => {
-    const list = Intl.supportedValuesOf("timeZone");
-    return list.includes("UTC") ? list : ["UTC", ...list];
-  }, []);
+  const zones = useMemo(zoneList, []);
+  const current = canonicalZone(value);
+  const device = deviceZone();
   return (
-    <Row label={t.timezone} saved={saved}>
-      {({ labelId }) => (
-        <Combobox
-          aria-labelledby={labelId}
-          items={zones}
-          value={value}
-          onChange={(tz) => tz && tz !== value && save({ timezone: tz })}
-          emptyText={t.noResults}
-          placeholder="UTC"
-          className="w-56"
-        />
+    <Row label={t.timezone} hint={t.timezoneHint} saved={saved}>
+      {({ labelId, hintId }) => (
+        <div className="flex w-full flex-col items-stretch gap-2 sm:w-72 sm:items-end">
+          <Combobox
+            aria-labelledby={labelId}
+            aria-describedby={hintId}
+            items={zones}
+            value={current}
+            label={zoneLabel}
+            filter={zoneMatches}
+            onChange={(tz) => tz && tz !== current && save({ timezone: tz })}
+            emptyText={t.noResults}
+            placeholder={t.searchZone}
+            className="w-full"
+          />
+          {device !== current && (
+            <Button size="sm" variant="ghost" onClick={() => save({ timezone: device })}>
+              <LocateFixed aria-hidden />
+              {t.useDeviceZone(`${zoneCity(device)}, ${zoneOffset(device)}`)}
+            </Button>
+          )}
+        </div>
       )}
     </Row>
   );
@@ -165,7 +181,7 @@ function BriefingRow({ cron }: { cron: string }) {
   });
   const expr = useAutosaveText(cron, (v) => isValidCron(v) && save({ briefingCron: v.trim() }));
   return (
-    <Row label={t.briefingTime} hint={custom ? t.cronExpr : undefined} saved={saved}>
+    <Row label={t.briefingTime} hint={custom ? t.cronExpr : t.inZone(zoneHint(true) ?? "UTC")} saved={saved}>
       {({ labelId, hintId }) =>
         custom ? (
           <Input

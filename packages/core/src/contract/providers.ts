@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Lane } from "./common.ts";
 
 // ─── BYOK: providers & model routing ────────────────────────────────────────
 
@@ -74,9 +75,17 @@ export type ProviderView = Omit<z.output<typeof ProviderInput>, "apiKey"> & {
   usage: { monthUsd: number; monthTokens: number };
 };
 
+/**
+ * PUT /api/providers/:id?check=1: saved first, then checked live with a short timeout. With no models
+ * the server lists the provider's and keeps a main and a quick one. When the check answered (or was
+ * only rate limited or slow), every empty lane gets this provider's models; `filledLanes` says which.
+ * A rejected key still saves: `check` carries the error so the form can show it.
+ */
+export type ProviderSaveResult = ProviderView & { check?: ProviderTestResult; filledLanes?: Lane[] };
+
 // Routes (HTTP API; overview in ../contract.ts):
 // GET    /api/providers                    → ProviderView[]
-// PUT    /api/providers/:id ProviderInput  → ProviderView
+// PUT    /api/providers/:id ProviderInput  → ProviderView (`?check=1`: ProviderSaveResult, see above)
 // DELETE /api/providers/:id                → { ok: true }
 // POST   /api/providers/:id/test           → ProviderTestResult (codex-cli: with `account`, the sign-in state)
 // GET    /api/providers/:id/models         → { models: string[] }   (live list from the provider when supported)

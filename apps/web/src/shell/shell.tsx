@@ -3,6 +3,7 @@ import { Suspense, useCallback } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useNeedsYou } from "../api/needs.ts";
 import { useLiveEvents } from "../api/live.ts";
+import { useOwnerDefaults } from "../api/owner-defaults.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { toggleTheme } from "../lib/theme.ts";
@@ -46,6 +47,7 @@ export function Shell() {
   const pending = useNeedsYou().count;
   const go = useCallback((path: string) => navigate(path), [navigate]);
   useLiveEvents(go);
+  useOwnerDefaults();
   const settings = useSettingsRoute();
   const isChat = location.pathname.startsWith("/chat");
   const morePaths = NAV.filter((n) => !n.primary).map((n) => n.to);

@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { Lane, ModelRef, ProviderInput, ProviderTestResult, ProviderView, Routing } from "@z/core";
+import type { Lane, ModelRef, ProviderInput, ProviderSaveResult, ProviderTestResult, ProviderView, Routing } from "@z/core";
+import { createSignal } from "../lib/store.ts";
 import { api } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
@@ -14,6 +15,37 @@ export function useSaveProvider() {
     onSuccess: (p) => {
       queryClient.setQueryData<ProviderView[]>(keys.providers, (list) => upsert(list, p, false));
       void queryClient.invalidateQueries({ queryKey: keys.providerModels(p.id) });
+    },
+  });
+}
+
+/** The last live check per provider (on save or Test), so cards and the form say "Key rejected" until one passes. */
+const lastChecks = createSignal<Record<string, ProviderTestResult>>({});
+const rememberCheck = (id: string, check: ProviderTestResult) => lastChecks.set({ ...lastChecks.get(), [id]: check });
+
+export function useProviderCheck(id: string | null): ProviderTestResult | undefined {
+  const all = lastChecks.use();
+  return id ? all[id] : undefined;
+}
+
+/** A definite "no" (bad key, unknown model), as opposed to rate limited or slow. */
+export const checkFailed = (c: ProviderTestResult | undefined) => Boolean(c && !c.ok && !c.rateLimited && !c.timedOut);
+
+/**
+ * Save and check live: the server tests the key with a short timeout, picks models when none are
+ * listed and fills every empty lane when the provider answered (or was only rate limited).
+ */
+export function useSaveCheckedProvider() {
+  return useMutation({
+    mutationFn: (input: ProviderInput) =>
+      api<ProviderSaveResult>(`/providers/${encodeURIComponent(input.id)}?check=1`, { method: "PUT", body: input }),
+    onSuccess: (p) => {
+      const { check: _check, filledLanes: _filled, ...view } = p;
+      queryClient.setQueryData<ProviderView[]>(keys.providers, (list) => upsert(list, view, false));
+      if (p.check) rememberCheck(p.id, p.check);
+      void queryClient.invalidateQueries({ queryKey: keys.providerModels(p.id) });
+      void queryClient.invalidateQueries({ queryKey: keys.routing });
+      void queryClient.invalidateQueries({ queryKey: keys.setup });
     },
   });
 }
@@ -33,6 +65,7 @@ export type ProviderTest = ProviderTestResult;
 export function useTestProvider() {
   return useMutation({
     mutationFn: (id: string) => api<ProviderTest>(`/providers/${encodeURIComponent(id)}/test`, { method: "POST" }),
+    onSuccess: (result, id) => rememberCheck(id, result),
     // A test is a live check: the setup checklist reflects it.
     onSettled: () => queryClient.invalidateQueries({ queryKey: keys.setup }),
   });

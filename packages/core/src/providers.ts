@@ -511,3 +511,75 @@ export function describeError(error: unknown): string {
   }
   return String(error).slice(0, 300);
 }
+
+// ─── Default lanes for a new provider ───────────────────────────────────────
+
+/** Ids that are not chat models (embeddings, speech, images, moderation…). */
+const NOT_CHAT = /embed|whisper|tts|dall-e|image|audio|realtime|moderation|transcri|speech|rerank|guard|computer-use|sora|veo|imagen|lyria|aqa|babbage|davinci/i;
+/** Name hints that a model is small and quick, with how strongly. */
+const FAST_HINTS: Record<string, number> = { nano: 6, tiny: 5, lite: 5, haiku: 5, mini: 4, fast: 4, instant: 4, flash: 3, small: 3, turbo: 1 };
+/** Top-tier (slow, costly) models: never a default. */
+const HEAVY = /(^|[-_:/.])(pro|opus|ultra|max|large|deep-research|o1|o3|thinking)([-_:.]|$)/i;
+/** Dated snapshots and previews: the plain alias is the better default. */
+const SNAPSHOT = /\d{4}-\d{2}-\d{2}|-\d{8}|-\d{4}$|preview|-exp\b|experimental/i;
+
+/** Parameter count in billions from names like `gpt-oss:20b` or `llama-3.1-8b`, or null. */
+function paramsB(id: string): number | null {
+  const m = /(?:^|[\s:_/-])(\d+(?:\.\d+)?)b(?![a-z0-9])/i.exec(id);
+  return m ? Number(m[1]) : null;
+}
+
+/** The model generation in a name (`gpt-4.1` → 4.1, `claude-sonnet-4-5` → 4.5), or 0. Sizes (`20b`) don't count. */
+function generation(id: string): number {
+  for (const m of id.matchAll(/(?<![\d.])(\d)(?:[.-](\d)(?![\d.]))?(?![\d.])/g)) {
+    if (/^b(?![a-z])/i.test(id.slice(m.index + m[0].length))) continue;
+    return Number(`${m[1]}.${m[2] ?? 0}`);
+  }
+  return 0;
+}
+
+/** How small and quick a model sounds from its name; higher is faster. */
+export function fastScore(id: string): number {
+  // Whole name parts only: "gemini" is not "mini".
+  const hints = id.toLowerCase().split(/[^a-z0-9]+/).reduce((s, part) => s + (FAST_HINTS[part] ?? 0), 0);
+  const size = paramsB(id);
+  return hints + (size === null ? 0 : size <= 10 ? 3 : size <= 35 ? 1 : -1) - (HEAVY.test(id) ? 4 : 0);
+}
+
+/**
+ * Pick a provider's default models from names alone: `main` for chat, tasks, briefings and bots,
+ * `fast` (the smallest, quickest-sounding one) for quick checks. `ordered`: the owner listed these
+ * models themselves, so their first is the main one; otherwise (a live listing) main is the newest
+ * general model that is neither top-tier, a snapshot nor a small one.
+ */
+export function pickDefaultModels(models: string[], ordered: boolean): { main: string; fast: string } | null {
+  const chat = models.filter((m) => !NOT_CHAT.test(m));
+  const pool = chat.length ? chat : models;
+  if (!pool.length) return null;
+  const byLength = (a: string, b: string) => a.length - b.length || a.localeCompare(b);
+  const snap = (id: string) => (SNAPSHOT.test(id) ? 1 : 0);
+  const mainScore = (id: string) => {
+    const size = paramsB(id);
+    return generation(id) - (HEAVY.test(id) ? 10 : 0) - snap(id) * 5 - (fastScore(id) >= 4 ? 3 : 0) - (size !== null && size < 30 ? 2 : 0);
+  };
+  const main = ordered ? pool[0]! : [...pool].sort((a, b) => mainScore(b) - mainScore(a) || byLength(a, b))[0]!;
+  const fastest = [...pool].sort((a, b) => fastScore(b) - fastScore(a) || snap(a) - snap(b) || generation(b) - generation(a) || byLength(a, b))[0]!;
+  return { main, fast: fastScore(fastest) > fastScore(main) ? fastest : main };
+}
+
+/**
+ * Fill every empty lane with one provider's models: `fast` gets the quick model first, every other
+ * lane the main one, each with the other as its in-provider fallback. Lanes already set are kept.
+ */
+export function fillEmptyLanes(routing: Routing, providerId: string, picks: { main: string; fast: string }): { routing: Routing; filled: Lane[] } {
+  const main = `${providerId}:${picks.main}`;
+  const fast = `${providerId}:${picks.fast}`;
+  const next: Routing = { ...routing };
+  const filled: Lane[] = [];
+  for (const lane of ["chat", "agent", "briefing", "bot", "fast"] as const) {
+    if (routing[lane]?.length) continue;
+    next[lane] = [...new Set(lane === "fast" ? [fast, main] : [main, fast])];
+    filled.push(lane);
+  }
+  return { routing: next, filled };
+}

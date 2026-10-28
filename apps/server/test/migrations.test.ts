@@ -95,3 +95,29 @@ test("migrations: a database from before named migrations (user_version only) ad
     cleanup(dir);
   }
 });
+
+test("migrations: settings saved before timezoneSet keep their timezone as chosen; fresh installs don't", () => {
+  const dir = tempDir();
+  try {
+    const old = new DatabaseSync(join(dir, "z.db"));
+    migrate(old, MIGRATION_COUNT - 1);
+    old.prepare("INSERT INTO kv (key, value) VALUES ('settings', ?)").run(JSON.stringify({ timezone: "UTC", handle: "z" }));
+    old.close();
+    const db = openDatabase(dir);
+    const value = JSON.parse((db.prepare("SELECT value FROM kv WHERE key = 'settings'").get() as { value: string }).value);
+    assert.equal(value.timezoneSet, true);
+    assert.equal(value.timezone, "UTC");
+    db.close();
+
+    const fresh = tempDir();
+    try {
+      const f = openDatabase(fresh);
+      assert.equal(f.prepare("SELECT value FROM kv WHERE key = 'settings'").get(), undefined, "nothing to mark on a fresh install");
+      f.close();
+    } finally {
+      cleanup(fresh);
+    }
+  } finally {
+    cleanup(dir);
+  }
+});

@@ -367,6 +367,15 @@ const MIGRATIONS: Migration[] = [
   `,
   },
   // ─── End Codex CLI provider ───────────────────────────────────────────────
+  // Settings saved before `timezoneSet` existed hold a timezone the owner may have chosen on purpose
+  // (UTC included): mark it as chosen so the web app never swaps it for the browser's.
+  {
+    id: "0017-timezone-chosen",
+    sql: `
+  UPDATE kv SET value = json_set(value, '$.timezoneSet', json('true'))
+    WHERE key = 'settings' AND json_extract(value, '$.timezoneSet') IS NULL;
+  `,
+  },
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */
