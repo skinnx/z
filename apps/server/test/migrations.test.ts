@@ -13,7 +13,9 @@ const tables = (db: DatabaseSync) => {
     sql: string;
   }[];
   const virtual = all.filter((t) => /^CREATE VIRTUAL TABLE/i.test(t.sql)).map((t) => t.name);
-  return all.map((t) => t.name).filter((name) => !virtual.some((v) => name === v || name.startsWith(`${v}_`)));
+  return all
+    .map((t) => t.name)
+    .filter((name) => name !== "schema_migrations" && !virtual.some((v) => name === v || name.startsWith(`${v}_`)));
 };
 const columns = (db: DatabaseSync, table: string) => db.prepare(`PRAGMA table_info(${table})`).all() as unknown as Column[];
 
@@ -28,7 +30,10 @@ for (let prefix = 0; prefix < MIGRATION_COUNT; prefix++) {
       old.exec("PRAGMA foreign_keys = ON");
       migrate(old, prefix);
       const seeded = new Map<string, Record<string, unknown>>();
+      // Rows earlier migrations wrote themselves (markers in kv) count too: an upgrade must keep them all.
+      const before = new Map<string, number>();
       for (const table of tables(old)) {
+        before.set(table, Number((old.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n));
         const cols = columns(old, table);
         const row = Object.fromEntries(cols.map((c) => [c.name, valueFor(c)]));
         old.prepare(`INSERT INTO ${table} (${cols.map((c) => c.name).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).run(
@@ -42,8 +47,9 @@ for (let prefix = 0; prefix < MIGRATION_COUNT; prefix++) {
       assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, MIGRATION_COUNT);
       for (const [table, row] of seeded) {
         const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
-        assert.equal(rows.length, 1, `${table} keeps its row`);
-        for (const [key, value] of Object.entries(row)) assert.equal(rows[0]![key], value, `${table}.${key} unchanged`);
+        assert.equal(rows.length, before.get(table)! + 1, `${table} keeps its rows`);
+        const kept = rows.find((r) => Object.entries(row).every(([key, value]) => r[key] === value));
+        assert.ok(kept, `${table}: the seeded row is unchanged`);
       }
       // Only a database from before the task-engine migration has tasks without these columns.
       if (seeded.has("tasks") && !("failures" in seeded.get("tasks")!)) {
@@ -64,6 +70,26 @@ test("migrations: reopening an up-to-date database is a no-op", () => {
     const db = openDatabase(dir);
     assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, MIGRATION_COUNT);
     assert.ok(tables(db).includes("task_calls"));
+    db.close();
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("migrations: a database from before named migrations (user_version only) adopts them and upgrades", () => {
+  const dir = tempDir();
+  try {
+    const old = new DatabaseSync(join(dir, "z.db"));
+    migrate(old, 5);
+    old.exec("DROP TABLE schema_migrations");
+    old.exec("INSERT INTO kv (key, value) VALUES ('legacy', 'yes')");
+    old.close();
+
+    const db = openDatabase(dir);
+    const ids = (db.prepare("SELECT id FROM schema_migrations").all() as { id: string }[]).length;
+    assert.equal(ids, MIGRATION_COUNT, "every migration is recorded once");
+    assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, MIGRATION_COUNT);
+    assert.equal((db.prepare("SELECT value FROM kv WHERE key = 'legacy'").get() as { value: string }).value, "yes");
     db.close();
   } finally {
     cleanup(dir);

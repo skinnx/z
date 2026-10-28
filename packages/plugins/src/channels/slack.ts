@@ -216,11 +216,16 @@ export const slackAdapter: ChannelAdapter = {
   noticeLimit: 2900,
   send: async (runtime, threadId, message) => {
     const [channel] = threadId.split(":");
-    await slackApi(runtime, "chat.postMessage", {
+    const sent = await slackApi<{ ts: string }>(runtime, "chat.postMessage", {
       channel,
       text: truncate(message.text, 3900),
       ...(message.actions?.length ? { blocks: slackBlocks(message.text, message.actions) } : {}),
     });
+    return { ref: sent.ts };
+  },
+  edit: async (runtime, threadId, ref, text) => {
+    const [channel] = threadId.split(":");
+    await slackApi(runtime, "chat.update", { channel, ts: ref, text: truncate(text, 3900), blocks: [] });
   },
   webhook: async (request, runtime) => {
     const raw = await request.text();

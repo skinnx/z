@@ -1,9 +1,16 @@
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 
-/** Ordered schema migrations; the index + 1 is stored in `PRAGMA user_version`. Append only. */
-const MIGRATIONS: string[] = [
-  `
+/**
+ * Schema migrations, applied in array order; each one's id is recorded in `schema_migrations` once it ran.
+ * Append only: never edit, rename or reorder one that has shipped. New ids sort after the last one
+ * (`NNNN-name`), so parallel branches only ever add entries and any database upgrades from any of them.
+ */
+type Migration = { id: string; sql: string };
+const MIGRATIONS: Migration[] = [
+  {
+    id: "0001-base",
+    sql: `
   CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
   CREATE TABLE providers (
@@ -106,7 +113,10 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (channel_id, thread_id)
   );
   `,
-  `
+  },
+  {
+    id: "0002-channel-state",
+    sql: `
   CREATE TABLE channel_state (
     channel_id TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -114,9 +124,12 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (channel_id, key)
   );
   `,
+  },
   // ─── Reach & delivery: notices, Web Push devices ──────────────────────────
   // IF NOT EXISTS: other branches may create `notices` too; the shape follows the Notice contract.
-  `
+  {
+    id: "0003-notices-push",
+    sql: `
   CREATE TABLE IF NOT EXISTS notices (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -136,15 +149,21 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   `,
+  },
   // ─── End reach & delivery ─────────────────────────────────────────────────
   // ─── Proactive: watch tasks (mode + de-dup fingerprints + last finding) ───
-  `
+  {
+    id: "0004-watch-tasks",
+    sql: `
   ALTER TABLE tasks ADD COLUMN mode TEXT NOT NULL DEFAULT 'do';
   ALTER TABLE tasks ADD COLUMN watch TEXT;          -- JSON Task["watch"]
   ALTER TABLE tasks ADD COLUMN fingerprints TEXT;   -- JSON string[] seen by earlier checks
   `,
+  },
   // ─── Proactive: long-term memory ──────────────────────────────────────────
-  `
+  {
+    id: "0005-memories",
+    sql: `
   CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     text TEXT NOT NULL,
@@ -153,9 +172,12 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  },
   // ─── End proactive ────────────────────────────────────────────────────────
   // ─── Connectors: MCP servers (url, headers and OAuth state are sealed) ────
-  `
+  {
+    id: "0006-connectors",
+    sql: `
   CREATE TABLE IF NOT EXISTS connectors (
     id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
@@ -176,16 +198,22 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  },
   // ─── End connectors ───────────────────────────────────────────────────────
   // ─── Context: per-model window overrides, cached chat summaries ───────────
-  `
+  {
+    id: "0007-context-windows",
+    sql: `
   ALTER TABLE providers ADD COLUMN context_windows TEXT; -- JSON Record<modelId, tokens>
   ALTER TABLE threads ADD COLUMN summary TEXT;           -- summary of the oldest turns sent to the model
   ALTER TABLE threads ADD COLUMN summarized_up_to INTEGER; -- model messages the summary covers
   `,
+  },
   // ─── End context ──────────────────────────────────────────────────────────
   // ─── Channels: per-channel bot limits, inbound delivery receipts (7 days) ─
-  `
+  {
+    id: "0008-channel-limits",
+    sql: `
   ALTER TABLE channels ADD COLUMN limits TEXT;        -- JSON ChannelLimits; NULL = defaults
   CREATE TABLE IF NOT EXISTS channel_deliveries (
     channel_id TEXT NOT NULL,
@@ -199,17 +227,23 @@ const MIGRATIONS: string[] = [
   INSERT INTO kv (key, value) SELECT 'migrate.webhookLegacySecret', 'true'
     WHERE EXISTS (SELECT 1 FROM channels WHERE kind = 'webhook');
   `,
+  },
   // ─── End channels ─────────────────────────────────────────────────────────
   // ─── Approvals: full preview and why it asks ──────────────────────────────
-  `
+  {
+    id: "0009-approval-previews",
+    sql: `
   ALTER TABLE approvals ADD COLUMN preview TEXT;    -- JSON ApprovalPreview
   ALTER TABLE approvals ADD COLUMN reason TEXT;
   `,
+  },
   // ─── End approvals ────────────────────────────────────────────────────────
   // ─── Memory review, pinning and full-text search ──────────────────────────
   // Existing memories stay active. The FTS table keeps its own copy of the text (keyed by id, not rowid,
   // which VACUUM may renumber on a TEXT-keyed table); triggers keep it in sync.
-  `
+  {
+    id: "0010-memory-review-fts",
+    sql: `
   ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active';  -- unreviewed | active
   ALTER TABLE memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
 
@@ -227,11 +261,14 @@ const MIGRATIONS: string[] = [
     INSERT INTO memories_fts (id, text) VALUES (new.id, new.text);
   END;
   `,
+  },
   // ─── End memory review ────────────────────────────────────────────────────
   // ─── Task engine: crash journal, consecutive failures, questions, briefing gaps ─
   // `task_calls`: every write/external tool call a run started, and its result once it ends.
   // A `running` task whose started call has no result was stopped mid-action and is never re-run.
-  `
+  {
+    id: "0011-task-engine",
+    sql: `
   CREATE TABLE IF NOT EXISTS task_calls (
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     tool_call_id TEXT NOT NULL,
@@ -249,9 +286,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE tasks ADD COLUMN question TEXT;       -- JSON TaskQuestion & { toolCallId } while needs_input
   ALTER TABLE briefings ADD COLUMN could_not_check TEXT; -- JSON CouldNotCheck[]
   `,
+  },
   // ─── End task engine ──────────────────────────────────────────────────────
   // ─── Saved sign-ins: one login per origin; username, password and TOTP secret are sealed ─
-  `
+  {
+    id: "0012-logins",
+    sql: `
   CREATE TABLE IF NOT EXISTS logins (
     id TEXT PRIMARY KEY,
     origin TEXT NOT NULL UNIQUE,
@@ -262,11 +302,14 @@ const MIGRATIONS: string[] = [
     last_used_at TEXT
   );
   `,
+  },
   // ─── End saved sign-ins ───────────────────────────────────────────────────
   // ─── Skills: reusable instructions invoked with /name ─────────────────────
   // A fresh install (nothing configured yet) gets the starter skills: the store seeds them once and
   // deletes this marker, so a deleted starter skill never comes back and upgrades get none.
-  `
+  {
+    id: "0013-skills",
+    sql: `
   CREATE TABLE IF NOT EXISTS skills (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -279,20 +322,65 @@ const MIGRATIONS: string[] = [
   INSERT INTO kv (key, value) SELECT 'migrate.seedSkills', 'true'
     WHERE NOT EXISTS (SELECT 1 FROM providers) AND NOT EXISTS (SELECT 1 FROM tasks) AND NOT EXISTS (SELECT 1 FROM threads);
   `,
+  },
   // ─── End skills ───────────────────────────────────────────────────────────
+  // ─── Delivery & missed runs: notice outbox, stored questions, result de-dup, missed-run policy ─
+  // `notice_deliveries`: one row per (notice, target) — a push device endpoint or the owner channel
+  // (address = channel id, thread_id = owner thread). `ref` is the platform message id once sent.
+  {
+    id: "0014-delivery-outbox",
+    sql: `
+  CREATE TABLE IF NOT EXISTS notice_deliveries (
+    id TEXT PRIMARY KEY,
+    notice_id TEXT NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+    target TEXT NOT NULL,          -- push | channel
+    address TEXT NOT NULL,         -- push endpoint | channel id
+    thread_id TEXT,
+    status TEXT NOT NULL,          -- pending | sent | failed | dropped
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    ref TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (notice_id, target, address)
+  );
+  CREATE INDEX IF NOT EXISTS notice_deliveries_due ON notice_deliveries(status, next_attempt_at);
+  ALTER TABLE notices ADD COLUMN question TEXT;     -- JSON NoticeQuestion
+  ALTER TABLE tasks ADD COLUMN missed_policy TEXT NOT NULL DEFAULT 'once';
+  ALTER TABLE tasks ADD COLUMN result_hash TEXT;    -- sha256 of the last successful recurring result, whitespace-normalized
+  `,
+  },
+  // ─── End delivery & missed runs ───────────────────────────────────────────
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */
+/** Apply pending migrations in order, the first `upTo` of them (all by default). Exported for tests. */
 export function migrate(db: DatabaseSync, upTo = MIGRATIONS.length) {
-  const current = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
-  for (let i = current; i < upTo; i++) {
+  db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+  // Databases from before named migrations counted them in user_version: adopt that many, in order.
+  const legacy = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+  const applied = new Set((db.prepare("SELECT id FROM schema_migrations").all() as { id: string }[]).map((r) => r.id));
+  if (applied.size === 0 && legacy > 0) {
+    const adopt = db.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)");
+    for (const m of MIGRATIONS.slice(0, legacy)) {
+      adopt.run(m.id, new Date().toISOString());
+      applied.add(m.id);
+    }
+  }
+  for (const m of MIGRATIONS.slice(0, upTo)) {
+    if (applied.has(m.id)) continue;
     db.exec("BEGIN");
     try {
-      db.exec(MIGRATIONS[i]!);
-      db.exec(`PRAGMA user_version = ${i + 1}`);
+      db.exec(m.sql);
+      db.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(m.id, new Date().toISOString());
+      // Kept for diagnostics and older tooling: how many migrations this database has.
+      applied.add(m.id);
+      db.exec(`PRAGMA user_version = ${MIGRATIONS.filter((x) => applied.has(x.id)).length}`);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
+      applied.delete(m.id);
       throw error;
     }
   }

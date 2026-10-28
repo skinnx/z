@@ -1,4 +1,4 @@
-import { definePlugin, defineTool, type BriefItem } from "@z/core";
+import { definePlugin, defineTool, type BriefSourceItem } from "@z/core";
 import { z } from "zod";
 import { truncate } from "../util.ts";
 
@@ -161,6 +161,21 @@ const comment = defineTool({
   },
 });
 
+/** GitHub App accounts end in `[bot]`; their pull requests are dependency bumps and other upkeep. */
+const isBot = (login: string | null) => Boolean(login?.endsWith("[bot]"));
+
+/**
+ * Only what the notification says for certain: read already, or a workflow run that succeeded
+ * ("CI workflow run succeeded for main branch"). Failed and cancelled runs are left for triage to read.
+ */
+function notificationSignals(n: ReturnType<typeof notificationView>): Pick<BriefSourceItem, "signals"> {
+  const signals = {
+    ...(n.unread ? {} : { read: true }),
+    ...(n.reason === "ci_activity" && /\bworkflow run succeeded\b/i.test(n.title) ? { ciPassed: true } : {}),
+  };
+  return Object.keys(signals).length ? { signals } : {};
+}
+
 const TODO_REASONS = new Set(["review_requested", "mention", "team_mention", "assign", "approval_requested"]);
 
 export default definePlugin({
@@ -176,7 +191,7 @@ export default definePlugin({
   },
   briefing: async (ctx) => {
     if (!ctx.settings.token) return [];
-    const items: BriefItem[] = [];
+    const items: BriefSourceItem[] = [];
     const seen = new Set<string>();
     const reviews = await gh<{ items: Issue[] }>(ctx, `/search/issues?${new URLSearchParams({
       q: "is:open is:pr review-requested:@me archived:false",
@@ -189,9 +204,10 @@ export default definePlugin({
         id: `github:review:${v.repo}#${v.number}`,
         source: "github",
         kind: "todo",
-        text: `Review requested: ${v.repo}#${v.number} ${truncate(v.title, 160)}`,
+        text: `Review requested: ${v.repo}#${v.number} ${truncate(v.title, 160)}${v.author ? ` (by @${v.author})` : ""}`,
         url: v.url,
         suggestion: `Summarize ${v.repo}#${v.number} and the open review threads`,
+        ...(isBot(v.author) ? { signals: { bot: true } } : {}),
       });
     }
     const q = new URLSearchParams({ since: ctx.since.toISOString(), per_page: "50" });
@@ -204,6 +220,7 @@ export default definePlugin({
         kind: TODO_REASONS.has(n.reason) ? "todo" : "followup",
         text: `${n.repo}: ${truncate(n.title, 160)} (${n.reason.replace(/_/g, " ")})`,
         url: n.url,
+        ...notificationSignals(n),
       });
     }
     return items.slice(0, 40);
