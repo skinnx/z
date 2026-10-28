@@ -175,6 +175,8 @@ export const Settings = z.object({
   briefingCron: z.string().default("0 7 * * *"),
   persona: z.string().max(4000).default(""),
   approvals: ApprovalPolicy.default({}),
+  /** Use and update long-term memory. Off: nothing is recalled or remembered (stored memories are kept). */
+  memory: z.boolean().default(true),
   /**
    * Where z reaches its owner when away: approvals with buttons, watch hits, briefings.
    * Set by pairing (POST /api/owner/link, then send `/link <code>` to the bot). Read-only over PUT.
@@ -430,6 +432,11 @@ export type LiveEvent =
 // POST   /api/connectors/:id/refresh       → ConnectorView   (reconnect and re-list tools)
 // POST   /api/connectors/:id/oauth         → { authorizationUrl: string }  (start OAuth; open it in a new tab)
 // GET    /oauth/callback?code&state        → redirects to `/connect?connector=<id>` (no /api prefix; no bearer needed, state-verified)
+// GET    /api/export                       → JSON attachment `z-export-<date>.json`: everything except secrets
+//                                            (settings, routing, provider/channel/connector views, tasks, approvals,
+//                                            briefings, memories, threads, notices)
+// DELETE /api/threads                      → { deleted: number }   (all chat threads)
+// DELETE /api/memories                     → { deleted: number }   (all memories)
 // GET    /api/events                       → text/event-stream of LiveEvent
 // POST   /hooks/:channelId                 → adapter defined (inbound platform webhooks)
 //
