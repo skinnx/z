@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "pnpm -r --parallel --filter ./apps/* dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc -p scripts",
     "test": "node --test --disable-warning=ExperimentalWarning 'apps/server/test/*.test.ts'",
     "eval:factcheck": "node scripts/eval-factcheck.ts",
     "eval:triage": "node scripts/eval-triage.ts",
