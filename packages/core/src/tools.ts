@@ -11,6 +11,11 @@ export type ToolInfo = { name: string; pluginId: string; tool: ZTool; risk: Risk
 
 export type ToolCallReport = { tool: string; input: unknown; output?: unknown; error?: string };
 
+/** A call about to execute, reported synchronously before the tool runs (crash journal). */
+export type ToolCallStart = { toolCallId: string; tool: string; risk: Risk; input: unknown; summary: string };
+/** How a started call ended. */
+export type ToolCallEnd = { toolCallId: string; risk: Risk; output?: unknown; error?: string };
+
 export type BuildToolsOptions = {
   policy: ApprovalPolicy;
   /** Only expose these tool names (`plugin_tool`). */
@@ -24,6 +29,9 @@ export type BuildToolsOptions = {
   publicOnly?: boolean;
   log?: (text: string) => void;
   onCall?: (report: ToolCallReport) => void;
+  /** Called right before a tool executes and right after, with the AI SDK tool call id. */
+  onStart?: (call: ToolCallStart) => void;
+  onEnd?: (call: ToolCallEnd) => void;
 };
 
 export type BuiltTools = {
@@ -73,7 +81,7 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
       description: info.tool.description,
       inputSchema: info.tool.inputSchema,
       ...(info.tool.toModelOutput && { toModelOutput: info.tool.toModelOutput as any }),
-      execute: async (input: unknown, { abortSignal }) => {
+      execute: async (input: unknown, { abortSignal, toolCallId }) => {
         // Sensitive-data guard: write/external tools never receive card numbers, keys and the like.
         const sensitive = guarded ? findSensitive(input) : null;
         if (sensitive) {
@@ -82,6 +90,7 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
           options.onCall?.({ tool: info.name, input: `[withheld: contains ${sensitive}]`, error: message });
           throw new Error(`${message}. z never passes highly sensitive data to tools that write or send; do not retry with it.`);
         }
+        options.onStart?.({ toolCallId, tool: info.name, risk: info.risk, input, summary: summarizeCall(info, info.name, input) });
         try {
           const output = await info.tool.execute(input, {
             settings,
@@ -89,10 +98,12 @@ export function buildTools(plugins: ActivePlugin[], options: BuildToolsOptions):
             log,
             fetch,
           });
+          options.onEnd?.({ toolCallId, risk: info.risk, output });
           options.onCall?.({ tool: info.name, input, output });
           return output as any;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          options.onEnd?.({ toolCallId, risk: info.risk, error: message });
           options.onCall?.({ tool: info.name, input, error: message });
           throw error;
         }
