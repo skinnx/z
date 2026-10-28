@@ -4,6 +4,7 @@ import {
   ChannelLimits,
   approvalPreview,
   Lane,
+  memoryTerms,
   Routing,
   Settings,
   type Approval,
@@ -17,6 +18,7 @@ import {
   type ContextSummary,
   type McpToolDefinition,
   type Memory,
+  type MemoryStatus,
   type Notice,
   type ProviderConfig,
   type Task,
@@ -474,26 +476,99 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
 
   // ─── Memory ───────────────────────────────────────────────────────────────
 
-  const toMemory = (r: Row): Memory => ({ id: r.id, text: r.text, source: r.source, createdAt: r.created_at, updatedAt: r.updated_at });
+  const toMemory = (r: Row): Memory => ({
+    id: r.id,
+    text: r.text,
+    source: r.source,
+    status: r.status,
+    pinned: Boolean(r.pinned),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  });
+  type MemoryFilter = { status?: MemoryStatus; pinned?: boolean };
+  const memoryWhere = ({ status, pinned }: MemoryFilter, where: string[] = [], params: SQLInputValue[] = []) => {
+    if (status) {
+      where.push("m.status = ?");
+      params.push(status);
+    }
+    if (pinned !== undefined) {
+      where.push("m.pinned = ?");
+      params.push(pinned ? 1 : 0);
+    }
+    return { sql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
+  };
 
   const memories = {
-    list: (): Memory[] => all("SELECT * FROM memories ORDER BY updated_at DESC").map(toMemory),
+    /** Newest first. */
+    list: (filter: MemoryFilter = {}, limit = -1): Memory[] => {
+      const where = memoryWhere(filter);
+      return all(`SELECT m.* FROM memories m ${where.sql} ORDER BY m.updated_at DESC LIMIT ?`, ...where.params, limit).map(toMemory);
+    },
+    /** Full-text (FTS5) matches for any word of `query`, best bm25 first; none when it has no searchable words. */
+    search: (query: string, filter: MemoryFilter = {}, limit = 50): Memory[] => {
+      const terms = memoryTerms(query);
+      if (terms.length === 0) return [];
+      // Terms are letters and digits only, so quoting them is enough. Longer ones also match as prefixes, cut
+      // back two letters so word forms the porter stemmer splits differently still meet ("allergy" → allergic).
+      const prefix = (t: string) => (t.length >= 6 ? `"${t.slice(0, -2)}"*` : t.length >= 4 ? `"${t}"*` : `"${t}"`);
+      const match = terms.map(prefix).join(" OR ");
+      const where = memoryWhere(filter, ["memories_fts MATCH ?"], [match]);
+      return all(
+        `SELECT m.* FROM memories_fts JOIN memories m ON m.id = memories_fts.id ${where.sql}
+         ORDER BY bm25(memories_fts), m.updated_at DESC LIMIT ?`,
+        ...where.params,
+        limit,
+      ).map(toMemory);
+    },
+    /** For prompts (core `MemoryRecall`): active only. Pinned ones, then unpinned matches for `query`, then recent unpinned. */
+    recall: (query: string): Memory[] => {
+      const hits = memories.search(query, { status: "active", pinned: false }, 30);
+      const seen = new Set(hits.map((m) => m.id));
+      return [
+        ...memories.list({ status: "active", pinned: true }),
+        ...hits,
+        ...memories.list({ status: "active", pinned: false }, 30).filter((m) => !seen.has(m.id)),
+      ];
+    },
     get: (id: string) => {
       const r = get("SELECT * FROM memories WHERE id = ?", id);
       return r ? toMemory(r) : null;
     },
-    /** Same text again only refreshes the existing memory. */
-    add: (id: string, text: string, source: Memory["source"]): Memory => {
+    /** Same text again only refreshes the existing memory (and activates it when `status` is active). */
+    add: (id: string, text: string, source: Memory["source"], status: MemoryStatus, pinned = false): Memory => {
       const existing = get("SELECT id FROM memories WHERE lower(text) = lower(?)", text);
       if (existing) {
-        run("UPDATE memories SET updated_at = ? WHERE id = ?", now(), existing.id);
+        run(
+          "UPDATE memories SET updated_at = ?, status = CASE WHEN ? = 'active' THEN 'active' ELSE status END WHERE id = ?",
+          now(),
+          status,
+          existing.id,
+        );
         return memories.get(existing.id)!;
       }
-      run("INSERT INTO memories (id, text, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", id, text, source, now(), now());
+      run(
+        "INSERT INTO memories (id, text, source, status, pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        id,
+        text,
+        source,
+        status,
+        pinned ? 1 : 0,
+        now(),
+        now(),
+      );
       return memories.get(id)!;
     },
-    update: (id: string, text: string): Memory | null => {
-      run("UPDATE memories SET text = ?, updated_at = ? WHERE id = ?", text, now(), id);
+    /** The owner wrote this version, so it is active from now on. */
+    update: (id: string, text: string, pinned?: boolean): Memory | null => {
+      run("UPDATE memories SET text = ?, status = 'active', pinned = coalesce(?, pinned), updated_at = ? WHERE id = ?", text, pinned === undefined ? null : pinned ? 1 : 0, now(), id);
+      return memories.get(id);
+    },
+    confirm: (id: string): Memory | null => {
+      run("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ? AND status = 'unreviewed'", now(), id);
+      return memories.get(id);
+    },
+    pin: (id: string, pinned: boolean): Memory | null => {
+      run("UPDATE memories SET pinned = ? WHERE id = ?", pinned ? 1 : 0, id);
       return memories.get(id);
     },
     delete: (id: string) => run("DELETE FROM memories WHERE id = ?", id).changes > 0,
