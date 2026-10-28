@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { Approval, ApprovalDecision } from "@z/core";
+import type { Approval, ApprovalDecision, Notice } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient } from "./query.ts";
 
@@ -16,6 +16,10 @@ export function useDecide() {
       api<Approval>(`/approvals/${encodeURIComponent(id)}`, { body: decision }),
     onSuccess: (a, { decision }) => {
       queryClient.setQueryData<Approval[]>(keys.approvals, (list) => list?.filter((x) => x.id !== a.id));
+      // Its notices show the outcome and stop counting as unread (the server streams the same).
+      queryClient.setQueryData<Notice[]>(keys.notices, (list) =>
+        list?.map((n) => (n.approvalId === a.id ? { ...n, approvalStatus: a.status, read: true } : n)),
+      );
       if (decision.remember) void queryClient.invalidateQueries({ queryKey: keys.settings });
       void queryClient.invalidateQueries({ queryKey: keys.tasks });
     },

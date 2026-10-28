@@ -1,5 +1,6 @@
 import type { Approval, ApprovalPreview } from "@z/core";
 import { Check, ShieldCheck, X } from "lucide-react";
+import { Link } from "react-router";
 import { useDecide } from "../api/approvals.ts";
 import { useT } from "../i18n.ts";
 import { relativeTime, json } from "../lib/format.ts";
@@ -10,8 +11,24 @@ import { notifyError } from "../ui/toast.tsx";
 import { CodeBlock } from "./ai-elements/code-block.tsx";
 import { Confirmation, ConfirmationAction, ConfirmationActions, ConfirmationRequest, ConfirmationTitle } from "./ai-elements/confirmation.tsx";
 
+/** `snake_case` ids read as words: `read_wiki_contents` → "Read wiki contents". */
+const words = (id: string) => {
+  const s = id.replace(/[_-]+/g, " ").trim();
+  return s ? s[0]!.toUpperCase() + s.slice(1) : id;
+};
+
+/**
+ * What will happen, in words: the tool's summary without the JSON dump some summaries end with
+ * (connector tools say `DeepWiki · read_wiki_contents {"repoName":…}`) and with tool ids as words.
+ * The arguments themselves are in the preview; the raw input and tool id under Details.
+ */
+export function plainSummary(approval: Pick<Approval, "summary" | "tool">): string {
+  const head = approval.summary.replace(/\s+\{(?:"|\})[\s\S]*$/, "").trim() || approval.tool;
+  return head.replace(/\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g, words);
+}
+
 /** A task's tool call waiting on the owner: the AI Elements Confirmation, fed by z's approvals API. */
-export function ApprovalCard({ approval }: { approval: Approval }) {
+export function ApprovalCard({ approval, taskTitle }: { approval: Approval; taskTitle?: string }) {
   const t = useT();
   const decide = useDecide();
   const Icon = riskIcon[approval.risk];
@@ -30,19 +47,30 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
           <Icon aria-hidden className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <ConfirmationTitle className="font-medium">{approval.summary}</ConfirmationTitle>
+          <ConfirmationTitle className="font-medium">{plainSummary(approval)}</ConfirmationTitle>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-fg-muted">
-            <code className="font-mono">{approval.tool}</code>
-            <span aria-hidden>·</span>
+            {taskTitle && (
+              <>
+                <Link to={`/tasks?task=${approval.taskId}`} className="min-w-0 break-words text-fg underline-offset-2 hover:underline">
+                  {t.forTask(taskTitle)}
+                </Link>
+                <span aria-hidden>·</span>
+              </>
+            )}
             <span className={riskTone[approval.risk]}>{t[`risk_${approval.risk}`]}</span>
             <span aria-hidden>·</span>
             <time dateTime={approval.createdAt}>{relativeTime(approval.createdAt)}</time>
           </p>
           {approval.reason && <p className="mt-2 text-sm text-warn">{t.askingBecause(approval.reason)}</p>}
           <ApprovalPreviewView preview={approval.preview} />
-          <Disclosure summary={t.input} className="mt-1">
-            <div className="mt-1 max-h-60 overflow-auto rounded-lg">
-              <CodeBlock code={json(approval.input)} language="json" />
+          <Disclosure summary={t.showDetails} className="mt-1">
+            <div className="mt-1 flex flex-col gap-2">
+              <p className="text-xs text-fg-muted">
+                {t.toolId} <code className="font-mono break-all text-fg">{approval.tool}</code>
+              </p>
+              <div className="max-h-60 overflow-auto rounded-lg">
+                <CodeBlock code={json(approval.input)} language="json" />
+              </div>
             </div>
           </Disclosure>
         </div>

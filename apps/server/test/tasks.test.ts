@@ -157,6 +157,10 @@ test("one-shot tasks land in review with a notice; resolve marks them done", asy
   assert.ok(noticesOf(store).some((n) => n.title.startsWith("Ready for review")));
   assert.throws(() => tasks.answer(task.id, "x"), /not waiting for an answer/);
   assert.equal(tasks.resolve(task.id)?.status, "done");
+  assert.ok(
+    noticesOf(store).filter((n) => n.path === `/tasks?task=${task.id}`).every((n) => n.read),
+    "resolving reads the task's notices",
+  );
   assert.throws(() => tasks.resolve(task.id), /not ready for review/);
 });
 

@@ -31,6 +31,11 @@ export type SetupChecklist = {
   rows: SetupRow[];
   /** When the live checks (POST /api/setup/check) last ran; null when never. */
   checkedAt: string | null;
+  /**
+   * A model has answered z at least once (a live check passed, or a call used tokens). Until then the
+   * app leads with setup; afterwards a failing chat model is a banner on Today, never a wall.
+   */
+  modelAnswered: boolean;
 };
 
 /** A cached live model test, per model ref. */

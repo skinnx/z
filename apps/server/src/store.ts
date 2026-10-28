@@ -177,6 +177,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       const r = get("SELECT tokens, usd FROM usage WHERE provider_id = ? AND month = ?", providerId, month());
       return { monthUsd: r?.usd ?? 0, monthTokens: r?.tokens ?? 0 };
     },
+    /** Some model call ever used tokens. */
+    any: () => get("SELECT 1 AS one FROM usage WHERE tokens > 0 LIMIT 1") !== undefined,
   };
 
   // ─── Tasks & approvals ────────────────────────────────────────────────────
@@ -794,14 +796,17 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     body: r.body,
     path: r.path,
     ...(r.approval_id ? { approvalId: r.approval_id } : {}),
+    ...(r.approval_id && r.approval_status ? { approvalStatus: r.approval_status } : {}),
     ...(r.question ? { question: parse<NoticeQuestion>(r.question, { taskId: "", text: "", choices: [] }) } : {}),
     ...(r.status ? { status: r.status } : {}),
     read: Boolean(r.read),
     createdAt: r.created_at,
   });
 
+  /** Notices with their approval's current status. */
+  const NOTICES = "SELECT n.*, a.status AS approval_status FROM notices n LEFT JOIN approvals a ON a.id = n.approval_id";
   const notices = {
-    list: (limit = 100): Notice[] => all("SELECT * FROM notices ORDER BY created_at DESC LIMIT ?", limit).map(toNotice),
+    list: (limit = 100): Notice[] => all(`${NOTICES} ORDER BY n.created_at DESC LIMIT ?`, limit).map(toNotice),
     insert: (n: Notice) =>
       run(
         "INSERT INTO notices (id, kind, title, body, path, approval_id, question, status, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -817,10 +822,12 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         n.createdAt,
       ),
     get: (id: string): Notice | null => {
-      const r = get("SELECT * FROM notices WHERE id = ?", id);
+      const r = get(`${NOTICES} WHERE n.id = ?`, id);
       return r ? toNotice(r) : null;
     },
-    forApproval: (approvalId: string): Notice[] => all("SELECT * FROM notices WHERE approval_id = ?", approvalId).map(toNotice),
+    forApproval: (approvalId: string): Notice[] => all(`${NOTICES} WHERE n.approval_id = ?`, approvalId).map(toNotice),
+    /** Unread notices that open `path` (a task's own notices open `/tasks?task=<id>`). */
+    unreadForPath: (path: string): Notice[] => all(`${NOTICES} WHERE n.path = ? AND n.read = 0`, path).map(toNotice),
     /** Question notices of a task that are still unanswered. */
     openQuestions: (taskId: string): Notice[] =>
       all(

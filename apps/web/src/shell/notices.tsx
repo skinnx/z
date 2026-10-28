@@ -1,14 +1,18 @@
 import type { Notice } from "@z/core";
-import { Bell, CheckCheck } from "lucide-react";
-import { useState } from "react";
+import { Bell, Check, CheckCheck, Clock, Send, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { useDecide } from "../api/approvals.ts";
 import { useMarkRead, useNotices } from "../api/notices.ts";
+import { keys, queryClient } from "../api/query.ts";
 import { useAnswerTask } from "../api/tasks.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
 import { NoticeIcon, noticeTitle } from "../lib/icons.tsx";
 import { Button } from "../ui/button.tsx";
+import { Badge } from "../ui/card.tsx";
+import { Field, Input } from "../ui/field.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { Popover } from "../ui/popover.tsx";
@@ -35,6 +39,14 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
   const markRead = useMarkRead();
   const open = useOpenNotice(onDone);
   const unread = notices.some((n) => !n.read);
+  // Handled elsewhere (decided, answered) but still unread, e.g. from before z marked them: read them.
+  const handled = notices
+    .filter((n) => !n.read && ((n.approvalStatus && n.approvalStatus !== "pending") || n.question?.answer !== undefined))
+    .map((n) => n.id)
+    .join(",");
+  useEffect(() => {
+    if (handled) markRead.mutate(handled.split(","));
+  }, [handled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -60,7 +72,17 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
                   <NoticeIcon notice={n} t={t} className="mt-0.5 size-4" />
                   <span className="min-w-0 flex-1">
                     <span className={cn("block text-sm leading-snug break-words", !n.read && "font-semibold")}>{noticeTitle(n, t)}</span>
-                    {n.body && <span className="mt-0.5 line-clamp-2 text-xs leading-relaxed break-words text-fg-muted">{n.body}</span>}
+                    {n.body && (
+                      <span
+                        className={cn(
+                          "mt-0.5 text-xs leading-relaxed break-words text-fg-muted",
+                          // Approve only what you can see: a pending approval's preview is shown whole.
+                          n.approvalStatus === "pending" ? "block max-h-48 overflow-y-auto whitespace-pre-wrap" : "line-clamp-2",
+                        )}
+                      >
+                        {n.body}
+                      </span>
+                    )}
                     <time dateTime={n.createdAt} className="mt-1 block text-[0.6875rem] text-fg-muted">
                       {relativeTime(n.createdAt)}
                     </time>
@@ -71,7 +93,7 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
                     </span>
                   )}
                 </button>
-                <NoticeChoices notice={n} />
+                <NoticeActions notice={n} />
               </li>
             );
           })}
@@ -81,31 +103,94 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
   );
 }
 
-/** A question notice's choices, until it is answered here, on push or on the owner channel. */
-function NoticeChoices({ notice }: { notice: Notice }) {
-  const answer = useAnswerTask();
-  const markRead = useMarkRead();
-  const q = notice.question;
-  if (!q || q.answer !== undefined || q.choices.length === 0) return null;
+/** A decided approval's notice says how it ended, wherever it was decided. */
+function ApprovalOutcome({ status }: { status: "approved" | "denied" | "expired" }) {
+  const t = useT();
+  const [Icon, tone, label] =
+    status === "approved" ? [Check, "ok", t.approved] : status === "denied" ? [X, "danger", t.denied] : [Clock, "neutral", t.expired];
   return (
-    <div role="group" aria-label={q.text} className="flex flex-wrap gap-2 px-3 pb-3 ps-10">
-      {q.choices.map((choice) => (
-        <Button
-          key={choice}
-          size="sm"
-          disabled={answer.isPending}
-          onClick={() =>
-            answer.mutate(
-              { id: q.taskId, text: choice },
-              { onSuccess: () => !notice.read && markRead.mutate([notice.id]), onError: notifyError },
-            )
-          }
-        >
-          {choice}
-        </Button>
-      ))}
+    <div className="px-3 pb-3 ps-10">
+      <Badge tone={tone as "ok" | "danger" | "neutral"}>
+        <Icon aria-hidden />
+        {label}
+      </Badge>
     </div>
   );
+}
+
+/** Approve or deny in place; the full preview is the notice body, shown uncut above the buttons. */
+function NoticeApproval({ notice }: { notice: Notice }) {
+  const t = useT();
+  const decide = useDecide();
+  const run = (approve: boolean) =>
+    decide.mutate(
+      { id: notice.approvalId!, decision: { approve } },
+      {
+        onError: (error) => {
+          notifyError(error);
+          // Decided elsewhere a moment ago: show what happened.
+          void queryClient.invalidateQueries({ queryKey: keys.notices });
+          void queryClient.invalidateQueries({ queryKey: keys.approvals });
+        },
+      },
+    );
+  return (
+    <div role="group" aria-label={noticeTitle(notice, t)} className="flex flex-wrap gap-2 px-3 pb-3 ps-10">
+      <Button size="sm" variant="primary" disabled={decide.isPending} onClick={() => run(true)}>
+        <Check aria-hidden />
+        {t.approve}
+      </Button>
+      <Button size="sm" variant="danger" disabled={decide.isPending} onClick={() => run(false)}>
+        <X aria-hidden />
+        {t.deny}
+      </Button>
+    </div>
+  );
+}
+
+/** A question notice: its choices and a short answer box, until it is answered anywhere. */
+function NoticeQuestionForm({ notice }: { notice: Notice }) {
+  const t = useT();
+  const answer = useAnswerTask();
+  const [text, setText] = useState("");
+  const q = notice.question!;
+  const send = (value: string) => value.trim() && answer.mutate({ id: q.taskId, text: value.trim() }, { onError: notifyError });
+  return (
+    <div role="group" aria-label={q.text} className="flex flex-col gap-2 px-3 pb-3 ps-10">
+      {q.choices.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {q.choices.map((choice) => (
+            <Button key={choice} size="sm" disabled={answer.isPending} onClick={() => send(choice)}>
+              {choice}
+            </Button>
+          ))}
+        </div>
+      )}
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(text);
+        }}
+      >
+        <Field label={t.answerLabel} srOnlyLabel className="min-w-0 flex-1">
+          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={t.answerPlaceholder} maxLength={4000} />
+        </Field>
+        <IconButton type="submit" label={t.sendAnswer} variant="primary" disabled={answer.isPending || !text.trim()}>
+          <Send aria-hidden />
+        </IconButton>
+      </form>
+    </div>
+  );
+}
+
+/** What can be done on a notice right in the list: decide an approval, answer a question, or see the outcome. */
+function NoticeActions({ notice }: { notice: Notice }) {
+  if (notice.approvalId && notice.approvalStatus) {
+    return notice.approvalStatus === "pending" ? <NoticeApproval notice={notice} /> : <ApprovalOutcome status={notice.approvalStatus} />;
+  }
+  if (notice.question && notice.question.answer === undefined) return <NoticeQuestionForm notice={notice} />;
+  return null;
 }
 
 function CountBadge({ count, className }: { count: number; className?: string }) {

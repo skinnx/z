@@ -1,25 +1,24 @@
-import type { BriefItem, Briefing, Task, TaskStatus } from "@z/core";
-import { ArrowUpRight, Brain, Check, CircleAlert, Hand, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
+import type { BriefItem, Briefing, TaskStatus } from "@z/core";
+import { Brain, Check, CircleAlert, Hand, KeyRound, Radar, RefreshCw, Sparkles, Sunrise, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { usePendingApprovals } from "../api/approvals.ts";
 import { useBriefing, useGenerateBriefing } from "../api/briefing.ts";
 import { useMemories } from "../api/memories.ts";
+import { useNeedsYou } from "../api/needs.ts";
 import { useMarkRead, useNotices } from "../api/notices.ts";
 import { useProviders } from "../api/providers.ts";
 import { useSettings } from "../api/settings.ts";
 import { useSetup } from "../api/setup.ts";
 import { useCreateTask, useTasks } from "../api/tasks.ts";
-import { ApprovalCard } from "../components/approval-card.tsx";
 import { Source } from "../components/ai-elements/sources.tsx";
 import { Composer } from "../components/composer.tsx";
+import { NeedsYouBlock } from "../components/needs-you.tsx";
 import { SetupChecklistView } from "../components/setup-checklist.tsx";
-import { TaskQuestion } from "../components/task-question.tsx";
 import { locale, useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { parseCron } from "../lib/cron.ts";
 import { longDate, relativeTime } from "../lib/format.ts";
-import { briefKindIcon, StatusIcon } from "../lib/icons.tsx";
+import { briefKindIcon } from "../lib/icons.tsx";
 import { Button, buttonClass } from "../ui/button.tsx";
 import { MemoryManager } from "../settings/panels/memories.tsx";
 import { Card, Empty, Loading, Section, Spinner } from "../ui/card.tsx";
@@ -55,7 +54,8 @@ const NOT_CHECKED = "Not checked: no model sorted this item.";
 
 export default function Today() {
   const t = useT();
-  const approvals = usePendingApprovals();
+  const needs = useNeedsYou();
+  const tasks = useTasks();
   const providers = useProviders();
   const setup = useSetup();
   const [skipSetup, setSkipSetup] = useState(() => Boolean(sessionStorage.getItem(FIRST_RUN_KEY)));
@@ -69,9 +69,11 @@ export default function Today() {
     }
   }, [params, setParams]);
 
-  // First run: until a chat model has actually answered, nothing works, so the checklist is the screen.
+  // First run: until any model has answered, nothing works, so the checklist is the screen. Once one
+  // has, or something waits on the owner, a failing chat model is a banner above the rest of Today.
   const chat = setup.data?.rows.find((r) => r.id === "chat_model");
-  if (chat && chat.state !== "ready" && !skipSetup) {
+  const firstRun = chat && chat.state !== "ready" && !setup.data?.modelAnswered && (!needs.loaded || needs.count === 0);
+  if (firstRun && !skipSetup) {
     return (
       <Page title={t.nav_today} className="gap-4">
         <SetupChecklistView autoCheck />
@@ -92,19 +94,12 @@ export default function Today() {
     );
   }
   const noProviders = providers.data?.length === 0;
-  const pending = approvals.data ?? [];
+  const titles = new Map((tasks.data ?? []).map((x) => [x.id, x.title]));
 
   return (
     <Page title={t.nav_today}>
-      {pending.length > 0 && (
-        <Section label={`${t.approvals} (${pending.length})`} icon={<ShieldAlert aria-hidden className="text-warn" />}>
-          <div aria-live="polite" className="flex flex-col gap-3">
-            {pending.map((a) => (
-              <ApprovalCard key={a.id} approval={a} />
-            ))}
-          </div>
-        </Section>
-      )}
+      {chat?.state === "needs_setup" && !noProviders && <ChatBanner detail={chat.detail} fixPath={chat.fix?.path ?? "/models"} />}
+      <NeedsYouBlock needs={needs} titles={titles} />
 
       <Section label={t.delegate} hideLabel>
         {noProviders ? (
@@ -120,7 +115,6 @@ export default function Today() {
       </Section>
 
       <MemoryReview />
-      <NeedsYou />
       <WatchHits />
       <BriefingSection canGenerate={!noProviders} />
     </Page>
@@ -146,35 +140,48 @@ function MemoryReview() {
   );
 }
 
-/** Tasks waiting on the owner (approvals have their own cards above): questions, reviews, interruptions. */
-const NEEDS: Task["status"][] = ["needs_input", "interrupted", "review"];
+/** Dismissed for this tab session, per error: a different failure shows again. */
+const CHAT_BANNER_KEY = "z.chat-banner-dismissed";
+const readSession = (key: string) => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
 
-function NeedsYou() {
+/** The chat model fails, but the rest of Today keeps working: say so, with the fix, without a wall. */
+function ChatBanner({ detail, fixPath }: { detail: string; fixPath: string }) {
   const t = useT();
-  const needs = (useTasks().data ?? []).filter((x) => NEEDS.includes(x.status)).sort((a, b) => NEEDS.indexOf(a.status) - NEEDS.indexOf(b.status));
-  if (needs.length === 0) return null;
-
+  const [dismissed, setDismissed] = useState(() => readSession(CHAT_BANNER_KEY));
+  if (dismissed === detail) return null;
   return (
-    <Section label={`${t.needsYou} (${needs.length})`} icon={<Hand aria-hidden className="text-warn" />}>
-      <ul aria-live="polite" className="flex flex-col gap-3">
-        {needs.map((task) => (
-          <li key={task.id}>
-            <Card className="flex flex-col gap-3 p-4">
-              <Link to={`/tasks?task=${task.id}`} className="flex items-start gap-3 hover:underline">
-                <StatusIcon status={task.status} t={t} className="mt-0.5 size-4" />
-                <span className="min-w-0 flex-1">
-                  <span className="block font-medium leading-snug break-words">{task.title}</span>
-                  <span className={cn("mt-0.5 block text-xs", task.status === "interrupted" ? "text-danger" : "text-fg-muted")}>
-                    {task.status === "interrupted" && task.error ? task.error : t[`status_${task.status}`]}
-                  </span>
-                </span>
-              </Link>
-              <TaskQuestion task={task} />
-            </Card>
-          </li>
-        ))}
-      </ul>
-    </Section>
+    <div role="alert" className="flex items-start gap-3 rounded-(--radius-card) border border-danger/50 bg-danger-soft/40 py-2 ps-4 pe-2">
+      <CircleAlert aria-hidden className="mt-1.5 size-4 shrink-0 text-danger" />
+      <div className="min-w-0 flex-1 py-1">
+        <p className="text-sm font-medium">{t.chatFailing}</p>
+        <p className="mt-0.5 text-xs break-words text-fg-muted">{detail}</p>
+      </div>
+      <Link to={fixPath} className={buttonClass("primary", "sm", "shrink-0")}>
+        <KeyRound aria-hidden />
+        {t.fixModels}
+      </Link>
+      <IconButton
+        label={t.dismiss}
+        size="icon-sm"
+        className="shrink-0"
+        onClick={() => {
+          try {
+            sessionStorage.setItem(CHAT_BANNER_KEY, detail);
+          } catch {
+            // private mode: dismissed until reload
+          }
+          setDismissed(detail);
+        }}
+      >
+        <X aria-hidden />
+      </IconButton>
+    </div>
   );
 }
 
