@@ -17,7 +17,6 @@
     "@ai-sdk/provider": "^4.0.34",
     "@ai-sdk/xai": "^5.0.31",
     "@openai/codex": "0.165.0",
-    "@openai/codex-sdk": "0.165.0",
     "ai": "^7.0.154",
     "zod": "^4.6.7"
   },
