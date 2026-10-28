@@ -54,6 +54,8 @@ export function chatRoutes({ rt }: Services) {
     return c.json(thread);
   });
 
+  app.delete("/threads", (c) => c.json({ deleted: store.threads.clear() }));
+
   app.delete("/threads/:id", (c) => {
     if (!store.threads.delete(c.req.param("id"))) throw notFound("Thread");
     return c.json({ ok: true });
