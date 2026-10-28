@@ -1,5 +1,5 @@
 import type { BriefItem, Briefing } from "@z/core";
-import { ArrowUpRight, Check, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
+import { Check, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { usePendingApprovals } from "../api/approvals.ts";
@@ -9,6 +9,7 @@ import { useProviders } from "../api/providers.ts";
 import { useSettings } from "../api/settings.ts";
 import { useCreateTask } from "../api/tasks.ts";
 import { ApprovalCard } from "../components/approval-card.tsx";
+import { Source } from "../components/ai-elements/sources.tsx";
 import { Composer } from "../components/composer.tsx";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
@@ -225,17 +226,10 @@ function BriefRow({ item }: { item: BriefItem }) {
     <li className="flex flex-col gap-2 px-4 py-3 @lg:flex-row @lg:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">
         <Icon role="img" aria-label={t[`kind_${item.kind}`]} className="mt-0.5 size-4 shrink-0 text-fg-muted" />
-        <p className="min-w-0 flex-1 text-sm leading-relaxed break-words">
-          {item.url ? (
-            <a href={item.url} target="_blank" rel="noreferrer" className="hover:underline">
-              {item.text}
-              <ArrowUpRight aria-hidden className="ms-0.5 inline size-3.5 text-fg-muted" />
-              <span className="sr-only">({t.openLink})</span>
-            </a>
-          ) : (
-            item.text
-          )}
-        </p>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <p className="text-sm leading-relaxed break-words">{item.text}</p>
+          {item.url && <Source href={item.url} className="text-xs" aria-label={`${item.text} (${t.openLink})`} />}
+        </div>
       </div>
       {item.suggestion && (
         <Button

@@ -63,6 +63,16 @@
 
   --radius-card: 0.75rem;
   --animate-pulse-dot: pulse-dot 2s ease-in-out infinite;
+  /* AI Elements Shimmer: a highlight sweeping across text (duration set per element). */
+  --animate-shimmer: shimmer var(--shimmer-duration, 2s) linear infinite;
+  @keyframes shimmer {
+    from {
+      background-position: 100% center;
+    }
+    to {
+      background-position: 0% center;
+    }
+  }
   @keyframes pulse-dot {
     50% {
       opacity: 0.4;
