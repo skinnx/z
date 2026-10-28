@@ -1,14 +1,18 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { AdapterManifest, ChannelActivity, ChannelInput, ChannelSetupStep, ChannelTestResult, ChannelView } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
+export const adaptersQuery = queryOptions({ queryKey: keys.adapters, queryFn: () => api<AdapterManifest[]>("/adapters"), staleTime: Infinity });
+
 export function useAdapters() {
-  return useQuery({ queryKey: keys.adapters, queryFn: () => api<AdapterManifest[]>("/adapters"), staleTime: Infinity });
+  return useQuery(adaptersQuery);
 }
 
+export const channelsQuery = queryOptions({ queryKey: keys.channels, queryFn: () => api<ChannelView[]>("/channels") });
+
 export function useChannels() {
-  return useQuery({ queryKey: keys.channels, queryFn: () => api<ChannelView[]>("/channels") });
+  return useQuery(channelsQuery);
 }
 
 export function useSaveChannel() {

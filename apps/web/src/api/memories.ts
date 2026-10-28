@@ -1,10 +1,12 @@
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { Memory } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
+export const memoriesQuery = queryOptions({ queryKey: keys.memories, queryFn: () => api<Memory[]>("/memories") });
+
 export function useMemories() {
-  return useQuery({ queryKey: keys.memories, queryFn: () => api<Memory[]>("/memories") });
+  return useQuery(memoriesQuery);
 }
 
 /** Server full-text search, best match first. Idle while `q` is blank. */

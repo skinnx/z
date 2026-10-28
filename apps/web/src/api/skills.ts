@@ -1,12 +1,14 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { Skill, SkillInput } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient } from "./query.ts";
 
 const byName = (a: Skill, b: Skill) => a.name.localeCompare(b.name);
 
+export const skillsQuery = queryOptions({ queryKey: keys.skills, queryFn: () => api<Skill[]>("/skills"), staleTime: 60_000 });
+
 export function useSkills() {
-  return useQuery({ queryKey: keys.skills, queryFn: () => api<Skill[]>("/skills"), staleTime: 60_000 });
+  return useQuery(skillsQuery);
 }
 
 export function useSaveSkill() {

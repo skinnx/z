@@ -5,6 +5,8 @@ import { streamSSE } from "hono/streaming";
 import type { Services } from "../app.ts";
 
 const HEARTBEAT_MS = 15_000;
+/** How soon the browser reconnects after the stream drops (its default is about 3 s). */
+const RETRY_MS = 1000;
 
 export function eventRoutes({ rt }: Services) {
   const app = new Hono();
@@ -22,7 +24,7 @@ export function eventRoutes({ rt }: Services) {
         wake?.();
       });
 
-      await stream.writeSSE({ event: "ready", data: "{}" });
+      await stream.writeSSE({ event: "ready", data: "{}", retry: RETRY_MS });
       while (!stream.aborted) {
         while (pending.length) await stream.writeSSE({ data: JSON.stringify(pending.shift()) });
         const timer = new Promise<boolean>((resolve) => {

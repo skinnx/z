@@ -1,10 +1,12 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { Briefing } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient } from "./query.ts";
 
+export const briefingQuery = queryOptions({ queryKey: keys.briefing, queryFn: () => api<Briefing | null>("/briefing") });
+
 export function useBriefing() {
-  return useQuery({ queryKey: keys.briefing, queryFn: () => api<Briefing | null>("/briefing") });
+  return useQuery(briefingQuery);
 }
 
 export function useGenerateBriefing() {

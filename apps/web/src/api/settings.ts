@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { Settings } from "@z/core";
 import { useEffect, useRef, useState } from "react";
 import { notifyError } from "../ui/toast.tsx";
@@ -6,8 +6,10 @@ import { api } from "./client.ts";
 import { keys, queryClient } from "./query.ts";
 
 /** `refetchInterval` polls, e.g. while waiting for the owner to pair. */
+export const settingsQuery = queryOptions({ queryKey: keys.settings, queryFn: () => api<Settings>("/settings") });
+
 export function useSettings(refetchInterval?: number) {
-  return useQuery({ queryKey: keys.settings, queryFn: () => api<Settings>("/settings"), ...(refetchInterval ? { refetchInterval } : {}) });
+  return useQuery({ ...settingsQuery, ...(refetchInterval ? { refetchInterval } : {}) });
 }
 
 export type SettingsPatch = Partial<Omit<Settings, "owner">>;

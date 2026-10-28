@@ -1,6 +1,5 @@
 import type { Task, TaskEvent, TaskStatus } from "@z/core";
 import { Ban, Bot, CircleCheck, Cpu, Footprints, ListChecks, Play, Plus, Radar, ShieldAlert, SquarePen, Trash2, Wrench } from "lucide-react";
-import { Streamdown } from "streamdown";
 import { useSearchParams } from "react-router";
 import { useEffect, useState } from "react";
 import { useSettings } from "../api/settings.ts";
@@ -9,6 +8,7 @@ import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfTho
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { Task as TaskDisclosure, TaskContent, TaskItem, TaskTrigger } from "../components/ai-elements/task.tsx";
 import { Composer } from "../components/composer.tsx";
+import { Markdown, preloadMarkdown } from "../components/markdown.tsx";
 import { TaskQuestion } from "../components/task-question.tsx";
 import { ErrorFix } from "../components/error-fix.tsx";
 import { useProviders, useRouting } from "../api/providers.ts";
@@ -85,6 +85,14 @@ export default function Tasks() {
   useEffect(() => {
     if (tasks.data && tab === null) setTab(initialTab);
   }, [tasks.data, tab, initialTab]);
+  // Results render as markdown: fetch the renderer once the list is up, or at once for a task opened by link.
+  const listed = tasks.data !== undefined;
+  useEffect(() => {
+    if (!listed) return;
+    if (openId) return preloadMarkdown();
+    const id = setTimeout(preloadMarkdown, 2000);
+    return () => clearTimeout(id);
+  }, [listed, openId]);
   useEffect(() => {
     if (open) setTab(tabOf(open));
     // only when a different task is opened (e.g. from the command menu)
@@ -187,7 +195,7 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const t = useT();
   const sched = scheduleText(task.schedule, t);
   return (
-    <li>
+    <li onPointerEnter={preloadMarkdown} onFocus={preloadMarkdown} onTouchStart={preloadMarkdown}>
       <RowButton onClick={onOpen}>
         <StatusIcon status={task.status} t={t} />
         <span className="min-w-0 flex-1">
@@ -223,7 +231,7 @@ function WatchRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const checked = task.watch?.lastCheckAt ?? null;
   const busy = task.status === "running" || task.status === "queued";
   return (
-    <li>
+    <li onPointerEnter={preloadMarkdown} onFocus={preloadMarkdown} onTouchStart={preloadMarkdown}>
       <RowButton onClick={onOpen}>
         {busy || task.status === "cancelled" ? (
           <StatusIcon status={task.status} t={t} />
@@ -368,13 +376,13 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
           </h3>
           <p className="font-medium break-words">{task.watch.lastFinding.title}</p>
           <div className="prose-z text-sm">
-            <Streamdown mode="static">{task.watch.lastFinding.body}</Streamdown>
+            <Markdown>{task.watch.lastFinding.body}</Markdown>
           </div>
         </section>
       ) : (
         task.result && (
           <section aria-label={t.result} className="prose-z">
-            <Streamdown mode="static">{task.result}</Streamdown>
+            <Markdown>{task.result}</Markdown>
           </section>
         )
       )}

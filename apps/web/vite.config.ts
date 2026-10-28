@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants, gzip } from "node:zlib";
 import { defineConfig, type Plugin, type Rolldown } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -52,6 +56,40 @@ function serviceWorker(): Plugin {
   };
 }
 
+const COMPRESSIBLE = /\.(?:js|mjs|css|svg|json|webmanifest|txt|wasm)$/;
+
+/**
+ * Writes a `.br` and a `.gz` twin of every text file in the build, which the server sends as is
+ * (apps/server/src/static.ts): the shell goes over the wire at about a third of its size.
+ */
+function precompress(): Plugin {
+  let outDir = "dist";
+  const br = promisify(brotliCompress);
+  const gz = promisify(gzip);
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
+  return {
+    name: "z-precompress",
+    apply: "build",
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    async closeBundle() {
+      const files = walk(outDir).filter((f) => COMPRESSIBLE.test(f) && statSync(f).size >= 1024);
+      await Promise.all(
+        files.map(async (f) => {
+          const source = readFileSync(f);
+          const [b, g] = await Promise.all([
+            br(source, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: source.length } }),
+            gz(source, { level: 9 }),
+          ]);
+          await Promise.all([writeFile(`${f}.br`, b), writeFile(`${f}.gz`, g)]);
+        }),
+      );
+    },
+  };
+}
+
 const proxy = {
   // Connector OAuth builds its redirect URI from the request origin: keep the browser's host so
   // the provider sends the user back through this dev server (first match wins, so it leads).
@@ -62,7 +100,7 @@ const proxy = {
 };
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), serviceWorker()],
+  plugins: [react(), tailwindcss(), serviceWorker(), precompress()],
   build: { chunkSizeWarningLimit: 600 },
   server: { proxy },
   preview: { proxy },

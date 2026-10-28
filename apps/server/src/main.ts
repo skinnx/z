@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { say } from "@z/core";
 import { Hono, type MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { compress } from "hono/compress";
 import pkg from "../package.json" with { type: "json" };
 import type { Services } from "./app.ts";
 import { createBriefings } from "./briefings.ts";
@@ -66,6 +67,8 @@ app.onError((error, c) => {
 });
 
 const api = new Hono();
+// JSON only: streamed replies (SSE, chat) must reach the browser chunk by chunk.
+api.use("*", compress({ contentTypeFilter: /^application\/json/ }));
 api.use("*", auth(env.token));
 api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
 for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes, loginRoutes, setupRoutes, skillRoutes]) {
