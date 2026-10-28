@@ -280,6 +280,31 @@ const MIGRATIONS: string[] = [
     WHERE NOT EXISTS (SELECT 1 FROM providers) AND NOT EXISTS (SELECT 1 FROM tasks) AND NOT EXISTS (SELECT 1 FROM threads);
   `,
   // ─── End skills ───────────────────────────────────────────────────────────
+  // ─── Delivery & missed runs: notice outbox, stored questions, result de-dup, missed-run policy ─
+  // `notice_deliveries`: one row per (notice, target) — a push device endpoint or the owner channel
+  // (address = channel id, thread_id = owner thread). `ref` is the platform message id once sent.
+  `
+  CREATE TABLE IF NOT EXISTS notice_deliveries (
+    id TEXT PRIMARY KEY,
+    notice_id TEXT NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+    target TEXT NOT NULL,          -- push | channel
+    address TEXT NOT NULL,         -- push endpoint | channel id
+    thread_id TEXT,
+    status TEXT NOT NULL,          -- pending | sent | failed | dropped
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    ref TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (notice_id, target, address)
+  );
+  CREATE INDEX IF NOT EXISTS notice_deliveries_due ON notice_deliveries(status, next_attempt_at);
+  ALTER TABLE notices ADD COLUMN question TEXT;     -- JSON NoticeQuestion
+  ALTER TABLE tasks ADD COLUMN missed_policy TEXT NOT NULL DEFAULT 'once';
+  ALTER TABLE tasks ADD COLUMN result_hash TEXT;    -- sha256 of the last successful recurring result, whitespace-normalized
+  `,
+  // ─── End delivery & missed runs ───────────────────────────────────────────
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */

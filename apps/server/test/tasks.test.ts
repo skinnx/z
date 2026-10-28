@@ -23,7 +23,7 @@ function setup() {
   return { dir, model, tools, ...z };
 }
 
-const oneShot = { instructions: "Tell Ana the build is green", lane: "agent", mode: "do" } as const;
+const oneShot = { instructions: "Tell Ana the build is green", lane: "agent", mode: "do", missedPolicy: "once" } as const;
 /** Yearly: never fires during a test; runs come from runNow. */
 const recurring = { ...oneShot, schedule: "0 0 1 1 *" } as const;
 const noticesOf = (store: ReturnType<typeof setup>["store"]) => store.notices.list();

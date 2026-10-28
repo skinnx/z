@@ -53,11 +53,23 @@ test("skills: a fresh install gets the starter skills, once", () => {
   assert.deepEqual(again.store.skills.list().map((s) => s.name), ["factcheck", "summarize-url"]);
 });
 
+/** How many migrations an install had right before the one that added skills. */
+function beforeSkillsMigration(): number {
+  for (let n = 1; n <= MIGRATION_COUNT; n++) {
+    const probe = new DatabaseSync(":memory:");
+    migrate(probe, n);
+    const has = probe.prepare("SELECT 1 FROM sqlite_master WHERE name = 'skills'").get();
+    probe.close();
+    if (has) return n - 1;
+  }
+  throw new Error("no skills migration");
+}
+
 test("skills: an existing install upgrading gets no starter skills", () => {
   const dir = tempDir();
   dirs.push(dir);
   const old = new DatabaseSync(join(dir, "z.db"));
-  migrate(old, MIGRATION_COUNT - 1);
+  migrate(old, beforeSkillsMigration());
   old.exec(`INSERT INTO providers (id, kind, label, models, enabled, created_at, updated_at) VALUES ('p', 'openai', 'P', '[]', 1, 'x', 'x')`);
   old.close();
   const z = boot(dir, [], scriptedModel().model);
@@ -208,7 +220,7 @@ test("narrowing: a call to a tool that was not offered widens the next step to t
     { call: "mcp_github_get_commit", input: {} },
     { text: "The latest commit is green." },
   );
-  const task = tasks.create({ instructions: "Tell Ana the build is green", lane: "agent", mode: "do", tools: undefined });
+  const task = tasks.create({ instructions: "Tell Ana the build is green", lane: "agent", mode: "do", missedPolicy: "once", tools: undefined });
   await until(() => model.pending() === 0 && !["queued", "running"].includes(store.tasks.get(task.id)!.status), "task to finish");
 
   const offered = model.model.doGenerateCalls.map((c) => (c.tools ?? []).map((t) => t.name));
@@ -224,7 +236,7 @@ test("narrowing: an invoked skill restricts the run to the skill's tools", async
   const { model, store, tasks } = setup(catalogue);
   store.skills.save("s1", { name: "triage", description: "Triage Linear", instructions: "Look at new Linear issues.", tools: ["mcp_linear_*_issue", "nope_*"] });
   model.push({ text: "Nothing new to triage." });
-  const task = tasks.create({ instructions: "/triage anything from Ana?", lane: "agent", mode: "do" });
+  const task = tasks.create({ instructions: "/triage anything from Ana?", lane: "agent", mode: "do", missedPolicy: "once" });
   await until(() => model.pending() === 0 && !["queued", "running"].includes(store.tasks.get(task.id)!.status), "task to finish");
 
   const call = model.model.doGenerateCalls[0]!;
