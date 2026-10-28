@@ -1,0 +1,368 @@
+/**
+ * The setup checklist: what z needs to be useful and safe, each row computed from a real check.
+ * A model is ready only once it answered a live test; a channel only once it connected; the public
+ * URL only once it reached this server. Live tests run on POST /api/setup/check (and the provider
+ * Test button); GET reads the cached results and never calls a model.
+ * (Idea from CopilotKit OpenDuet's setup checks, MIT; re-implemented for z.)
+ */
+import { createHash } from "node:crypto";
+import { describeError, laneRefs, parseModelRef, testModel, type Lane, type ModelCheck, type ModelRef, type ProviderConfig, type SetupChecklist, type SetupRow, type SetupState } from "@z/core";
+import pkg from "../package.json" with { type: "json" };
+import type { Channels } from "./channels.ts";
+import type { Connectors } from "./connectors.ts";
+import type { Push } from "./push.ts";
+import type { Runtime } from "./runtime.ts";
+import { redactJson } from "./secrets.ts";
+
+/** Live model tests are short: a free tier that takes longer than this is "not checked", not broken. */
+const MODEL_TIMEOUT_MS = 15_000;
+const PROBE_TIMEOUT_MS = 8_000;
+/** A check makes at most this many model calls (quota on free tiers is shared and scarce). */
+const MAX_MODEL_CALLS = 6;
+
+const CHECKS_KEY = "setup.models";
+const CHECKED_AT_KEY = "setup.checkedAt";
+const MASTER_ACK_KEY = "setup.masterKeyBackedUp";
+
+const LANE_NAMES: Record<Exclude<Lane, "chat">, string> = { agent: "Tasks", briefing: "Briefing", fast: "Quick checks", bot: "Channel bot" };
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+type Probe = { ok: boolean; detail: string; at: string };
+type LaneResult = { state: SetupState; detail: string };
+
+export type Setup = ReturnType<typeof createSetup>;
+
+export function createSetup(rt: Runtime, channels: Channels, connectors: Connectors, push: Push) {
+  const { store, env } = rt;
+  let probe: Probe | null = null;
+  let running: Promise<SetupChecklist> | null = null;
+
+  const checks = (): Record<ModelRef, ModelCheck> => store.kv.get<Record<ModelRef, ModelCheck>>(CHECKS_KEY) ?? {};
+  const saveCheck = (ref: ModelRef, check: ModelCheck) => store.kv.set(CHECKS_KEY, { ...checks(), [ref]: check });
+
+  /** Why a ref can't be tried at all (no call needed), or null. */
+  function unusable(ref: ModelRef, providers: ProviderConfig[]): string | null {
+    const p = providers.find((x) => x.id === parseModelRef(ref).providerId);
+    if (!p) return `provider "${parseModelRef(ref).providerId}" was removed`;
+    if (!p.enabled) return `provider "${p.label}" is turned off`;
+    return null;
+  }
+
+  const masterFingerprint = () => createHash("sha256").update(env.masterKey).digest("hex").slice(0, 16);
+
+  const reachable = () => {
+    const publicHost = env.publicUrl ? safeHost(env.publicUrl) : null;
+    const boundLocal = env.host !== null && LOOPBACK.has(env.host);
+    return { boundLocal, publicRemote: publicHost !== null && !LOOPBACK.has(publicHost) };
+  };
+
+  /** One lane's chain against the cached tests: any answering model makes it ready. */
+  function laneResult(refs: ModelRef[], cache: Record<ModelRef, ModelCheck>, providers: ProviderConfig[]): LaneResult & { model?: ModelRef } {
+    if (!refs.length) return { state: "needs_setup", detail: "no model chosen" };
+    const failed: string[] = [];
+    let inconclusive: string | null = null;
+    for (const ref of refs) {
+      const blocked = unusable(ref, providers);
+      if (blocked) {
+        failed.push(`${ref}: ${blocked}`);
+        continue;
+      }
+      const c = cache[ref];
+      if (!c) {
+        inconclusive ??= `${ref} not checked yet`;
+        continue;
+      }
+      if (c.ok) {
+        const latency = c.latencyMs !== undefined ? ` in ${(c.latencyMs / 1000).toFixed(1)} s` : "";
+        const fell = failed.length ? ` (${failed.join("; ")}; falls back)` : "";
+        return { state: "ready", detail: `${ref} answered${latency}${fell}`, model: ref };
+      }
+      if (c.rateLimited || c.timedOut) inconclusive ??= `${ref}: ${c.rateLimited ? "rate limited" : "no answer"}, so it could not be checked (${c.error ?? "try again"})`;
+      else failed.push(`${ref}: ${c.error ?? "failed"}`);
+    }
+    if (inconclusive) return { state: "not_checked", detail: [inconclusive, ...failed].join("; ") };
+    return { state: "needs_setup", detail: failed.join("; ") };
+  }
+
+  function rows(): SetupRow[] {
+    const providers = store.providers.list();
+    const routing = store.routing.get();
+    const settings = store.settings.get();
+    const cache = checks();
+    const enabledChannels = store.channels.list().filter((c) => c.enabled);
+    const enabledConnectors = connectors.list().filter((c) => c.enabled);
+    const out: SetupRow[] = [];
+
+    // ─── A chat model answers ───
+    const models = { label: "Open models", path: "/models" };
+    if (!providers.length) {
+      out.push({ id: "chat_model", label: "A chat model answers", state: "needs_setup", detail: "No model provider yet. Free ones (Pollinations, LLM7) need no key.", fix: { label: "Add a provider", path: "/models" } });
+    } else if (!routing.chat?.length) {
+      out.push({ id: "chat_model", label: "A chat model answers", state: "needs_setup", detail: "No model is chosen for chat.", fix: { label: "Choose a chat model", path: "/models" } });
+    } else {
+      const chat = laneResult(routing.chat, cache, providers);
+      const detail = chat.state === "not_checked" && chat.detail.endsWith("not checked yet") ? `${chat.detail}. Check again to send it a test message.` : chat.detail;
+      out.push({ id: "chat_model", label: "A chat model answers", state: chat.state, detail, fix: chat.state === "ready" ? null : models });
+    }
+
+    // ─── Every job has a working model ───
+    const lanes: Exclude<Lane, "chat">[] = ["agent", "briefing", "fast", ...(enabledChannels.length ? (["bot"] as const) : [])];
+    const results = lanes.map((lane) => ({ lane, ...laneResult(laneRefs(routing, lane), cache, providers) }));
+    const worst: SetupState = results.some((r) => r.state === "needs_setup") ? "needs_setup" : results.some((r) => r.state === "not_checked") ? "not_checked" : "ready";
+    out.push({
+      id: "lanes",
+      label: "Every job has a working model",
+      state: providers.length ? worst : "needs_setup",
+      detail:
+        worst === "ready"
+          ? `${results.map((r) => LANE_NAMES[r.lane]).join(", ")}: ${[...new Set(results.map((r) => r.model))].join(", ")}`
+          : results.filter((r) => r.state !== "ready").map((r) => `${LANE_NAMES[r.lane]}: ${r.detail}`).join(" · "),
+      fix: worst === "ready" ? null : models,
+    });
+
+    // ─── Access token when reachable beyond this computer ───
+    const security = { label: "Open security", path: "/?settings=security" };
+    const { boundLocal, publicRemote } = reachable();
+    if (env.token) {
+      out.push(
+        env.token.length < 16
+          ? { id: "token", label: "Access token (Z_TOKEN)", state: "needs_setup", detail: `Z_TOKEN is only ${env.token.length} characters. Use 32 or more random ones (openssl rand -hex 32).`, fix: null }
+          : { id: "token", label: "Access token (Z_TOKEN)", state: "ready", detail: "Every API request must carry the token.", fix: null },
+      );
+    } else if (boundLocal && !publicRemote) {
+      out.push({ id: "token", label: "Access token (Z_TOKEN)", state: "optional", detail: `Only this computer can reach z (HOST=${env.host}).`, fix: null });
+    } else {
+      const why = publicRemote
+        ? `z has a public address (${origin(env.publicUrl!)}) but no token`
+        : `z listens on every network interface (port ${env.port}) without a token`;
+      out.push({
+        id: "token",
+        label: "Access token (Z_TOKEN)",
+        state: "needs_setup",
+        detail: `${why}: anyone who reaches it can spend your provider keys. Set Z_TOKEN (openssl rand -hex 32), or HOST=127.0.0.1 to keep z on this computer.`,
+        fix: security,
+      });
+    }
+
+    // ─── Public URL for webhook channels and OAuth ───
+    const needers = [
+      ...enabledChannels.filter((c) => channels.needsPublicUrl(c.kind)).map((c) => c.label),
+      ...enabledConnectors.filter((c) => c.auth === "oauth").map((c) => c.label),
+    ];
+    if (env.publicUrl) {
+      const host = safeHost(env.publicUrl);
+      const at = origin(env.publicUrl);
+      if (!host || (!env.publicUrl.startsWith("https://") && !LOOPBACK.has(host))) {
+        out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "needs_setup", detail: `${at} is not https; platforms and OAuth providers only call https addresses.`, fix: null });
+      } else if (!probe) {
+        out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "not_checked", detail: `${at}. Check again to test that it reaches this server.`, fix: null });
+      } else {
+        out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: probe.ok ? "ready" : "needs_setup", detail: probe.detail, fix: null });
+      }
+    } else if (needers.length) {
+      out.push({
+        id: "public_url",
+        label: "Public URL (Z_PUBLIC_URL)",
+        state: "needs_setup",
+        detail: `${needers.join(", ")} must call z back. Set Z_PUBLIC_URL to the https address z is reachable at.`,
+        fix: null,
+      });
+    } else {
+      out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "optional", detail: "Only needed for webhook channels and OAuth sign-ins.", fix: null });
+    }
+
+    // ─── Master key backed up ───
+    if (env.masterKeySource === "env") {
+      out.push({ id: "master_key", label: "Master key backed up", state: "ready", detail: "Set by Z_MASTER_KEY. Keep that value in your password manager.", fix: null });
+    } else {
+      const ack = store.kv.get<{ fingerprint: string; at: string }>(MASTER_ACK_KEY);
+      out.push(
+        ack?.fingerprint === masterFingerprint()
+          ? { id: "master_key", label: "Master key backed up", state: "ready", detail: `You marked master.key as backed up on ${ack.at.slice(0, 10)}.`, fix: null }
+          : {
+              id: "master_key",
+              label: "Master key backed up",
+              state: "needs_setup",
+              detail: "z generated master.key in its data directory. Copy it somewhere safe: without it, stored keys and tokens can't be decrypted.",
+              fix: null,
+              ack: "I backed it up",
+            },
+      );
+    }
+
+    // ─── Notifications on a device ───
+    const devices = store.push.list().length;
+    const notifications = { label: "Turn on notifications", path: "/?settings=notifications" };
+    const last = push.lastSend();
+    if (devices) {
+      const failed = last && last.devices > 0 && last.sent === 0;
+      out.push({
+        id: "push",
+        label: "Notifications on a device",
+        state: failed ? "needs_setup" : "ready",
+        detail: failed
+          ? `The last notification reached none of your ${last.devices} device${last.devices === 1 ? "" : "s"}. Send a test from Notifications.`
+          : `${devices} device${devices === 1 ? "" : "s"}${last ? `; the last notification reached ${last.sent} of ${last.devices}` : ""}.`,
+        fix: failed ? notifications : null,
+      });
+    } else if (settings.owner) {
+      out.push({ id: "push", label: "Notifications on a device", state: "optional", detail: `z reaches you in ${settings.owner.label}; a device adds approvals on your lock screen.`, fix: notifications });
+    } else {
+      out.push({ id: "push", label: "Notifications on a device", state: "needs_setup", detail: "Nothing reaches you while the app is closed: approvals and watch hits wait unseen.", fix: notifications });
+    }
+
+    // ─── Owner paired ───
+    const reach = { label: "Pair", path: "/?settings=reach" };
+    if (settings.owner) {
+      const channel = store.channels.get(settings.owner.channelId);
+      out.push(
+        channel?.enabled
+          ? { id: "owner", label: "Owner paired", state: "ready", detail: `z reaches you as ${settings.owner.label} in ${channel.label}.`, fix: null }
+          : { id: "owner", label: "Owner paired", state: "needs_setup", detail: `The paired channel (${settings.owner.channelId}) is gone or turned off.`, fix: reach },
+      );
+    } else if (enabledChannels.length) {
+      out.push({ id: "owner", label: "Owner paired", state: "needs_setup", detail: `Pair yourself so approvals and briefings reach you in ${enabledChannels[0]!.label}.`, fix: reach });
+    } else {
+      out.push({ id: "owner", label: "Owner paired", state: "optional", detail: "Connect a channel (Telegram, Discord, Slack…) to be reached away from the app.", fix: { label: "Add a channel", path: "/channels" } });
+    }
+
+    // ─── Each enabled channel and connector ───
+    for (const c of enabledChannels) {
+      const fix = { label: "Open channels", path: "/channels" };
+      const row = { id: `channel:${c.id}`, label: `${c.label} (${c.kind})` };
+      if (channels.needsPublicUrl(c.kind) && !env.publicUrl) out.push({ ...row, state: "needs_setup", detail: `Needs Z_PUBLIC_URL: ${c.kind} calls z at /hooks/${c.id}.`, fix });
+      else if (c.status === "ok") out.push({ ...row, state: "ready", detail: c.statusDetail ?? "Connected", fix: null });
+      else if (c.status === "idle") out.push({ ...row, state: "not_checked", detail: c.statusDetail ?? "Not connected yet", fix });
+      else out.push({ ...row, state: "needs_setup", detail: c.statusDetail ?? "Not working", fix });
+    }
+    for (const c of enabledConnectors) {
+      const fix = { label: "Open connection", path: `/connect?connector=${encodeURIComponent(c.id)}` };
+      const row = { id: `connector:${c.id}`, label: c.label };
+      if (c.status === "connected") out.push({ ...row, state: "ready", detail: `${c.tools.length} tool${c.tools.length === 1 ? "" : "s"} from ${c.urlDisplay}`, fix: null });
+      else if (c.status === "connecting") out.push({ ...row, state: "not_checked", detail: "Connecting…", fix: null });
+      else out.push({ ...row, state: "needs_setup", detail: c.statusDetail ?? (c.status === "needs_auth" ? "Sign in to connect" : "Not connected"), fix });
+    }
+    return out;
+  }
+
+  // Provider errors can echo what was sent (some quote the key back): rows pass the secret registry too.
+  const checklist = (): SetupChecklist => redactJson({ rows: rows(), checkedAt: store.kv.get<string>(CHECKED_AT_KEY) ?? null });
+
+  /** Test each lane's chain in order until one model answers; one call per model per check. */
+  async function checkModels() {
+    const providers = store.providers.list();
+    const routing = store.routing.get();
+    const tested = new Map<ModelRef, ModelCheck>();
+    let calls = 0;
+    const lanes: Lane[] = ["chat", "agent", "briefing", "fast", "bot"];
+    for (const lane of lanes) {
+      for (const ref of laneRefs(routing, lane)) {
+        let check = tested.get(ref);
+        if (!check) {
+          if (unusable(ref, providers) || calls >= MAX_MODEL_CALLS) continue;
+          const { providerId, modelId } = parseModelRef(ref);
+          calls++;
+          const result = await testModel(providers.find((p) => p.id === providerId)!, modelId, MODEL_TIMEOUT_MS);
+          check = toCheck(result);
+          tested.set(ref, check);
+          saveCheck(ref, check);
+        }
+        if (check.ok) break;
+      }
+    }
+  }
+
+  async function probePublicUrl() {
+    if (!env.publicUrl) return;
+    const url = `${env.publicUrl}/api/health`;
+    const at = new Date().toISOString();
+    try {
+      const res = await fetch(url, {
+        headers: env.token ? { authorization: `Bearer ${env.token}` } : {},
+        redirect: "manual",
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; version?: string } | null;
+      if (res.ok && body?.ok && body.version === pkg.version) probe = { ok: true, detail: `${origin(env.publicUrl)} reaches this server.`, at };
+      else if (res.ok && body?.ok) probe = { ok: false, detail: `${origin(env.publicUrl)} answers as z ${body.version}, but this server is ${pkg.version}: it points elsewhere.`, at };
+      else probe = { ok: false, detail: `${origin(env.publicUrl)}/api/health answered ${res.status}${res.status === 401 ? " (a different Z_TOKEN?)" : ""}; it does not reach this server.`, at };
+    } catch (error) {
+      probe = { ok: false, detail: `${origin(env.publicUrl)} could not be reached: ${describeError(error)}`, at };
+    }
+  }
+
+  /** Reconnect what is failing, bounded so one slow server doesn't hold the check. */
+  async function retryFailing() {
+    const bounded = (p: Promise<unknown>) => Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, PROBE_TIMEOUT_MS))]);
+    await Promise.all([
+      ...store.channels.list().filter((c) => c.enabled && c.status === "error").map((c) => bounded(channels.sync(c.id))),
+      ...connectors.list().filter((c) => c.enabled && c.status === "error").map((c) => bounded(connectors.sync(c.id))),
+    ]);
+  }
+
+  return {
+    checklist,
+
+    /** POST /api/setup/check: the live tests. Concurrent calls share one run. */
+    check(): Promise<SetupChecklist> {
+      running ??= (async () => {
+        try {
+          await Promise.all([checkModels(), probePublicUrl(), retryFailing()]);
+          store.kv.set(CHECKED_AT_KEY, new Date().toISOString());
+          return checklist();
+        } finally {
+          running = null;
+        }
+      })();
+      return running;
+    },
+
+    /** Rows the owner confirms themselves. Returns false for rows that can't be acknowledged. */
+    ack(id: string): boolean {
+      if (id !== "master_key" || env.masterKeySource !== "file") return false;
+      store.kv.set(MASTER_ACK_KEY, { fingerprint: masterFingerprint(), at: new Date().toISOString() });
+      return true;
+    },
+
+    /** The provider Test button counts as a live check of that model. */
+    record(providerId: string, result: { ok: boolean; model?: string; error?: string; rateLimited?: boolean; timedOut?: boolean; latencyMs?: number }) {
+      if (result.model) saveCheck(`${providerId}:${result.model}`, toCheck(result));
+    },
+
+    /** A provider's config changed (or it was removed): its earlier results no longer say anything. */
+    forget(providerId: string) {
+      const kept = Object.fromEntries(Object.entries(checks()).filter(([ref]) => parseModelRef(ref).providerId !== providerId));
+      store.kv.set(CHECKS_KEY, kept);
+    },
+
+    modelChecks: checks,
+  };
+}
+
+function toCheck(result: { ok: boolean; error?: string; rateLimited?: boolean; timedOut?: boolean; latencyMs?: number }): ModelCheck {
+  return {
+    ok: result.ok,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.rateLimited ? { rateLimited: true } : {}),
+    ...(result.timedOut ? { timedOut: true } : {}),
+    ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
+    at: new Date().toISOString(),
+  };
+}
+
+function safeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/** Never more than the origin: some setups put a secret in the path. */
+export function origin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "(invalid URL)";
+  }
+}

@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { Services } from "../app.ts";
 import { badRequest, body, notFound, validate } from "../http.ts";
+import { redactJson } from "../secrets.ts";
 import { isValidCron, isValidTimezone } from "../schedule.ts";
 
 const PluginUpdate = z.object({
@@ -17,7 +18,7 @@ export function toProviderView(store: Services["rt"]["store"], p: ProviderConfig
   return { ...rest, hasKey: Boolean(apiKey), keyHint: store.providers.keyHint(p.id), usage: store.usage.month(p.id) };
 }
 
-export function configRoutes({ rt, tasks, briefings, channels }: Services) {
+export function configRoutes({ rt, tasks, briefings, channels, setup }: Services) {
   const { store } = rt;
   const app = new Hono();
 
@@ -53,16 +54,27 @@ export function configRoutes({ rt, tasks, briefings, channels }: Services) {
     if (raw.id !== undefined && raw.id !== id) throw badRequest("id: must match the URL");
     const { apiKey, ...input } = validate(ProviderInput, { ...raw, id });
     if (input.kind === "openai-compatible" && !input.baseURL) throw badRequest("baseURL: required for openai-compatible providers");
+    const before = store.providers.get(id);
     store.providers.upsert(input, apiKey);
+    // A new key, endpoint or headers make earlier live tests meaningless.
+    const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    if (!before || apiKey !== undefined || before.kind !== input.kind || !same(before.baseURL, input.baseURL) || !same(before.headers, input.headers)) setup.forget(id);
     return c.json(providerView(provider(id)));
   });
 
   app.delete("/providers/:id", (c) => {
     if (!store.providers.delete(c.req.param("id"))) throw notFound("Provider");
+    setup.forget(c.req.param("id"));
     return c.json({ ok: true });
   });
 
-  app.post("/providers/:id/test", async (c) => c.json(await testProvider(provider(c.req.param("id")))));
+  app.post("/providers/:id/test", async (c) => {
+    const id = c.req.param("id");
+    const result = await testProvider(provider(id));
+    setup.record(id, result);
+    // Some providers quote the key back in their error message.
+    return c.json(redactJson(result));
+  });
 
   app.get("/providers/:id/models", async (c) => {
     const p = provider(c.req.param("id"));

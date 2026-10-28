@@ -262,6 +262,11 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     view,
     sync,
     syncAll: () => Promise.all(store.channels.list().map((c) => sync(c.id))),
+    /** Whether the platform must call us (webhook-only adapter), so the channel needs Z_PUBLIC_URL. */
+    needsPublicUrl: (kind: string) => {
+      const adapter = adapterFor(kind);
+      return Boolean(adapter?.webhook && !adapter.start);
+    },
 
     async remove(id: string): Promise<boolean> {
       await (locks.get(id) ?? Promise.resolve());

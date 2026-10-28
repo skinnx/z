@@ -13,6 +13,8 @@ export type Push = ReturnType<typeof createPush>;
 
 export function createPush(rt: Runtime) {
   const { store } = rt;
+  /** The last delivery, for the setup checklist: devices tried and how many accepted it. */
+  let last: { at: string; sent: number; devices: number } | null = null;
 
   /** Generated on first use and sealed like every other secret. */
   function keys(): VapidKeys {
@@ -29,6 +31,7 @@ export function createPush(rt: Runtime) {
 
   return {
     publicKey: () => vapidPublicKey(keys()),
+    lastSend: () => last,
 
     /** Resolves to the number of devices the push service accepted the message for. */
     async send(payload: PushPayload): Promise<number> {
@@ -57,7 +60,9 @@ export function createPush(rt: Runtime) {
           }
         }),
       );
-      return results.filter(Boolean).length;
+      const sent = results.filter(Boolean).length;
+      last = { at: new Date().toISOString(), sent, devices: devices.length };
+      return sent;
     },
   };
 }
