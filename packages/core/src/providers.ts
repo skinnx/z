@@ -18,6 +18,7 @@ import {
 import { createXai, xai } from "@ai-sdk/xai";
 import { generateText, type ToolSet } from "ai";
 import type { z } from "zod";
+import { contextWindowFor, DEFAULT_CONTEXT_WINDOW } from "./context.ts";
 import type { Lane, ModelRef, ProviderInput, ProviderKind, Routing } from "./contract.ts";
 
 /** A stored provider with its key decrypted, as core needs it. */
@@ -349,8 +350,16 @@ export function createModelResolver(deps: ModelResolverDeps) {
     };
   }
 
-  const laneRefs = (routing: Routing, lane: Lane): ModelRef[] =>
-    routing[lane]?.length ? routing[lane]! : lane === "fast" ? (routing.agent ?? []) : [];
+  /** The smallest context window in a chain, since any of its models may end up serving. */
+  function contextWindow(refs: ModelRef[]): number {
+    if (refs.length === 0) return DEFAULT_CONTEXT_WINDOW;
+    return Math.min(
+      ...refs.map((ref) => {
+        const { providerId, modelId } = parseModelRef(ref);
+        return contextWindowFor(modelId, deps.providers().find((p) => p.id === providerId)?.contextWindows);
+      }),
+    );
+  }
 
   /** The fallback chain for a lane; `fast` falls back to `agent` when empty. */
   function forLane(routing: Routing, lane: Lane, opts: ChainOptions = {}): LanguageModelV4 {
@@ -367,8 +376,12 @@ export function createModelResolver(deps: ModelResolverDeps) {
     return tools;
   }
 
-  return { resolveModel, chain, forLane, searchTools };
+  return { resolveModel, chain, forLane, searchTools, contextWindow };
 }
+
+/** A lane's refs; `fast` falls back to `agent` when empty. */
+export const laneRefs = (routing: Routing, lane: Lane): ModelRef[] =>
+  routing[lane]?.length ? routing[lane]! : lane === "fast" ? (routing.agent ?? []) : [];
 
 export class NoModelConfiguredError extends Error {
   override name = "NoModelConfiguredError";

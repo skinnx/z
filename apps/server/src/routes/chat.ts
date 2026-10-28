@@ -1,5 +1,5 @@
 /** Streaming chat and its stored threads. */
-import { ModelRef, NoModelConfiguredError, parseModelRef, streamChat } from "@z/core";
+import { ModelRef, NoModelConfiguredError, parseModelRef, streamChat, type ContextSummary } from "@z/core";
 import { safeValidateUIMessages, type UIMessage } from "ai";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -30,13 +30,19 @@ export function chatRoutes({ rt }: Services) {
       throw badRequest(`model: unknown provider in "${input.model}"`);
     }
 
+    let summary: ContextSummary | null = null;
     try {
       return await streamChat(
         {
           messages: validated.data,
           model: input.model,
           signal: c.req.raw.signal,
-          onFinish: (messages) => store.threads.save(input.id, titleOf(messages), messages),
+          summary: store.threads.summary(input.id),
+          onSummary: (s) => (summary = s),
+          onFinish: (messages) => {
+            store.threads.save(input.id, titleOf(messages), messages);
+            if (summary) store.threads.setSummary(input.id, summary);
+          },
         },
         rt.ownerDeps("chat"),
       );

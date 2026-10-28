@@ -12,6 +12,7 @@ import {
   type ChannelInput,
   type ConnectorInput,
   type ConnectorView,
+  type ContextSummary,
   type McpToolDefinition,
   type Memory,
   type Notice,
@@ -92,6 +93,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     models: parse(r.models, []),
     enabled: Boolean(r.enabled),
     ...(r.monthly_budget_usd !== null ? { monthlyBudgetUsd: r.monthly_budget_usd } : {}),
+    ...(r.context_windows ? { contextWindows: parse(r.context_windows, {}) } : {}),
     apiKey: r.api_key ? sealer.open(r.api_key) : null,
   });
 
@@ -108,8 +110,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       const sealed = apiKey === undefined ? (existing?.api_key ?? null) : apiKey ? sealer.seal(apiKey) : null;
       const hint = apiKey === undefined ? (existing?.key_hint ?? null) : apiKey ? apiKey.slice(-4) : null;
       run(
-        `INSERT OR REPLACE INTO providers (id, kind, label, base_url, headers, models, enabled, monthly_budget_usd, api_key, key_hint, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO providers (id, kind, label, base_url, headers, models, enabled, monthly_budget_usd, context_windows, api_key, key_hint, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         p.id,
         p.kind,
         p.label,
@@ -118,6 +120,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         json(p.models),
         p.enabled ? 1 : 0,
         p.monthlyBudgetUsd ?? null,
+        p.contextWindows ? json(p.contextWindows) : null,
         sealed,
         hint,
         existing?.created_at ?? now(),
@@ -487,16 +490,24 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       return r ? { id: r.id as string, title: r.title as string, messages: parse<UIMessage[]>(r.messages, []) } : null;
     },
     save: (id: string, title: string, messages: UIMessage[]) => {
-      const existing = get("SELECT title, created_at FROM threads WHERE id = ?", id);
+      // Upsert, not replace: the cached summary stays with the thread.
       run(
-        "INSERT OR REPLACE INTO threads (id, title, messages, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        `INSERT INTO threads (id, title, messages, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at`,
         id,
-        existing?.title ?? title,
+        title,
         json(messages),
-        existing?.created_at ?? now(),
+        now(),
         now(),
       );
     },
+    /** The summary of the oldest turns last sent to the model in place of them. */
+    summary: (id: string): ContextSummary | null => {
+      const r = get("SELECT summary, summarized_up_to FROM threads WHERE id = ?", id);
+      return r?.summary ? { text: r.summary, upTo: Number(r.summarized_up_to) } : null;
+    },
+    setSummary: (id: string, summary: ContextSummary) =>
+      run("UPDATE threads SET summary = ?, summarized_up_to = ? WHERE id = ?", summary.text, summary.upTo, id),
     delete: (id: string) => run("DELETE FROM threads WHERE id = ?", id).changes > 0,
     clear: () => Number(run("DELETE FROM threads").changes),
     /** Every thread with its messages, for export. */

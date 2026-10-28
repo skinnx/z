@@ -7,6 +7,7 @@ export * from "./bot.ts";
 export * from "./briefing.ts";
 export * from "./chat.ts";
 export * from "./connectors.ts";
+export * from "./context.ts";
 export * from "./memory.ts";
 export * from "./sensitive.ts";
 export * from "./watch.ts";

@@ -31,6 +31,8 @@ export const ProviderInput = z.object({
   enabled: z.boolean().default(true),
   /** Soft monthly cap in USD; background work pauses when exceeded. */
   monthlyBudgetUsd: z.number().nonnegative().optional(),
+  /** Context window in tokens per model id, overriding z's built-in table (e.g. a local model's `num_ctx`). */
+  contextWindows: z.record(z.string(), z.number().int().min(1024)).optional(),
 });
 export type ProviderInput = z.input<typeof ProviderInput>;
 
@@ -51,6 +53,19 @@ export const Lane = z.enum(["chat", "agent", "briefing", "bot", "fast"]);
 export type Lane = z.infer<typeof Lane>;
 export const Routing = z.record(Lane, z.array(ModelRef));
 export type Routing = z.infer<typeof Routing>;
+
+/**
+ * Sent as a `data-context` chat part when the prompt was compacted to fit the model's window.
+ * The stored conversation is untouched; only what the model saw shrank.
+ */
+export type ContextReport = {
+  /** The oldest turns went to the model as one summary. */
+  summarized: boolean;
+  /** Old tool results cut to an excerpt. */
+  trimmed: number;
+  tokensBefore: number;
+  tokensAfter: number;
+};
 
 // ─── Tools, risk & approvals ────────────────────────────────────────────────
 
@@ -395,6 +410,7 @@ export type LiveEvent =
 // PUT    /api/routing       Routing        → Routing
 // POST   /api/chat          { id, messages: UIMessage[], model?: ModelRef }
 //                                          → AI SDK UI message stream (useChat compatible)
+//                                            A `data-context` part (ContextReport) says when the prompt was compacted.
 // GET    /api/threads                      → { id, title, updatedAt }[]
 // GET    /api/threads/:id                  → { id, title, messages: UIMessage[] }
 // DELETE /api/threads/:id                  → { ok: true }
