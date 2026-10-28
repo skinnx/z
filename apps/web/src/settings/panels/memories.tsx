@@ -122,7 +122,7 @@ function MemoryEditor({ memory, onDone }: { memory?: Memory; onDone?: () => void
         e.preventDefault();
         submit();
       }}
-      className={memory ? "flex flex-col gap-2" : "rounded-(--radius-card) border border-line bg-surface focus-within:border-line-strong"}
+      className={memory ? "flex flex-col gap-2" : "rounded-(--radius-card) border border-line bg-surface has-[textarea:focus-visible]:border-accent has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:-outline-offset-1 has-[textarea:focus-visible]:outline-accent"}
     >
       <Field label={memory ? t.editMemory : t.addMemory} srOnlyLabel className="gap-0">
         <Textarea

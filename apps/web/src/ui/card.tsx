@@ -1,5 +1,8 @@
+import { RotateCw } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
+import { useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
+import { Button } from "./button.tsx";
 
 export function Card({ className, ...props }: ComponentProps<"div">) {
   return <div className={cn("min-w-0 rounded-(--radius-card) border border-line bg-surface", className)} {...props} />;
@@ -82,14 +85,22 @@ export function Loading({ label, className }: { label: string; className?: strin
   );
 }
 
+/** What to tell the owner about a failed request: an unreachable server reads as such, in their language. */
+export function errorText(error: unknown, t: Dict): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === "offline" ? t.offline : message;
+}
+
 /** A failed load: what went wrong and one way forward. */
-export function LoadError({ error, onRetry, retryLabel }: { error: Error; onRetry: () => void; retryLabel: string }) {
+export function LoadError({ error, onRetry, retryLabel }: { error: unknown; onRetry: () => void; retryLabel?: string }) {
+  const t = useT();
   return (
     <div role="alert" className="flex flex-col items-center gap-3 rounded-(--radius-card) border border-danger/40 bg-danger-soft px-6 py-8 text-center">
-      <p className="max-w-md text-sm break-words text-danger">{error.message}</p>
-      <button type="button" onClick={onRetry} className="h-9 rounded-lg border border-line bg-surface px-4 text-sm font-medium hover:bg-subtle">
-        {retryLabel}
-      </button>
+      <p className="max-w-md text-sm break-words text-danger">{errorText(error, t)}</p>
+      <Button onClick={onRetry}>
+        <RotateCw aria-hidden />
+        {retryLabel ?? t.retry}
+      </Button>
     </div>
   );
 }

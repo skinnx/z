@@ -26,9 +26,10 @@ export function Confirm({
     <BaseAlertDialog.Root open={open} onOpenChange={setOpen}>
       <BaseAlertDialog.Trigger render={trigger} />
       <BaseAlertDialog.Portal>
-        <BaseAlertDialog.Backdrop className={backdropClass} />
-        <BaseAlertDialog.Viewport className="fixed inset-0 z-50 grid place-items-center p-4">
-          <BaseAlertDialog.Popup className="w-full max-w-sm rounded-2xl border border-line bg-surface p-5 text-fg shadow-2xl transition-[scale,opacity] duration-150 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0">
+        {/* Confirms often open over a dialog (z-40/50): their own scrim and popup stack above it. */}
+        <BaseAlertDialog.Backdrop className={backdropClass.replace("z-40", "z-50")} />
+        <BaseAlertDialog.Viewport className="fixed inset-0 z-[60] grid place-items-center p-4">
+          <BaseAlertDialog.Popup className="w-full max-w-sm rounded-2xl border border-line bg-surface p-5 text-fg shadow-2xl ring-1 ring-line-strong transition-[scale,opacity] duration-150 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0">
             <BaseAlertDialog.Title className="text-base font-semibold">{title}</BaseAlertDialog.Title>
             <BaseAlertDialog.Description className="mt-1 text-sm text-fg-muted">
               {description ?? t.cannotUndo}
