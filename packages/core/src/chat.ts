@@ -82,7 +82,8 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
         prepareStep: fitEachStep({ window, summarize, log: deps.log, onReport: report }),
         abortSignal: request.signal,
       });
-      writer.merge(result.toUIMessageStream({ onError: describeError }));
+      // Providers with built-in search (OpenAI/xAI web search, Perplexity…) cite sources; the UI shows them.
+      writer.merge(result.toUIMessageStream({ onError: describeError, sendSources: true }));
     },
   });
 

@@ -5,31 +5,32 @@ import { useT } from "../i18n.ts";
 import { relativeTime, json } from "../lib/format.ts";
 import { riskIcon, riskTone } from "../lib/icons.tsx";
 import { cn } from "../lib/cn.ts";
-import { Button } from "../ui/button.tsx";
 import { Disclosure } from "../ui/collapsible.tsx";
 import { notifyError } from "../ui/toast.tsx";
+import { CodeBlock } from "./ai-elements/code-block.tsx";
+import { Confirmation, ConfirmationAction, ConfirmationActions, ConfirmationRequest, ConfirmationTitle } from "./ai-elements/confirmation.tsx";
 
+/** A task's tool call waiting on the owner: the AI Elements Confirmation, fed by z's approvals API. */
 export function ApprovalCard({ approval }: { approval: Approval }) {
   const t = useT();
   const decide = useDecide();
   const Icon = riskIcon[approval.risk];
   const run = (approve: boolean, remember = false) =>
     decide.mutate({ id: approval.id, decision: { approve, remember } }, { onError: notifyError });
+  const state = approval.status === "pending" ? "approval-requested" : approval.status === "denied" ? "output-denied" : "approval-responded";
 
   return (
-    <article
-      aria-label={approval.summary}
-      className={cn(
-        "@container rounded-(--radius-card) border bg-surface p-4",
-        approval.risk === "external" ? "border-danger/50" : "border-line",
-      )}
+    <Confirmation
+      approval={{ id: approval.toolApprovalId, ...(approval.status === "pending" ? {} : { approved: approval.status === "approved" }) }}
+      state={state}
+      tone={approval.risk === "external" ? "danger" : "default"}
     >
       <div className="flex items-start gap-3">
         <span className={cn("grid size-10 shrink-0 place-items-center rounded-xl bg-subtle", riskTone[approval.risk])}>
           <Icon aria-hidden className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-medium leading-snug break-words">{approval.summary}</p>
+          <ConfirmationTitle className="font-medium">{approval.summary}</ConfirmationTitle>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-fg-muted">
             <code className="font-mono">{approval.tool}</code>
             <span aria-hidden>·</span>
@@ -38,26 +39,30 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
             <time dateTime={approval.createdAt}>{relativeTime(approval.createdAt)}</time>
           </p>
           <Disclosure summary={t.input} className="mt-1">
-            <pre className="mt-1 max-h-60 overflow-auto rounded-lg bg-subtle p-3 font-mono text-xs leading-relaxed">{json(approval.input)}</pre>
+            <div className="mt-1 max-h-60 overflow-auto rounded-lg">
+              <CodeBlock code={json(approval.input)} language="json" />
+            </div>
           </Disclosure>
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2 @md:justify-end">
-        <Button variant="primary" onClick={() => run(true)} disabled={decide.isPending} className="flex-1 @md:flex-none">
-          <Check aria-hidden />
-          {t.approve}
-        </Button>
-        {approval.risk !== "external" && (
-          <Button onClick={() => run(true, true)} disabled={decide.isPending} className="flex-1 @md:flex-none">
-            <ShieldCheck aria-hidden />
-            {t.alwaysAllow}
-          </Button>
-        )}
-        <Button variant="danger" onClick={() => run(false)} disabled={decide.isPending} className="flex-1 @md:flex-none">
-          <X aria-hidden />
-          {t.deny}
-        </Button>
-      </div>
-    </article>
+      <ConfirmationRequest>
+        <ConfirmationActions>
+          <ConfirmationAction size="md" variant="primary" onClick={() => run(true)} disabled={decide.isPending}>
+            <Check aria-hidden />
+            {t.approve}
+          </ConfirmationAction>
+          {approval.risk !== "external" && (
+            <ConfirmationAction size="md" onClick={() => run(true, true)} disabled={decide.isPending}>
+              <ShieldCheck aria-hidden />
+              {t.alwaysAllow}
+            </ConfirmationAction>
+          )}
+          <ConfirmationAction size="md" variant="danger" onClick={() => run(false)} disabled={decide.isPending}>
+            <X aria-hidden />
+            {t.deny}
+          </ConfirmationAction>
+        </ConfirmationActions>
+      </ConfirmationRequest>
+    </Confirmation>
   );
 }

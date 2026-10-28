@@ -1,12 +1,11 @@
-import { Form } from "@base-ui/react/form";
 import { ArrowUp, CalendarClock, CalendarDays, Radar, Repeat, Terminal, Timer, Zap } from "lucide-react";
-import { useRef, useState, type RefObject } from "react";
+import { useId, useRef, useState, type RefObject } from "react";
 import { useNavigate } from "react-router";
 import { useCreateTask } from "../api/tasks.ts";
+import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from "./ai-elements/prompt-input.tsx";
 import { useT } from "../i18n.ts";
 import { isValidCron, toCron, watchCron, type Preset, type WatchEvery } from "../lib/cron.ts";
-import { Button } from "../ui/button.tsx";
-import { Field, Input, Textarea } from "../ui/field.tsx";
+import { Field, Input } from "../ui/field.tsx";
 import { Select } from "../ui/select.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 import { Segmented } from "../ui/toggle-group.tsx";
@@ -35,6 +34,7 @@ export function Composer({
   const [time, setTime] = useState("08:00");
   const [cron, setCron] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
+  const hintId = useId();
   const watch = mode === "watch";
   const needsCron = watch ? every === "custom" : mode === "custom";
   const needsTime = watch ? every === "daily" : mode === "daily" || mode === "weekdays";
@@ -61,33 +61,26 @@ export function Composer({
   }
 
   return (
-    <Form
+    <PromptInput
       ref={formRef}
       aria-label={t.delegate}
-      onSubmit={(e) => {
-        e.preventDefault();
-        submit();
-      }}
-      className="rounded-(--radius-card) border border-line bg-surface shadow-sm transition-colors focus-within:border-line-strong"
+      onSubmit={() => submit()}
+      className="rounded-(--radius-card)"
     >
-      <Field label={t.instructions} srOnlyLabel className="gap-0">
-        <Textarea
-          ref={inputRef}
-          autoFocus={autoFocus}
-          value={text}
-          onChange={(e) => setText(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          placeholder={watch ? t.watchPlaceholder : t.delegatePlaceholder}
-          rows={3}
-          className="min-h-28 rounded-b-none border-0 bg-transparent px-4 pt-4 text-base focus-visible:outline-none"
-        />
-      </Field>
-      <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
+      <PromptInputTextarea
+        ref={inputRef}
+        label={t.instructions}
+        autoFocus={autoFocus}
+        value={text}
+        onChange={(e) => setText(e.currentTarget.value)}
+        placeholder={watch ? t.watchPlaceholder : t.delegatePlaceholder}
+        aria-describedby={hintId}
+        className="min-h-28 pt-4 text-base"
+      />
+      <span id={hintId} className="sr-only">
+        {t.newlineHint}
+      </span>
+      <PromptInputFooter className="flex-wrap border-t border-line px-3 py-2">
         <Segmented<Mode>
           label={t.schedule}
           value={mode}
@@ -128,11 +121,11 @@ export function Composer({
             <Input value={cron} onValueChange={setCron} placeholder="0 8 * * 1" spellCheck={false} className="h-8 font-mono text-sm" />
           </Field>
         )}
-        <Button type="submit" variant="primary" disabled={!canSubmit} className="ms-auto" title={t.shortcutSubmit}>
+        <PromptInputSubmit size="md" disabled={!canSubmit} className="ms-auto rounded-lg" title={t.newlineHint}>
           {watch ? t.startWatch : t.delegate}
           {watch ? <Radar aria-hidden /> : <ArrowUp aria-hidden />}
-        </Button>
-      </div>
-    </Form>
+        </PromptInputSubmit>
+      </PromptInputFooter>
+    </PromptInput>
   );
 }

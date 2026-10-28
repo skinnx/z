@@ -4,42 +4,59 @@ import {
   getToolName,
   isToolUIPart,
   lastAssistantMessageIsCompleteWithApprovalResponses,
+  type ChatStatus,
   type DynamicToolUIPart,
+  type SourceUrlUIPart,
   type ToolUIPart,
   type UIMessage,
 } from "ai";
-import {
-  ArrowUp,
-  Brain,
-  Check,
-  CircleAlert,
-  Copy,
-  Hand,
-  KeyRound,
-  ListCollapse,
-  MessageSquarePlus,
-  RefreshCw,
-  ShieldCheck,
-  Square,
-  Trash2,
-  Wrench,
-  X,
-} from "lucide-react";
+import { Check, ChevronsUpDown, CircleAlert, Copy, Cpu, KeyRound, ListCollapse, MessageSquarePlus, RefreshCw, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, NavLink, useLocation, useNavigate, useParams } from "react-router";
-import { Streamdown } from "streamdown";
 import { authHeaders, authRequired } from "../api/client.ts";
+import { useConnectors } from "../api/connectors.ts";
+import { usePlugins } from "../api/plugins.ts";
 import { keys, queryClient } from "../api/query.ts";
-import { useModelRefs, useProviders, useRouting } from "../api/providers.ts";
+import { useProviders, useRouting } from "../api/providers.ts";
 import { useDeleteThread, useThread, useThreads, type ThreadSummary } from "../api/threads.ts";
+import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "../components/ai-elements/confirmation.tsx";
+import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "../components/ai-elements/conversation.tsx";
+import {
+  InlineCitation,
+  InlineCitationCard,
+  InlineCitationCarousel,
+  InlineCitationCarouselHeader,
+  InlineCitationCarouselIndex,
+  InlineCitationCarouselItem,
+  InlineCitationCarouselNext,
+  InlineCitationCarouselPrev,
+  InlineCitationSource,
+} from "../components/ai-elements/inline-citation.tsx";
+import { Loader } from "../components/ai-elements/loader.tsx";
+import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "../components/ai-elements/message.tsx";
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  type ModelSelectorGroupData,
+} from "../components/ai-elements/model-selector.tsx";
+import { PromptInput, PromptInputButton, PromptInputFooter, PromptInputSubmit, PromptInputTextarea, PromptInputTools } from "../components/ai-elements/prompt-input.tsx";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "../components/ai-elements/reasoning.tsx";
+import { Shimmer } from "../components/ai-elements/shimmer.tsx";
+import { Source, Sources, SourcesContent, SourcesTrigger } from "../components/ai-elements/sources.tsx";
+import { Suggestion, Suggestions } from "../components/ai-elements/suggestion.tsx";
+import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "../components/ai-elements/tool.tsx";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
-import { json, relativeTime } from "../lib/format.ts";
+import { relativeTime } from "../lib/format.ts";
+import { splitRef } from "../lib/models.ts";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Button, buttonClass } from "../ui/button.tsx";
 import { Empty, Spinner } from "../ui/card.tsx";
-import { Disclosure } from "../ui/collapsible.tsx";
-import { Combobox } from "../ui/combobox.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { ScrollArea } from "../ui/scroll-area.tsx";
@@ -71,7 +88,7 @@ function ChatScreen({ id, fresh }: { id: string; fresh: boolean }) {
       </Drawer>
       <div className="flex min-w-0 flex-1 flex-col">
         {thread.data ? (
-          <Conversation key={id} id={id} initial={thread.data.messages} onOpenThreads={() => setThreadsOpen(true)} />
+          <ChatView key={id} id={id} initial={thread.data.messages} onOpenThreads={() => setThreadsOpen(true)} />
         ) : thread.error ? (
           <div className="grid flex-1 place-items-center p-6">
             <Empty icon={<CircleAlert />} text={thread.error.message}>
@@ -147,15 +164,14 @@ function ThreadList({ current, onPick }: { current: string; onPick?: () => void 
   );
 }
 
-function Conversation({ id, initial, onOpenThreads }: { id: string; initial: UIMessage[]; onOpenThreads: () => void }) {
+const textOf = (m: UIMessage) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+
+function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessage[]; onOpenThreads: () => void }) {
   const t = useT();
-  const refs = useModelRefs();
   const providers = useProviders();
-  const routing = useRouting();
   const [model, setModel] = useState<string | null>(null);
   const modelRef = useRef<string | null>(null);
   modelRef.current = model;
-  const defaultRef = routing.data?.chat?.[0] ?? null;
 
   const transport = useMemo(
     () =>
@@ -182,56 +198,54 @@ function Conversation({ id, initial, onOpenThreads }: { id: string; initial: UIM
 
   const busy = status === "submitted" || status === "streaming";
   const [text, setText] = useState("");
+  const [stopped, setStopped] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
   const noProviders = providers.data?.length === 0;
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-  }, [messages, status]);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  const send = () => {
-    const value = text.trim();
-    if (!value || busy) return;
+  const send = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || busy) return;
     setText("");
+    setStopped(false);
     if (initial.length === 0 && messages.length === 0) {
       // A brand new thread becomes visible in the list as soon as the server has it.
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: keys.threads }), 1500);
     }
-    void sendMessage({ text: value });
+    void sendMessage({ text: trimmed });
   };
 
-  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  const prefill = (value: string) => {
+    setText(value);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(value.length, value.length);
+    });
+  };
+
+  const last = messages[messages.length - 1];
+  const lastAssistant = messages.findLast((m) => m.role === "assistant");
+  // Show the waiting indicator until the reply has something to show.
+  const waiting = status === "submitted" || (status === "streaming" && (last?.role !== "assistant" || !last.parts.some(visiblePart)));
 
   return (
     <>
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <IconButton label={t.openThreads} className="lg:hidden" onClick={onOpenThreads}>
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2 lg:hidden">
+        <IconButton label={t.openThreads} onClick={onOpenThreads}>
           <ListCollapse aria-hidden />
         </IconButton>
-        <div className="min-w-0 flex-1 sm:max-w-sm">
-          <Combobox
-            aria-label={t.model}
-            items={refs}
-            value={model}
-            onChange={setModel}
-            mono
-            placeholder={defaultRef ? `${defaultRef}` : t.defaultModel}
-            emptyText={t.noModels}
-            className="h-9"
-          />
-        </div>
         <Link to="/chat" aria-label={t.newChat} title={t.newChat} className={buttonClass("ghost", "icon", "ms-auto")}>
           <MessageSquarePlus aria-hidden />
         </Link>
       </div>
 
-      <ScrollArea className="flex-1" viewportClassName="px-4">
-        <div role="log" aria-live="polite" aria-busy={busy} aria-label={t.nav_chat} className="mx-auto flex max-w-3xl flex-col gap-6 py-6">
+      <Conversation role="log" aria-live="off" aria-label={t.nav_chat} aria-busy={busy}>
+        <ConversationContent>
           {messages.length === 0 &&
             (noProviders ? (
               <Empty icon={<KeyRound />} text={t.noModels} className="mt-10">
@@ -240,26 +254,32 @@ function Conversation({ id, initial, onOpenThreads }: { id: string; initial: UIM
                 </Link>
               </Empty>
             ) : (
-              <p className="mt-16 text-center text-sm text-fg-muted">{t.chatEmpty}</p>
+              <ChatEmptyState onPrefill={prefill} />
             ))}
           {messages.map((m) => (
-            <Message
+            <ChatMessage
               key={m.id}
               message={m}
-              streaming={busy && m === messages[messages.length - 1]}
+              streaming={busy && m === last}
               onApprove={(approvalId, approved) => void addToolApprovalResponse({ id: approvalId, approved })}
               actions={
                 m === lastAssistant && !busy && !m.parts.some((p) => isToolUIPart(p) && p.state === "approval-requested") ? (
-                  <MessageActions message={m} onRegenerate={() => void regenerate()} />
+                  <ReplyActions
+                    text={textOf(m)}
+                    onRegenerate={() => {
+                      setStopped(false);
+                      void regenerate();
+                    }}
+                  />
                 ) : null
               }
             />
           ))}
-          {status === "submitted" && (
-            <p role="status" className="flex items-center gap-2 text-sm text-fg-muted">
-              <Spinner />
-              {t.thinking}
-            </p>
+          {waiting && (
+            <div className="flex items-center gap-2 text-sm">
+              <Loader />
+              <Shimmer as="span">{t.thinking}</Shimmer>
+            </div>
           )}
           {error && (
             <div role="alert" className="flex items-start gap-3 rounded-xl border border-danger/40 bg-danger-soft p-3 text-sm text-danger">
@@ -277,61 +297,118 @@ function Conversation({ id, initial, onOpenThreads }: { id: string; initial: UIM
               </Button>
             </div>
           )}
-          <div ref={endRef} />
-        </div>
-      </ScrollArea>
+        </ConversationContent>
+        <ConversationScrollButton />
+      </Conversation>
+      <ChatAnnouncer messages={messages} status={status} stopped={stopped} />
 
-      <form
-        className="border-t border-line bg-bg px-3 py-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          send();
-        }}
-      >
-        <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-line bg-surface p-1.5 ps-4 focus-within:border-line-strong">
-          <label htmlFor="chat-input" className="sr-only">
-            {t.messagePlaceholder}
-          </label>
-          <textarea
-            id="chat-input"
+      <div className="bg-bg px-3 pt-2 pb-3">
+        <PromptInput className="mx-auto max-w-3xl" onSubmit={({ text: value }) => send(value)}>
+          <PromptInputTextarea
             ref={inputRef}
-            rows={1}
+            label={t.messagePlaceholder}
+            placeholder={t.messagePlaceholder}
             value={text}
             onChange={(e) => setText(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder={t.messagePlaceholder}
-            className="max-h-48 min-h-10 flex-1 resize-none bg-transparent py-2 text-[0.9375rem] leading-6 outline-none [field-sizing:content] placeholder:text-fg-muted"
+            aria-describedby="chat-newline-hint"
           />
-          {busy ? (
-            <Button variant="secondary" size="icon" aria-label={t.stop} onClick={() => void stop()} className="rounded-xl">
-              <Square aria-hidden className="fill-current" />
-            </Button>
-          ) : (
-            <Button type="submit" variant="primary" size="icon" aria-label={t.send} disabled={!text.trim()} className="rounded-xl">
-              <ArrowUp aria-hidden />
-            </Button>
-          )}
-        </div>
-      </form>
+          <span id="chat-newline-hint" className="sr-only">
+            {t.newlineHint}
+          </span>
+          <PromptInputFooter>
+            <PromptInputTools>
+              <ModelPicker value={model} onChange={setModel} />
+            </PromptInputTools>
+            <PromptInputSubmit
+              status={status}
+              onStop={() => {
+                setStopped(true);
+                void stop();
+              }} disabled={!text.trim()} />
+          </PromptInputFooter>
+        </PromptInput>
+      </div>
     </>
   );
 }
 
-function MessageActions({ message, onRegenerate }: { message: UIMessage; onRegenerate: () => void }) {
+/** Parts that render something the reader can see. */
+const visiblePart = (p: UIMessage["parts"][number]) =>
+  (p.type === "text" && p.text.length > 0) || (p.type === "reasoning" && p.text.length > 0) || isToolUIPart(p) || p.type === "source-url";
+
+/** Ways to start, grounded in what this z can actually do right now. */
+function ChatEmptyState({ onPrefill }: { onPrefill: (text: string) => void }) {
+  const t = useT();
+  const navigate = useNavigate();
+  const plugins = usePlugins();
+  const connectors = useConnectors();
+  const web = plugins.data?.find((p) => p.id === "web" && p.enabled);
+  const sources = (connectors.data ?? []).filter((c) => c.enabled && c.status === "connected").slice(0, 2);
+
+  return (
+    <ConversationEmptyState icon={<Sparkles />} description={t.chatEmpty} className="mt-6">
+      <Suggestions label={t.suggestions}>
+        <Suggestion suggestion={t.sugDelegate} onClick={() => navigate("/?compose")} />
+        {web && <Suggestion suggestion={t.sugFactCheck} onClick={() => onPrefill(t.sugFactCheckPrompt)} />}
+        {sources.map((c) => (
+          <Suggestion key={c.id} suggestion={t.sugAsk(c.label)} onClick={() => onPrefill(t.sugAskPrompt(c.label))} />
+        ))}
+        {web && <Suggestion suggestion={t.sugNews} onClick={() => onPrefill(t.sugNewsPrompt)} />}
+      </Suggestions>
+    </ConversationEmptyState>
+  );
+}
+
+/** Markdown as it reads aloud: code blocks named, not spelled out; markup dropped. */
+const speakable = (md: string) =>
+  md
+    .replace(/```[\s\S]*?(```|$)/g, " [code] ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/-{3,}|[*_`#>|~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * The visible log is not a live region (it would read every token). This one says, politely,
+ * when z starts replying, when it needs an approval, and what it said once it is done.
+ */
+function ChatAnnouncer({ messages, status, stopped }: { messages: UIMessage[]; status: ChatStatus; stopped: boolean }) {
+  const t = useT();
+  const [say, setSay] = useState("");
+  const prev = useRef(status);
+  const last = messages.findLast((m) => m.role === "assistant");
+  const asking = last?.parts.find((p): p is ToolUIPart | DynamicToolUIPart => isToolUIPart(p) && p.state === "approval-requested");
+  const askingName = asking ? getToolName(asking) : null;
+
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = status;
+    if (status === "submitted" && was !== "submitted") setSay(t.replying);
+    else if (status === "ready" && (was === "streaming" || was === "submitted") && stopped) setSay(t.replyStopped);
+    else if (status === "ready" && (was === "streaming" || was === "submitted") && last) {
+      const reply = speakable(textOf(last));
+      if (reply) setSay(t.replied(reply.length > 400 ? `${reply.slice(0, 400)}…` : reply));
+    }
+  }, [status, last, stopped, t]);
+
+  useEffect(() => {
+    if (askingName) setSay(t.toolAsk(askingName));
+  }, [askingName, t]);
+
+  return (
+    <div role="status" aria-live="polite" className="sr-only">
+      {say}
+    </div>
+  );
+}
+
+function ReplyActions({ text, onRegenerate }: { text: string; onRegenerate: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
-  const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
   return (
-    <div className="-ms-2 flex gap-0.5">
-      <IconButton
-        label={copied ? t.copied : t.copy}
-        size="icon-sm"
-        className="text-fg-muted"
+    <MessageActions>
+      <MessageAction
+        tooltip={copied ? t.copied : t.copy}
         onClick={() =>
           void navigator.clipboard.writeText(text).then(() => {
             setCopied(true);
@@ -340,15 +417,15 @@ function MessageActions({ message, onRegenerate }: { message: UIMessage; onRegen
         }
       >
         {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-      </IconButton>
-      <IconButton label={t.regenerate} size="icon-sm" className="text-fg-muted" onClick={onRegenerate}>
+      </MessageAction>
+      <MessageAction tooltip={t.regenerate} onClick={onRegenerate}>
         <RefreshCw aria-hidden />
-      </IconButton>
-    </div>
+      </MessageAction>
+    </MessageActions>
   );
 }
 
-function Message({
+function ChatMessage({
   message,
   streaming,
   onApprove,
@@ -361,95 +438,187 @@ function Message({
 }) {
   const t = useT();
   if (message.role === "user") {
-    const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     return (
-      <div className="flex justify-end">
-        <p className="max-w-[85%] rounded-2xl rounded-ee-md bg-accent-soft px-4 py-2.5 text-[0.9375rem] leading-relaxed whitespace-pre-wrap break-words">
+      <Message from="user">
+        <MessageContent>
           <span className="sr-only">{t.you}: </span>
-          {text}
-        </p>
-      </div>
+          {textOf(message)}
+        </MessageContent>
+      </Message>
     );
   }
   if (message.role !== "assistant") return null;
+
+  const sources = message.parts.filter((p): p is SourceUrlUIPart => p.type === "source-url");
+  const lastText = message.parts.findLastIndex((p) => p.type === "text");
+  const lastIndex = message.parts.length - 1;
+
   return (
-    <article className="flex flex-col gap-2" aria-label={t.assistant}>
-      {message.parts.map((part, i) => {
-        if (part.type === "text") {
-          return (
-            <div key={i} className="prose-z min-w-0 break-words">
-              <Streamdown isAnimating={streaming} mode={streaming ? "streaming" : "static"}>
-                {part.text}
-              </Streamdown>
-            </div>
-          );
-        }
-        if (part.type === "reasoning" && part.text) {
-          return (
-            <Disclosure key={i} summary={<span className="flex items-center gap-1"><Brain aria-hidden className="size-3.5" />{t.thinking.replace("…", "")}</span>}>
-              <p className="mt-1 border-s-2 border-line ps-3 text-sm whitespace-pre-wrap text-fg-muted">{part.text}</p>
-            </Disclosure>
-          );
-        }
-        if (part.type === "source-url") {
-          return (
-            <a key={i} href={part.url} target="_blank" rel="noreferrer" className="truncate text-xs text-accent-text underline">
-              {part.title ?? part.url}
-            </a>
-          );
-        }
-        if (isToolUIPart(part)) return <ToolCall key={i} part={part} onApprove={onApprove} />;
-        return null;
-      })}
+    <Message from="assistant" aria-label={t.assistant}>
+      <MessageContent>
+        {message.parts.map((part, i) => {
+          if (part.type === "text") {
+            if (!part.text) return null;
+            return (
+              <div key={i} className="min-w-0">
+                <MessageResponse isAnimating={streaming && i === lastIndex} mode={streaming ? "streaming" : "static"}>
+                  {part.text}
+                </MessageResponse>
+                {i === lastText && sources.length > 0 && (
+                  <InlineCitation>
+                    <InlineCitationCard sources={sources.map((s) => s.url)}>
+                      <InlineCitationCarousel>
+                        <InlineCitationCarouselHeader>
+                          <InlineCitationCarouselPrev />
+                          <InlineCitationCarouselIndex />
+                          <InlineCitationCarouselNext />
+                        </InlineCitationCarouselHeader>
+                        {sources.map((s) => (
+                          <InlineCitationCarouselItem key={s.sourceId}>
+                            <InlineCitationSource title={s.title} url={s.url} />
+                          </InlineCitationCarouselItem>
+                        ))}
+                      </InlineCitationCarousel>
+                    </InlineCitationCard>
+                  </InlineCitation>
+                )}
+              </div>
+            );
+          }
+          if (part.type === "reasoning" && part.text) {
+            return (
+              <Reasoning key={i} isStreaming={streaming && part.state === "streaming"}>
+                <ReasoningTrigger />
+                <ReasoningContent>{part.text}</ReasoningContent>
+              </Reasoning>
+            );
+          }
+          if (isToolUIPart(part)) return <ToolCall key={i} part={part} onApprove={onApprove} />;
+          return null;
+        })}
+        {sources.length > 0 && (
+          <Sources>
+            <SourcesTrigger count={sources.length} />
+            <SourcesContent>
+              {sources.map((s) => (
+                <li key={s.sourceId}>
+                  <Source href={s.url} title={s.title} />
+                </li>
+              ))}
+            </SourcesContent>
+          </Sources>
+        )}
+      </MessageContent>
       {actions}
-    </article>
+    </Message>
   );
 }
 
 function ToolCall({ part, onApprove }: { part: ToolUIPart | DynamicToolUIPart; onApprove: (id: string, approved: boolean) => void }) {
   const t = useT();
   const name = getToolName(part);
-  const state = part.state;
-  const status =
-    state === "output-available"
-      ? { icon: <Check aria-hidden className="size-3.5 text-ok" />, label: t.toolDone }
-      : state === "output-error"
-        ? { icon: <X aria-hidden className="size-3.5 text-danger" />, label: t.toolError }
-        : state === "output-denied"
-          ? { icon: <X aria-hidden className="size-3.5 text-fg-muted" />, label: t.toolDenied }
-          : state === "approval-requested"
-            ? { icon: <Hand aria-hidden className="size-3.5 text-warn" />, label: t.toolAwaiting }
-            : { icon: <Spinner className="size-3" />, label: t.toolRunning };
+  const approval = part.approval;
+  // Open while it asks (you see what you approve) and on failure; otherwise a one-line summary.
+  const wantsAttention = part.state === "approval-requested" || part.state === "output-error";
+  const [open, setOpen] = useState(wantsAttention);
+  useEffect(() => {
+    if (wantsAttention) setOpen(true);
+  }, [wantsAttention]);
+  return (
+    <Tool state={part.state} open={open} onOpenChange={setOpen}>
+      <ToolHeader part={part} />
+      <ToolContent>
+        <ToolInput input={part.input} />
+        <ToolOutput output={part.state === "output-available" ? part.output : undefined} errorText={part.state === "output-error" ? part.errorText : undefined} />
+      </ToolContent>
+      {approval && (
+        <div className="px-3 pb-3">
+          <Confirmation approval={approval} state={part.state}>
+            <ConfirmationTitle>
+              <ConfirmationRequest>{t.toolAsk(name)}</ConfirmationRequest>
+              <ConfirmationAccepted>
+                <span className="inline-flex items-center gap-1.5 text-fg-muted">
+                  <ShieldCheck aria-hidden className="size-4 text-ok" />
+                  {t.toolApproved}
+                </span>
+              </ConfirmationAccepted>
+              <ConfirmationRejected>
+                <span className="inline-flex items-center gap-1.5 text-fg-muted">
+                  <X aria-hidden className="size-4" />
+                  {t.toolRejected}
+                </span>
+              </ConfirmationRejected>
+            </ConfirmationTitle>
+            <ConfirmationActions>
+              <ConfirmationAction variant="danger" onClick={() => onApprove(approval.id, false)}>
+                <X aria-hidden />
+                {t.deny}
+              </ConfirmationAction>
+              <ConfirmationAction variant="primary" onClick={() => onApprove(approval.id, true)}>
+                <ShieldCheck aria-hidden />
+                {t.approve}
+              </ConfirmationAction>
+            </ConfirmationActions>
+          </Confirmation>
+        </div>
+      )}
+    </Tool>
+  );
+}
+
+/** Model picker for this chat: the chat lane's default, or any model of an enabled provider. */
+function ModelPicker({ value, onChange }: { value: string | null; onChange: (value: string | null) => void }) {
+  const t = useT();
+  const providers = useProviders();
+  const routing = useRouting();
+  const [open, setOpen] = useState(false);
+  const defaultRef = routing.data?.chat?.[0] ?? null;
+
+  const groups = useMemo<ModelSelectorGroupData[]>(() => {
+    const enabled = (providers.data ?? []).filter((p) => p.enabled && p.models.length > 0);
+    return [
+      { value: "default", label: t.defaultModel, items: [{ value: "", label: defaultRef ? t.routingDefault(splitRef(defaultRef).model) : t.defaultModel, hint: defaultRef ? splitRef(defaultRef).provider : undefined }] },
+      ...enabled.map((p) => ({ value: p.id, label: p.label, items: p.models.map((m) => ({ value: `${p.id}:${m}`, label: m })) })),
+    ];
+  }, [providers.data, defaultRef, t]);
+
+  const current = value ? splitRef(value).model : defaultRef ? splitRef(defaultRef).model : t.defaultModel;
 
   return (
-    <div className={cn("rounded-xl border bg-surface", state === "approval-requested" ? "border-warn/60" : "border-line")}>
-      <div className="flex items-center gap-2 px-3 py-2 text-sm">
-        <Wrench aria-hidden className="size-4 text-fg-muted" />
-        <code className="min-w-0 flex-1 truncate font-mono text-xs">{name}</code>
-        <span className="flex items-center gap-1 text-xs text-fg-muted">
-          {status.icon}
-          {status.label}
-        </span>
-      </div>
-      <div className="border-t border-line px-3 pb-2">
-        <Disclosure summary={t.showDetails}>
-          <pre className="max-h-56 overflow-auto rounded-lg bg-subtle p-2 font-mono text-xs leading-relaxed">
-            {json(part.state === "output-available" ? { input: part.input, output: part.output } : part.state === "output-error" ? { input: part.input, error: part.errorText } : { input: part.input })}
-          </pre>
-        </Disclosure>
-        {state === "approval-requested" && part.approval && (
-          <div className="mt-1 flex flex-wrap gap-2">
-            <Button size="sm" variant="primary" onClick={() => onApprove(part.approval!.id, true)}>
-              <ShieldCheck aria-hidden />
-              {t.approve}
-            </Button>
-            <Button size="sm" variant="danger" onClick={() => onApprove(part.approval!.id, false)}>
-              <X aria-hidden />
-              {t.deny}
-            </Button>
-          </div>
-        )}
-      </div>
-    </div>
+    <ModelSelector
+      open={open}
+      onOpenChange={setOpen}
+      title={t.chooseModel}
+      trigger={
+        <PromptInputButton aria-label={`${t.model}: ${current}`} className="max-w-56 text-fg-muted">
+          <Cpu aria-hidden />
+          <span className="truncate font-mono text-xs">{current}</span>
+          <ChevronsUpDown aria-hidden />
+        </PromptInputButton>
+      }
+    >
+      <ModelSelectorContent groups={groups}>
+        <ModelSelectorInput aria-label={t.searchModels} placeholder={t.searchModels} />
+        <ModelSelectorEmpty>{t.noModelMatch}</ModelSelectorEmpty>
+        <ModelSelectorList>
+          {(group) => (
+            <ModelSelectorGroup key={group.value} group={group}>
+              {(item) => (
+                <ModelSelectorItem
+                  key={item.value || "default"}
+                  item={item}
+                  selected={(value ?? "") === item.value}
+                  className="font-mono text-[0.8125rem]"
+                  onSelect={(v) => {
+                    onChange(v || null);
+                    setOpen(false);
+                  }}
+                />
+              )}
+            </ModelSelectorGroup>
+          )}
+        </ModelSelectorList>
+      </ModelSelectorContent>
+    </ModelSelector>
   );
 }

@@ -4,6 +4,9 @@ import { Streamdown } from "streamdown";
 import { useSearchParams } from "react-router";
 import { useEffect, useState } from "react";
 import { useDeleteTask, useTaskAction, useTasks } from "../api/tasks.ts";
+import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep } from "../components/ai-elements/chain-of-thought.tsx";
+import { CodeBlock } from "../components/ai-elements/code-block.tsx";
+import { Task as TaskDisclosure, TaskContent, TaskItem, TaskTrigger } from "../components/ai-elements/task.tsx";
 import { Composer } from "../components/composer.tsx";
 import { useT, type Dict } from "../i18n.ts";
 import { compact, dateTime, json, relativeTime, time } from "../lib/format.ts";
@@ -12,7 +15,6 @@ import { StatusIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Button } from "../ui/button.tsx";
 import { Badge, Card, Empty, Loading, LoadError } from "../ui/card.tsx";
-import { Disclosure } from "../ui/collapsible.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { TabList, TabPanel, TabsRoot } from "../ui/tabs.tsx";
@@ -338,12 +340,17 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
 
       {task.events.length > 0 && (
         <section aria-label={t.timeline}>
-          <h3 className="mb-3 text-xs font-semibold tracking-wide text-fg-muted uppercase">{t.timeline}</h3>
-          <ol className="relative flex flex-col gap-3 border-s border-line ps-5">
-            {task.events.map((e, i) => (
-              <TimelineItem key={i} event={e} />
-            ))}
-          </ol>
+          <ChainOfThought defaultOpen>
+            <ChainOfThoughtHeader icon={<ListChecks aria-hidden />}>
+              <span className="text-xs font-semibold tracking-wide uppercase">{t.timeline}</span>
+              <span className="ms-2 text-xs text-fg-muted tabular-nums">{task.events.length}</span>
+            </ChainOfThoughtHeader>
+            <ChainOfThoughtContent>
+              {task.events.map((e, i) => (
+                <TimelineStep key={i} event={e} active={task.status === "running" && i === task.events.length - 1} />
+              ))}
+            </ChainOfThoughtContent>
+          </ChainOfThought>
         </section>
       )}
     </div>
@@ -352,39 +359,34 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
 
 const eventIcon = { step: Footprints, tool: Wrench, approval: ShieldAlert, model: Cpu } as const;
 
-function TimelineItem({ event }: { event: TaskEvent }) {
+function TimelineStep({ event, active }: { event: TaskEvent; active: boolean }) {
   const t = useT();
-  const Icon = eventIcon[event.type] ?? Bot;
-  return (
-    <li className="relative text-sm">
-      <span className="absolute -start-[1.9rem] top-0 grid size-5 place-items-center rounded-full border border-line bg-surface text-fg-muted">
-        <Icon aria-hidden className="size-3" />
+  const meta = <time dateTime={event.at}>{time(event.at)}</time>;
+  const status = active ? "active" : "complete";
+  const icon = eventIcon[event.type] ?? Bot;
+  if (event.type === "tool") {
+    return (
+      <ChainOfThoughtStep icon={icon} status={status} meta={meta} label={<code className="font-mono text-xs">{event.tool}</code>} description={event.error && <span className="text-danger">{event.error}</span>}>
+        <TaskDisclosure defaultOpen={false}>
+          <TaskTrigger title={t.showDetails} icon={<Wrench aria-hidden />} />
+          <TaskContent>
+            <TaskItem>
+              <CodeBlock code={json({ input: event.input, ...(event.output !== undefined ? { output: event.output } : {}) })} language="json" />
+            </TaskItem>
+          </TaskContent>
+        </TaskDisclosure>
+      </ChainOfThoughtStep>
+    );
+  }
+  const label =
+    event.type === "step" ? (
+      event.text
+    ) : event.type === "approval" ? (
+      <span className="text-warn">{t.status_waiting}</span>
+    ) : (
+      <span className="text-fg-muted">
+        <code className="font-mono text-xs text-fg">{event.model}</code> · {t.tokens(compact(event.tokens))}
       </span>
-      <div className="flex items-baseline gap-2">
-        <div className="min-w-0 flex-1 break-words">
-          {event.type === "step" && <span className="leading-relaxed">{event.text}</span>}
-          {event.type === "tool" && (
-            <>
-              <code className="font-mono text-xs">{event.tool}</code>
-              {event.error && <p className="mt-1 text-xs text-danger">{event.error}</p>}
-              <Disclosure summary={t.showDetails}>
-                <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-subtle p-2 font-mono text-xs">
-                  {json({ input: event.input, ...(event.output !== undefined ? { output: event.output } : {}) })}
-                </pre>
-              </Disclosure>
-            </>
-          )}
-          {event.type === "approval" && <span className="text-warn">{t.status_waiting}</span>}
-          {event.type === "model" && (
-            <span className="text-fg-muted">
-              <code className="font-mono text-xs text-fg">{event.model}</code> · {t.tokens(compact(event.tokens))}
-            </span>
-          )}
-        </div>
-        <time dateTime={event.at} className="shrink-0 text-xs text-fg-muted tabular-nums">
-          {time(event.at)}
-        </time>
-      </div>
-    </li>
-  );
+    );
+  return <ChainOfThoughtStep icon={icon} status={status} meta={meta} label={label} />;
 }
