@@ -200,6 +200,12 @@ const MIGRATIONS: string[] = [
     WHERE EXISTS (SELECT 1 FROM channels WHERE kind = 'webhook');
   `,
   // ─── End channels ─────────────────────────────────────────────────────────
+  // ─── Approvals: full preview and why it asks ──────────────────────────────
+  `
+  ALTER TABLE approvals ADD COLUMN preview TEXT;    -- JSON ApprovalPreview
+  ALTER TABLE approvals ADD COLUMN reason TEXT;
+  `,
+  // ─── End approvals ────────────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

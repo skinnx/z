@@ -3,6 +3,7 @@ import {
   answerMessage,
   describeError,
   linkCode,
+  previewFits,
   type ChannelAdapter,
   type ChannelLimits,
   type ChannelRuntime,
@@ -10,6 +11,7 @@ import {
   type InboundMessage,
   type OutboundReply,
 } from "@z/core";
+import { approvalBody } from "./notify.ts";
 import type { Pairing } from "./owner.ts";
 import type { Runtime } from "./runtime.ts";
 import type { ChannelRecord } from "./store.ts";
@@ -165,6 +167,10 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     }
     const match = /^(approve|deny):(.+)$/.exec(actionId);
     if (!match) throw new Error("Unknown action.");
+    // Approve only what fits here in full; a long action is reviewed in the app (deny is always fine).
+    const pending = match[1] === "approve" ? store.approvals.get(match[2]!) : null;
+    const limit = adapterFor(record.kind)?.noticeLimit ?? Number.POSITIVE_INFINITY;
+    if (pending && !previewFits(approvalBody(pending), limit)) throw new Error("This one is too long to approve here. Open z to review it.");
     try {
       const approval = tasks.decide(match[2]!, { approve: match[1] === "approve", remember: false });
       if (!approval) return "That approval no longer exists.";
@@ -248,6 +254,12 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       const settings = store.settings.get();
       if (settings.owner?.channelId === id) store.settings.set({ ...settings, owner: null });
       return store.channels.delete(id);
+    },
+
+    /** Longest notice with buttons the channel delivers whole (Infinity when its adapter has no limit). */
+    noticeLimit(id: string): number {
+      const record = store.channels.get(id);
+      return (record && adapterFor(record.kind)?.noticeLimit) || Number.POSITIVE_INFINITY;
     },
 
     /** Unprompted message to a thread (owner notices). Throws when the channel cannot send. */

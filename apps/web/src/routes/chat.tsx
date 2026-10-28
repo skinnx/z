@@ -535,7 +535,10 @@ function ToolCall({ part, onApprove }: { part: ToolUIPart | DynamicToolUIPart; o
         <div className="px-3 pb-3">
           <Confirmation approval={approval} state={part.state}>
             <ConfirmationTitle>
-              <ConfirmationRequest>{t.toolAsk(name)}</ConfirmationRequest>
+              <ConfirmationRequest>
+                {t.toolAsk(name)}
+                {approval.requestReason && <span className="mt-1 block text-xs text-warn">{t.askingBecause(approval.requestReason)}</span>}
+              </ConfirmationRequest>
               <ConfirmationAccepted>
                 <span className="inline-flex items-center gap-1.5 text-fg-muted">
                   <ShieldCheck aria-hidden className="size-4 text-ok" />
