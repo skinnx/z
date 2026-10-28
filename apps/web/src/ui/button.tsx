@@ -38,3 +38,18 @@ type Props = Omit<BaseButton.Props, "className"> & {
 export function Button({ variant, size, className, type = "button", ...props }: Props) {
   return <BaseButton type={type} className={buttonClass(variant, size, className)} {...props} />;
 }
+
+/** A tappable card: a whole tile that is one button (galleries, pickers). */
+export function Tile({ className, type = "button", ...props }: Omit<BaseButton.Props, "className"> & { className?: string }) {
+  return (
+    <BaseButton
+      type={type}
+      className={cn(
+        "flex min-h-14 w-full min-w-0 items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 text-start transition-colors",
+        "hover:border-line-strong hover:bg-subtle active:bg-subtle data-disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    />
+  );
+}

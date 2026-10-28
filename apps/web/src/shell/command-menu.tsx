@@ -1,6 +1,7 @@
 import { Autocomplete } from "@base-ui/react/autocomplete";
 import { Dialog } from "@base-ui/react/dialog";
 import {
+  Cable,
   KeyRound,
   Languages,
   MessageSquarePlus,
@@ -14,6 +15,7 @@ import {
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { useGenerateBriefing } from "../api/briefing.ts";
+import { useConnectors } from "../api/connectors.ts";
 import { useTasks } from "../api/tasks.ts";
 import { useThreads } from "../api/threads.ts";
 import { locale, useT } from "../i18n.ts";
@@ -41,6 +43,7 @@ export function CommandMenu() {
   const tasks = useTasks();
   const threads = useThreads();
   const briefing = useGenerateBriefing();
+  const connectors = useConnectors();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -65,6 +68,7 @@ export function CommandMenu() {
       { value: "do:chat", label: t.newChat, icon: icon(MessageSquarePlus), run: () => navigate("/chat") },
       { value: "do:provider", label: t.addProvider, icon: icon(KeyRound), run: () => navigate("/models?add") },
       { value: "do:channel", label: t.addChannel, icon: icon(RadioTower), run: () => navigate("/channels?add") },
+      { value: "do:connect", label: t.connectSource, icon: icon(Cable), run: () => navigate("/connect") },
       {
         value: "do:briefing",
         label: t.generateBriefing,
@@ -95,13 +99,21 @@ export function CommandMenu() {
       icon: icon(MessageSquarePlus),
       run: () => navigate(`/chat/${encodeURIComponent(th.id)}`),
     }));
+    const sources: Item[] = (connectors.data ?? []).map((c) => ({
+      value: `connector:${c.id}`,
+      label: c.label,
+      hint: t[`cst_${c.status}`],
+      icon: icon(Cable),
+      run: () => navigate(`/connect?open=${encodeURIComponent(c.id)}`),
+    }));
     return [
       { value: t.group_do, items: actions },
       { value: t.group_go, items: go },
       { value: t.group_tasks, items: recentTasks },
       { value: t.group_threads, items: recentThreads },
+      { value: t.group_connectors, items: sources },
     ].filter((g) => g.items.length > 0);
-  }, [t, navigate, tasks.data, threads.data, briefing]);
+  }, [t, navigate, tasks.data, threads.data, connectors.data, briefing]);
 
   return (
     <Dialog.Root open={open} onOpenChange={(o) => commandMenuOpen.set(o)}>

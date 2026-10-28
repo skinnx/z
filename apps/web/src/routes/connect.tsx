@@ -1,0 +1,693 @@
+import type { ConnectorAuth, ConnectorInput, ConnectorPreset, ConnectorTool, ConnectorView, Risk } from "@z/core";
+import { Form } from "@base-ui/react/form";
+import { BookOpen, Briefcase, Cable, Check, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, ShieldAlert, Trash2, Users, type LucideIcon } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
+import {
+  connectorInput,
+  useConnectOAuth,
+  useConnectorPresets,
+  useConnectors,
+  useDeleteConnector,
+  useRefreshConnector,
+  useSaveConnector,
+  useSetToolRisk,
+} from "../api/connectors.ts";
+import { LivePolicyControl } from "../components/tool-policy.tsx";
+import { useT } from "../i18n.ts";
+import { cn } from "../lib/cn.ts";
+import { authIcon, CATEGORIES, fillTemplate, headerValue, isSecretName, placeholders, presetOf, templateParts, uniqueId, urlHost } from "../lib/connectors.ts";
+import { slug } from "../lib/format.ts";
+import { riskIcon, RiskIcon } from "../lib/icons.tsx";
+import { Confirm } from "../ui/alert-dialog.tsx";
+import { Monogram } from "../ui/avatar.tsx";
+import { Button, Tile } from "../ui/button.tsx";
+import { Badge, Card, Loading, LoadError, Section, Spinner } from "../ui/card.tsx";
+import { Collapsible } from "../ui/collapsible.tsx";
+import { Dialog } from "../ui/dialog.tsx";
+import { Field, Input } from "../ui/field.tsx";
+import { IconButton } from "../ui/icon-button.tsx";
+import { Switch, SwitchRow } from "../ui/switch.tsx";
+import { notify, notifyError } from "../ui/toast.tsx";
+import { Segmented } from "../ui/toggle-group.tsx";
+
+type Editing = { preset: ConnectorPreset | null; connector: ConnectorView | null };
+
+const categoryIcon: Record<ConnectorPreset["category"], LucideIcon> = { docs: BookOpen, dev: CodeXml, work: Briefcase, aggregator: Layers };
+
+export default function Connect() {
+  const t = useT();
+  const presets = useConnectorPresets();
+  const connectors = useConnectors();
+  const refresh = useRefreshConnector();
+  const [params, setParams] = useSearchParams();
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const handled = useRef("");
+
+  // Back from OAuth (`?connector=<id>` or `&error=…`), or a deep link from the command menu (`?open=<id>`).
+  useEffect(() => {
+    const id = params.get("connector") ?? params.get("open");
+    const error = params.get("error");
+    if (!id && !error) return;
+    const key = params.toString();
+    if (handled.current === key) return;
+    handled.current = key;
+    if (params.has("connector") || error) {
+      const label = connectors.data?.find((c) => c.id === id)?.label ?? id ?? "";
+      if (error) notify("error", t.oauthFailed, label ? `${label}: ${error}` : error);
+      else notify("success", t.oauthDone, label);
+      if (id) refresh.mutate(id, { onError: () => void connectors.refetch() });
+    }
+    if (id) setFocusId(id);
+    setParams({}, { replace: true });
+  }, [params, setParams, connectors, refresh, t]);
+
+  const list = connectors.data ?? [];
+  const failed = (connectors.error && !connectors.data && connectors) || (presets.error && !presets.data && presets);
+
+  return (
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8 md:py-10">
+      <h1 className="sr-only">{t.nav_connect}</h1>
+      {presets.isPending || connectors.isPending ? (
+        <Loading label={t.loading} className="h-64" />
+      ) : failed && failed.error ? (
+        <LoadError error={failed.error} onRetry={() => void failed.refetch()} retryLabel={t.retry} />
+      ) : (
+        <>
+          <Gallery presets={presets.data ?? []} connectors={list} onPick={(preset) => setEditing({ preset, connector: null })} />
+          {list.length > 0 && (
+            <Section label={t.connectedSources} icon={<Cable aria-hidden />}>
+              <ul className="flex flex-col gap-3">
+                {list.map((c) => (
+                  <li key={c.id}>
+                    <ConnectorCard
+                      connector={c}
+                      focus={focusId === c.id}
+                      onFocused={() => setFocusId(null)}
+                      onEdit={() => setEditing({ preset: presetOf(c, presets.data ?? []) ?? null, connector: c })}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+        </>
+      )}
+
+      <Dialog.Root open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+        <Dialog.Content
+          wide
+          title={
+            editing && (
+              <>
+                <Monogram text={editing.connector?.label ?? editing.preset?.label ?? "+"} className="size-7 rounded-lg text-[0.6875rem] normal-case" />
+                <span className="truncate">{editing.connector?.label ?? editing.preset?.label ?? t.customServer}</span>
+              </>
+            )
+          }
+        >
+          {editing && (
+            <ConnectorForm
+              key={editing.connector?.id ?? editing.preset?.id ?? "custom"}
+              preset={editing.preset}
+              connector={editing.connector}
+              onSaved={(c) => setEditing((e) => (e ? { ...e, connector: c } : e))}
+              onDone={() => setEditing(null)}
+            />
+          )}
+        </Dialog.Content>
+      </Dialog.Root>
+    </div>
+  );
+}
+
+/** The catalog as tappable tiles, by category, ending with "any MCP server". */
+function Gallery({ presets, connectors, onPick }: { presets: ConnectorPreset[]; connectors: ConnectorView[]; onPick: (p: ConnectorPreset | null) => void }) {
+  const t = useT();
+  const hosts = useMemo(() => new Set(connectors.map((c) => urlHost(c.urlDisplay))), [connectors]);
+  const groups = CATEGORIES.map((cat) => ({ cat, items: presets.filter((p) => p.category === cat) })).filter((g) => g.items.length > 0);
+
+  return (
+    <div className="flex flex-col gap-6">
+      {groups.map(({ cat, items }) => {
+        const Icon = categoryIcon[cat];
+        return (
+          <Section key={cat} label={t[`cat_${cat}`]} icon={<Icon aria-hidden />}>
+            <ul className="grid grid-cols-1 gap-2 min-[25rem]:grid-cols-2 md:grid-cols-3">
+              {items.map((p) => (
+                <li key={p.id} className="min-w-0">
+                  <PresetTile preset={p} connected={hosts.has(urlHost(p.url))} onClick={() => onPick(p)} />
+                </li>
+              ))}
+            </ul>
+          </Section>
+        );
+      })}
+      <Section label={t.cat_custom} icon={<Plus aria-hidden />}>
+        <ul className="grid grid-cols-1 gap-2 min-[25rem]:grid-cols-2 md:grid-cols-3">
+          <li className="min-w-0">
+            <Tile onClick={() => onPick(null)} className="border-dashed border-line-strong">
+              <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-soft text-accent-text">
+                <Plus className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{t.customServer}</span>
+                <span className="block truncate text-xs text-fg-muted">{t.customServerMeta}</span>
+              </span>
+            </Tile>
+          </li>
+        </ul>
+      </Section>
+    </div>
+  );
+}
+
+function PresetTile({ preset: p, connected, onClick }: { preset: ConnectorPreset; connected: boolean; onClick: () => void }) {
+  const t = useT();
+  const Auth = authIcon[p.auth];
+  return (
+    <Tile onClick={onClick}>
+      <Monogram text={p.label} className="size-9 rounded-lg text-xs normal-case" />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{p.label}</span>
+          {connected && (
+            <>
+              <Check aria-hidden className="size-3.5 shrink-0 text-ok" />
+              <span className="sr-only">, {t.alreadyConnected}</span>
+            </>
+          )}
+        </span>
+        <span className="block truncate font-mono text-xs text-fg-muted">{urlHost(p.url)}</span>
+      </span>
+      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-subtle text-fg-muted" title={t[`auth_${p.auth}`]}>
+        <Auth aria-hidden className="size-3.5" />
+        <span className="sr-only">, {t[`auth_${p.auth}`]}</span>
+      </span>
+    </Tile>
+  );
+}
+
+const dot: Record<ConnectorView["status"], string> = {
+  connected: "bg-ok",
+  connecting: "bg-accent motion-safe:animate-pulse-dot",
+  needs_auth: "bg-warn",
+  error: "bg-danger",
+  disabled: "bg-line-strong",
+};
+
+function StatusLine({ connector: c, className }: { connector: ConnectorView; className?: string }) {
+  const t = useT();
+  return (
+    <p className={cn("flex items-start gap-2 text-xs", className)} aria-live="polite">
+      <span aria-hidden className={cn("mt-1 size-2 shrink-0 rounded-full", dot[c.status])} />
+      <span className="min-w-0 break-words">
+        <span className={cn("font-medium", c.status === "error" ? "text-danger" : c.status === "needs_auth" ? "text-warn" : "text-fg")}>{t[`cst_${c.status}`]}</span>
+        {c.statusDetail && <span className="text-fg-muted"> · {c.statusDetail}</span>}
+      </span>
+    </p>
+  );
+}
+
+function needsSignIn(c: ConnectorView) {
+  return c.status === "needs_auth" || (c.auth === "oauth" && c.enabled && !c.oauth?.connected);
+}
+
+function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: ConnectorView; focus: boolean; onFocused: () => void; onEdit: () => void }) {
+  const t = useT();
+  const save = useSaveConnector();
+  const refresh = useRefreshConnector();
+  const remove = useDeleteConnector();
+  const oauth = useConnectOAuth();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLElement>(null);
+  const headingId = useId();
+
+  useEffect(() => {
+    if (!focus) return;
+    setOpen(c.tools.length > 0);
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    ref.current?.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+    ref.current?.focus({ preventScroll: true });
+    onFocused();
+  }, [focus, c.tools.length, onFocused]);
+
+  const signIn = needsSignIn(c);
+  const busy = refresh.isPending || c.status === "connecting";
+
+  return (
+    <article ref={ref} tabIndex={-1} aria-labelledby={headingId} className="scroll-mt-6 rounded-(--radius-card) outline-none focus-visible:ring-2 focus-visible:ring-accent">
+    <Card className={cn(!c.enabled && "bg-bg")}>
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <div className="flex items-start gap-3 p-4">
+          <span className="relative shrink-0">
+            <Monogram text={c.label} className="normal-case" />
+            <span aria-hidden className={cn("absolute -end-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-surface", dot[c.status])} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 id={headingId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="truncate font-semibold">{c.label}</span>
+              {c.public && (
+                <Badge tone="warn">
+                  <Users aria-hidden />
+                  {t.publicBadge}
+                </Badge>
+              )}
+            </h3>
+            <p className="truncate font-mono text-xs text-fg-muted" title={c.urlDisplay}>
+              {c.urlDisplay}
+            </p>
+            <StatusLine connector={c} className="mt-1.5" />
+            {c.server && (
+              <p className="mt-1 truncate text-xs text-fg-muted">
+                {c.server.name} <span className="font-mono">{c.server.version}</span>
+              </p>
+            )}
+          </div>
+          <Switch
+            aria-label={`${t.enabled}: ${c.label}`}
+            checked={c.enabled}
+            disabled={save.isPending}
+            onCheckedChange={(enabled) => save.mutate(connectorInput(c, { enabled }), { onError: notifyError })}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1 border-t border-line px-2 py-1.5 ps-3">
+          {c.tools.length > 0 ? (
+            <Collapsible.Trigger className="text-sm">{t.toolCount(c.tools.length)}</Collapsible.Trigger>
+          ) : (
+            <span className="text-xs text-fg-muted">{c.status === "connected" ? t.noToolsListed : t.toolsAfterConnect}</span>
+          )}
+          <div className="ms-auto flex items-center gap-1">
+            {signIn && (
+              <Button variant="primary" size="sm" disabled={oauth.isPending} onClick={() => oauth.mutate(c.id, { onError: notifyError })}>
+                {oauth.isPending ? <Spinner /> : <ExternalLink aria-hidden />}
+                {t.connect}
+              </Button>
+            )}
+            <IconButton
+              label={`${t.refresh}: ${c.label}`}
+              size="icon-sm"
+              disabled={refresh.isPending || !c.enabled}
+              onClick={() => refresh.mutate(c.id, { onError: notifyError })}
+            >
+              <RefreshCw aria-hidden className={cn(busy && "motion-safe:animate-spin")} />
+            </IconButton>
+            <IconButton label={`${t.edit}: ${c.label}`} size="icon-sm" onClick={onEdit}>
+              <Pencil aria-hidden />
+            </IconButton>
+            <Confirm
+              trigger={
+                <IconButton label={`${t.remove}: ${c.label}`} size="icon-sm">
+                  <Trash2 aria-hidden />
+                </IconButton>
+              }
+              title={t.deleteConnectorConfirm(c.label)}
+              description={t.deleteConnectorHint}
+              confirmLabel={t.remove}
+              onConfirm={() => remove.mutateAsync(c.id).catch(notifyError)}
+            />
+          </div>
+        </div>
+
+        <Collapsible.Panel>
+          <ul aria-label={t.toolsOf(c.label)} className="divide-y divide-line border-t border-line">
+            {c.tools.map((tool) => (
+              <ToolRow key={tool.name} connector={c} tool={tool} />
+            ))}
+          </ul>
+        </Collapsible.Panel>
+      </Collapsible.Root>
+    </Card>
+    </article>
+  );
+}
+
+const RISKS = ["read", "write", "external"] as const satisfies readonly Risk[];
+
+function ToolRow({ connector, tool }: { connector: ConnectorView; tool: ConnectorTool }) {
+  const t = useT();
+  const setRisk = useSetToolRisk();
+  const name = tool.title || tool.name;
+  return (
+    <li className="flex flex-col gap-2 px-4 py-3 @container sm:flex-row sm:items-start sm:gap-4">
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <RiskIcon risk={tool.risk} t={t} />
+          <span className="min-w-0 truncate text-sm font-medium">{name}</span>
+          {tool.title && <code className="min-w-0 truncate font-mono text-xs text-fg-muted">{tool.name}</code>}
+          <Badge tone={tool.riskSource === "user" ? "accent" : tool.riskSource === "default" ? "warn" : "neutral"} className="h-5">
+            {t[`rsrc_${tool.riskSource}`]}
+          </Badge>
+        </p>
+        {tool.description && (
+          <p className="mt-1 line-clamp-2 text-xs break-words text-fg-muted" title={tool.description}>
+            {tool.description}
+          </p>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented<Risk>
+          label={`${t.riskLabel}: ${name}`}
+          size="sm"
+          value={tool.risk}
+          onChange={(risk) => setRisk.mutate({ connector, tool: tool.name, risk }, { onError: notifyError })}
+          options={RISKS.map((r) => {
+            const Icon = riskIcon[r];
+            return { value: r, label: <span className="max-[30rem]:sr-only">{t[`riskShort_${r}`]}</span>, icon: <Icon aria-hidden />, ariaLabel: t[`risk_${r}`] };
+          })}
+        />
+        <LivePolicyControl toolKey={tool.toolName} risk={tool.risk} />
+        {tool.riskSource === "user" && (
+          <IconButton label={`${t.resetRisk}: ${name}`} size="icon-sm" onClick={() => setRisk.mutate({ connector, tool: tool.name, risk: null }, { onError: notifyError })}>
+            <RotateCcw aria-hidden />
+          </IconButton>
+        )}
+      </div>
+    </li>
+  );
+}
+
+type HeaderRow = { name: string; value: string; stored: boolean };
+
+function ConnectorForm({
+  preset,
+  connector,
+  onSaved,
+  onDone,
+}: {
+  preset: ConnectorPreset | null;
+  connector: ConnectorView | null;
+  onSaved: (c: ConnectorView) => void;
+  onDone: () => void;
+}) {
+  const t = useT();
+  const save = useSaveConnector();
+  const oauth = useConnectOAuth();
+  const taken = (useConnectors().data ?? []).map((c) => c.id);
+  const editing = connector !== null;
+  const template = !editing && preset && placeholders(preset.url).length > 0 ? preset.url : null;
+  const presetHeader = preset?.header ? { ...preset.header, template: stripName(preset.header.template, preset.header.name) } : null;
+
+  const [vars, setVars] = useState<Record<string, string>>({});
+  const [url, setUrl] = useState(!editing && preset && !template ? preset.url : "");
+  const [labelDraft, setLabelDraft] = useState<string | null>(connector?.label ?? null);
+  const [idDraft, setIdDraft] = useState<string | null>(connector?.id ?? null);
+  const [transport, setTransport] = useState<"http" | "sse">(connector?.transport ?? preset?.transport ?? "http");
+  const [auth, setAuth] = useState<ConnectorAuth>(connector?.auth ?? preset?.auth ?? "none");
+  const [headers, setHeaders] = useState<HeaderRow[]>(() => {
+    const stored = connector?.headerKeys ?? [];
+    if (stored.length) return stored.map((name) => ({ name, value: "", stored: true }));
+    return [{ name: presetHeader?.name ?? "Authorization", value: "", stored: false }];
+  });
+  const [isPublic, setPublic] = useState(connector?.public ?? false);
+
+  // Until the user types their own, the label names what the URL points at (e.g. "GitMCP vercel/ai").
+  const shown = template ? placeholders(template).filter((n) => !isSecretName(n)).map((n) => vars[n]?.trim()).filter(Boolean) : [];
+  const label = labelDraft ?? [preset?.label ?? "", shown.join("/")].filter(Boolean).join(" ");
+  const id = idDraft ?? uniqueId(slug(label) || preset?.id || "", taken);
+  const idValid = /^[a-z0-9][a-z0-9-]{0,31}$/.test(id);
+  const idTaken = !editing && taken.includes(id);
+  const finalUrl = template ? fillTemplate(template, vars) : url.trim();
+  const missingVars = template ? placeholders(template).some((n) => !vars[n]?.trim()) : false;
+  const urlOk = editing ? true : !!finalUrl && !missingVars && isHttpUrl(finalUrl);
+  const formId = useId();
+
+  const submit = () => {
+    if (!idValid || idTaken || !urlOk || !label.trim()) return;
+    const input: ConnectorInput = {
+      id,
+      label: label.trim(),
+      transport,
+      auth,
+      enabled: connector?.enabled ?? true,
+      public: isPublic,
+      risks: connector?.risks ?? {},
+      ...(finalUrl ? { url: finalUrl } : {}),
+    };
+    const typed = headers.filter((h) => h.name.trim() && h.value);
+    if (auth === "headers") {
+      // Only what was typed is sent; a blank stored value keeps it (omit headers entirely when nothing changed).
+      const names = headers.filter((h) => h.name.trim()).map((h) => h.name.trim());
+      const unchanged = typed.length === 0 && sameSet(names, connector?.headerKeys ?? []);
+      if (!unchanged) {
+        input.headers = Object.fromEntries(
+          typed.map((h) => [h.name.trim(), presetHeader && h.name.trim() === presetHeader.name ? headerValue(presetHeader.template, h.value) : h.value]),
+        );
+      }
+    } else if (connector?.headerKeys.length) {
+      input.headers = {};
+    }
+    save.mutate(input, {
+      onSuccess: (c) => {
+        setHeaders((rows) => rows.map((h) => (h.value ? { ...h, value: "", stored: true } : h)));
+        if (needsSignIn(c) || c.status === "error") {
+          // Stay: the next step (sign in, or fix what failed) is right here.
+          onSaved(c);
+          return;
+        }
+        notify("success", t.saved, `${c.label} · ${t.toolCount(c.tools.length)}`);
+        onDone();
+      },
+      onError: notifyError,
+    });
+  };
+
+  return (
+    <Form
+      id={formId}
+      className="flex flex-col gap-5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      {connector && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-subtle px-3 py-2.5">
+          <StatusLine connector={connector} className="min-w-0 flex-1" />
+          {connector.auth === "oauth" && (
+            <Button
+              variant={needsSignIn(connector) ? "primary" : "secondary"}
+              size="sm"
+              disabled={oauth.isPending}
+              onClick={() => oauth.mutate(connector.id, { onError: notifyError })}
+            >
+              {oauth.isPending ? <Spinner /> : <ExternalLink aria-hidden />}
+              {needsSignIn(connector) ? t.connect : t.signInAgain}
+            </Button>
+          )}
+        </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t.label}>
+          <Input required value={label} maxLength={64} onValueChange={setLabelDraft} />
+        </Field>
+        <Field label={t.id} description={editing ? undefined : t.idHint} error={!idValid ? t.idInvalid : idTaken ? t.idTaken : undefined}>
+          <Input
+            required
+            disabled={editing}
+            value={id}
+            maxLength={32}
+            onValueChange={(v) => setIdDraft(v.toLowerCase())}
+            spellCheck={false}
+            className="font-mono text-sm"
+          />
+        </Field>
+      </div>
+
+      {template ? (
+        <TemplateUrl template={template} values={vars} onChange={setVars} />
+      ) : (
+        <Field label={t.serverUrl} description={editing ? t.urlKeepHint : t.urlSecretHint}>
+          <Input
+            type="url"
+            required={!editing}
+            value={url}
+            onValueChange={setUrl}
+            placeholder={connector?.urlDisplay ?? "https://…/mcp"}
+            spellCheck={false}
+            autoComplete="off"
+            className="font-mono text-sm"
+          />
+        </Field>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-[auto_1fr]">
+        <div className="flex flex-col gap-1.5">
+          <span aria-hidden className="text-sm font-medium">
+            {t.transport}
+          </span>
+          <Segmented<"http" | "sse">
+            label={t.transport}
+            value={transport}
+            onChange={setTransport}
+            className="h-10 w-full sm:w-auto"
+            options={[
+              { value: "http", label: "HTTP" },
+              { value: "sse", label: "SSE" },
+            ]}
+          />
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span aria-hidden className="text-sm font-medium">
+            {t.authLabel}
+          </span>
+          <Segmented<ConnectorAuth>
+            label={t.authLabel}
+            value={auth}
+            onChange={setAuth}
+            className="h-10 w-full"
+            options={(["none", "headers", "oauth"] as const).map((a) => {
+              const Icon = authIcon[a];
+              return { value: a, label: t[`authShort_${a}`], icon: <Icon aria-hidden />, ariaLabel: t[`auth_${a}`] };
+            })}
+          />
+        </div>
+      </div>
+
+      {auth === "headers" && <HeaderFields rows={headers} onChange={setHeaders} preset={presetHeader} />}
+      {auth === "oauth" && !connector && (
+        <p className="flex items-start gap-2 text-sm text-fg-muted">
+          <ExternalLink aria-hidden className="mt-0.5 size-4 shrink-0" />
+          {t.oauthAfterSave}
+        </p>
+      )}
+
+      {preset?.note && (
+        <p role="note" className="flex items-start gap-2.5 rounded-lg border border-line bg-subtle px-3 py-2.5 text-sm">
+          <Info aria-hidden className="mt-0.5 size-4 shrink-0 text-accent-text" />
+          <span className="min-w-0">{preset.note}</span>
+        </p>
+      )}
+
+      <div className="flex flex-col gap-1">
+        <SwitchRow label={t.publicTools} hint={t.publicWarn} checked={isPublic} onCheckedChange={setPublic} />
+        {isPublic && (
+          <p className="flex items-center gap-1.5 text-xs font-medium text-warn">
+            <ShieldAlert aria-hidden className="size-3.5 shrink-0" />
+            {t.publicOn}
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
+        {preset?.docsUrl && (
+          <a href={preset.docsUrl} target="_blank" rel="noreferrer" className="inline-flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-accent-text hover:bg-accent-soft">
+            {t.docs}
+            <ExternalLink aria-hidden className="size-3.5" />
+            <span className="sr-only">({t.opensNewTab})</span>
+          </a>
+        )}
+        <Button type="submit" variant="primary" className="ms-auto" disabled={save.isPending || !idValid || idTaken || !urlOk || !label.trim()}>
+          {save.isPending ? <Spinner /> : editing ? <Check aria-hidden /> : <Cable aria-hidden />}
+          {save.isPending ? t.connecting : editing ? t.save : t.saveAndConnect}
+        </Button>
+      </div>
+    </Form>
+  );
+}
+
+/** The preset URL with an inline field per `{placeholder}`. */
+function TemplateUrl({ template, values, onChange }: { template: string; values: Record<string, string>; onChange: (v: Record<string, string>) => void }) {
+  const t = useT();
+  const legend = useId();
+  return (
+    <fieldset aria-labelledby={legend} className="flex flex-col gap-1.5">
+      <span id={legend} className="text-sm font-medium">
+        {t.serverUrl}
+      </span>
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-2 rounded-lg border border-control bg-subtle px-3 py-2 font-mono text-sm">
+        {templateParts(template).map((part, i) =>
+          "text" in part ? (
+            <span key={i} className="break-all text-fg-muted">
+              {part.text}
+            </span>
+          ) : (
+            <Input
+              key={i}
+              aria-label={part.name}
+              required
+              placeholder={part.name}
+              type={isSecretName(part.name) ? "password" : "text"}
+              autoComplete="off"
+              spellCheck={false}
+              value={values[part.name] ?? ""}
+              onValueChange={(v) => onChange({ ...values, [part.name]: v })}
+              className="h-8 w-auto min-w-20 flex-1 basis-24 font-mono text-sm"
+            />
+          ),
+        )}
+      </div>
+      <p className="text-xs text-fg-muted">{t.urlSecretHint}</p>
+    </fieldset>
+  );
+}
+
+function HeaderFields({ rows, onChange, preset }: { rows: HeaderRow[]; onChange: (rows: HeaderRow[]) => void; preset: { name: string; template: string; label: string } | null }) {
+  const t = useT();
+  const update = (i: number, patch: Partial<HeaderRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <fieldset className="flex flex-col gap-3">
+      <legend className="sr-only">{t.auth_headers}</legend>
+      {rows.map((row, i) => {
+        const fromPreset = preset && row.name === preset.name;
+        return (
+          <div key={i} className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] sm:items-start">
+            <Field label={t.headerName}>
+              <Input value={row.name} disabled={row.stored || !!fromPreset} onValueChange={(v) => update(i, { name: v })} spellCheck={false} placeholder="Authorization" className="font-mono text-sm" />
+            </Field>
+            <Field
+              label={fromPreset ? preset.label : t.headerValue}
+              description={row.stored ? t.keepSecret : fromPreset && preset.template !== "{token}" ? t.headerSent(`${preset.name}: ${preset.template}`) : undefined}
+            >
+              <Input
+                type="password"
+                autoComplete="off"
+                required={!row.stored && i === 0}
+                value={row.value}
+                onValueChange={(v) => update(i, { value: v })}
+                placeholder={row.stored ? "••••••••" : t.required}
+                spellCheck={false}
+                className="font-mono text-sm"
+              />
+            </Field>
+            {rows.length > 1 && (
+              <IconButton label={`${t.remove}: ${row.name || t.headerName}`} className="sm:mt-6.5" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+                <Trash2 aria-hidden />
+              </IconButton>
+            )}
+          </div>
+        );
+      })}
+      <Button size="sm" variant="ghost" className="self-start" onClick={() => onChange([...rows, { name: "", value: "", stored: false }])}>
+        <Plus aria-hidden />
+        {t.addHeader}
+      </Button>
+    </fieldset>
+  );
+}
+
+/** Presets may write the template as `Authorization: Bearer {token}`; the value is what follows the name. */
+function stripName(template: string, name: string): string {
+  const prefix = `${name.toLowerCase()}:`;
+  return template.toLowerCase().startsWith(prefix) ? template.slice(prefix.length).trim() : template;
+}
+
+function isHttpUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  const lower = (x: string[]) => new Set(x.map((s) => s.toLowerCase()));
+  const A = lower(a);
+  const B = lower(b);
+  return A.size === B.size && [...A].every((x) => B.has(x));
+}
+

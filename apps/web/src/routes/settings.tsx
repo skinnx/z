@@ -3,8 +3,10 @@ import { Form } from "@base-ui/react/form";
 import { AtSign, Check, Clock, KeyRound, Languages, Monitor, Moon, ShieldCheck, Sun, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import { token } from "../api/client.ts";
+import { useConnectors } from "../api/connectors.ts";
 import { usePlugins } from "../api/plugins.ts";
 import { ReachSettings } from "../components/reach-settings.tsx";
+import { effectivePolicy, PolicyControl, type Policy } from "../components/tool-policy.tsx";
 import { useSaveSettings, useSettings } from "../api/settings.ts";
 import { locale, useT, type Locale } from "../i18n.ts";
 import { parseCron } from "../lib/cron.ts";
@@ -38,15 +40,13 @@ export default function Settings() {
   );
 }
 
-type Policy = "ask" | "allow" | "deny";
-
-/** Read tools never ask; external tools always ask (only a deny can be remembered). */
-const POLICIES: Record<Risk, Policy[]> = { read: ["allow", "deny"], write: ["ask", "allow", "deny"], external: ["ask", "deny"] };
+type PolicyTool = { key: string; name: string; source: string; risk: Risk; defaultPolicy?: Policy };
 
 function AgentSettings({ initial }: { initial: SettingsT }) {
   const t = useT();
   const save = useSaveSettings();
-  const plugins = usePlugins().data ?? [];
+  const plugins = usePlugins().data;
+  const connectors = useConnectors().data;
   const [handle, setHandle] = useState(initial.handle);
   const [timezone, setTimezone] = useState<string | null>(initial.timezone);
   const parsed = parseCron(initial.briefingCron);
@@ -58,9 +58,14 @@ function AgentSettings({ initial }: { initial: SettingsT }) {
     const list = Intl.supportedValuesOf("timeZone");
     return list.includes("UTC") ? list : ["UTC", ...list];
   }, []);
-  const tools = useMemo(
-    () => plugins.flatMap((p: PluginManifest) => p.tools.map((tool) => ({ ...tool, key: `${p.id}_${tool.name}`, plugin: p.name, enabled: p.enabled }))),
-    [plugins],
+  const tools = useMemo<PolicyTool[]>(
+    () => [
+      ...(plugins ?? []).flatMap((p: PluginManifest) =>
+        p.tools.map((tool) => ({ key: `${p.id}_${tool.name}`, name: tool.name, source: p.name, risk: tool.risk, defaultPolicy: tool.defaultPolicy })),
+      ),
+      ...(connectors ?? []).flatMap((c) => c.tools.map((tool) => ({ key: tool.toolName, name: tool.name, source: c.label, risk: tool.risk }))),
+    ],
+    [plugins, connectors],
   );
   const simple = parsed.preset !== "custom";
 
@@ -115,31 +120,21 @@ function AgentSettings({ initial }: { initial: SettingsT }) {
         ) : (
           <Card>
             <ul className="divide-y divide-line">
-              {tools.map((tool) => {
-                const fallback: Policy = tool.defaultPolicy ?? (tool.risk === "read" ? "allow" : "ask");
-                return (
-                  <li key={tool.key} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                    <RiskIcon risk={tool.risk} t={t} />
-                    <span className="min-w-0 flex-1">
-                      <code className="block truncate font-mono text-sm">{tool.name}</code>
-                      <span className="block truncate text-xs text-fg-muted">{tool.plugin}</span>
-                    </span>
-                    <Segmented<Policy>
-                      label={tool.key}
-                      size="sm"
-                      value={policy[tool.key] ?? fallback}
-                      onChange={(v) => setPolicy((p) => ({ ...p, [tool.key]: v }))}
-                      options={(
-                        [
-                          { value: "ask", label: t.pol_ask },
-                          { value: "allow", label: t.pol_allow },
-                          { value: "deny", label: t.pol_deny },
-                        ] as const
-                      ).filter((o) => POLICIES[tool.risk].includes(o.value))}
-                    />
-                  </li>
-                );
-              })}
+              {tools.map((tool) => (
+                <li key={tool.key} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                  <RiskIcon risk={tool.risk} t={t} />
+                  <span className="min-w-0 flex-1">
+                    <code className="block truncate font-mono text-sm">{tool.name}</code>
+                    <span className="block truncate text-xs text-fg-muted">{tool.source}</span>
+                  </span>
+                  <PolicyControl
+                    toolKey={tool.key}
+                    risk={tool.risk}
+                    value={effectivePolicy(tool.risk, policy[tool.key], tool.defaultPolicy)}
+                    onChange={(v) => setPolicy((p) => ({ ...p, [tool.key]: v }))}
+                  />
+                </li>
+              ))}
             </ul>
           </Card>
         )}
