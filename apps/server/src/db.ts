@@ -177,6 +177,28 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End connectors ───────────────────────────────────────────────────────
+  // ─── Memory review, pinning and full-text search ──────────────────────────
+  // Existing memories stay active. The FTS table keeps its own copy of the text (keyed by id, not rowid,
+  // which VACUUM may renumber on a TEXT-keyed table); triggers keep it in sync.
+  `
+  ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active';  -- unreviewed | active
+  ALTER TABLE memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+
+  CREATE VIRTUAL TABLE memories_fts USING fts5(id UNINDEXED, text, tokenize = 'porter unicode61 remove_diacritics 2');
+  INSERT INTO memories_fts (id, text) SELECT id, text FROM memories;
+
+  CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts (id, text) VALUES (new.id, new.text);
+  END;
+  CREATE TRIGGER memories_fts_delete AFTER DELETE ON memories BEGIN
+    DELETE FROM memories_fts WHERE id = old.id;
+  END;
+  CREATE TRIGGER memories_fts_update AFTER UPDATE OF text ON memories BEGIN
+    DELETE FROM memories_fts WHERE id = old.id;
+    INSERT INTO memories_fts (id, text) VALUES (new.id, new.text);
+  END;
+  `,
+  // ─── End memory review ────────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

@@ -37,6 +37,7 @@ function apply(event: LiveEvent, go: (path: string) => void) {
       const n = event.notice;
       const known = queryClient.getQueryData<Notice[]>(keys.notices)?.some((x) => x.id === n.id) ?? false;
       queryClient.setQueryData<Notice[]>(keys.notices, (list) => (list ? upsert(list, n) : list));
+      if (n.kind === "memory") void queryClient.invalidateQueries({ queryKey: keys.memories });
       // Approvals already toast above; watch hits are the other thing worth interrupting for.
       if (n.kind === "watch" && !n.read && !known) notify("watch", n.title, n.body, { label: t().showDetails, onClick: () => go(n.path) });
       break;

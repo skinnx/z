@@ -1,7 +1,7 @@
 /** Streaming chat for the web UI, using the AI SDK's native tool-approval flow. */
 import { convertToModelMessages, generateId, stepCountIs, streamText, type UIMessage } from "ai";
-import type { Memory, ModelRef, Routing, Settings } from "./contract.ts";
-import { memoryPrompt } from "./memory.ts";
+import type { ModelRef, Routing, Settings } from "./contract.ts";
+import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, type ModelResolver } from "./providers.ts";
 import { buildTools, toolNotes, type ActivePlugin } from "./tools.ts";
@@ -12,7 +12,7 @@ export type ChatDeps = {
   settings: Settings;
   plugins: ActivePlugin[];
   /** The owner's long-term memories; the most relevant to the latest message go into the prompt. */
-  memories?: Memory[];
+  memories?: MemoryRecall;
   log?: (text: string) => void;
 };
 
