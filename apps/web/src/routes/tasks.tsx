@@ -1,10 +1,11 @@
 import type { Task, TaskEvent, TaskStatus } from "@z/core";
-import { Ban, Bot, Cpu, Footprints, ListChecks, Play, Plus, Radar, ShieldAlert, SquarePen, Trash2, Wrench } from "lucide-react";
+import { Ban, Bot, CircleCheck, Cpu, Footprints, ListChecks, Play, Plus, Radar, ShieldAlert, SquarePen, Trash2, Wrench } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { useSearchParams } from "react-router";
 import { useEffect, useState } from "react";
 import { useDeleteTask, useTaskAction, useTasks } from "../api/tasks.ts";
 import { Composer } from "../components/composer.tsx";
+import { TaskQuestion } from "../components/task-question.tsx";
 import { useT, type Dict } from "../i18n.ts";
 import { compact, dateTime, json, relativeTime, time } from "../lib/format.ts";
 import { parseCron } from "../lib/cron.ts";
@@ -18,19 +19,23 @@ import { Drawer } from "../ui/drawer.tsx";
 import { TabList, TabPanel, TabsRoot } from "../ui/tabs.tsx";
 import { notifyError } from "../ui/toast.tsx";
 
-type Tab = "active" | "scheduled" | "watch" | "done";
+type Tab = "needs" | "active" | "scheduled" | "watch" | "done";
 const TAB_OF: Record<TaskStatus, Tab> = {
+  waiting: "needs",
+  needs_input: "needs",
+  review: "needs",
+  interrupted: "needs",
   queued: "active",
   running: "active",
-  waiting: "active",
   scheduled: "scheduled",
+  paused: "scheduled",
   done: "done",
   failed: "done",
   cancelled: "done",
 };
 
-/** Watches live in their own tab whatever their status. */
-const tabOf = (task: Task): Tab => (task.mode === "watch" ? "watch" : TAB_OF[task.status]);
+/** What waits on the owner comes first; otherwise watches live in their own tab whatever their status. */
+const tabOf = (task: Task): Tab => (TAB_OF[task.status] === "needs" ? "needs" : task.mode === "watch" ? "watch" : TAB_OF[task.status]);
 
 export function scheduleText(schedule: string | null, t: Dict): string | null {
   if (!schedule) return null;
@@ -52,10 +57,13 @@ export default function Tasks() {
   const open = list.find((x) => x.id === openId) ?? null;
   const by = (tab: Tab) => list.filter((x) => tabOf(x) === tab);
   const active = by("active");
+  const needs = by("needs");
   const [tab, setTab] = useState<Tab | null>(null);
   const initialTab: Tab = open
     ? tabOf(open)
-    : active.length || !list.length
+    : needs.length
+      ? "needs"
+      : active.length || !list.length
       ? "active"
       : by("scheduled").length
         ? "scheduled"
@@ -80,7 +88,7 @@ export default function Tasks() {
     </Button>
   );
 
-  const empty: Record<Tab, string> = { active: t.noActive, scheduled: t.noScheduled, watch: t.noWatches, done: t.noDone };
+  const empty: Record<Tab, string> = { needs: t.noNeeds, active: t.noActive, scheduled: t.noScheduled, watch: t.noWatches, done: t.noDone };
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6 md:px-8 md:py-10">
@@ -96,6 +104,7 @@ export default function Tasks() {
               <TabList
                 label={t.nav_tasks}
                 tabs={[
+                  { value: "needs", label: t.tab_needs, count: needs.length },
                   { value: "active", label: t.tab_active, count: active.length },
                   { value: "scheduled", label: t.tab_scheduled, count: by("scheduled").length },
                   { value: "watch", label: t.tab_watch, count: by("watch").length, icon: <Radar aria-hidden /> },
@@ -105,7 +114,7 @@ export default function Tasks() {
             </div>
             <div className="mb-1.5 hidden sm:block">{newTask}</div>
           </div>
-          {(["active", "scheduled", "watch", "done"] as const).map((tab) => {
+          {(["needs", "active", "scheduled", "watch", "done"] as const).map((tab) => {
             const items = by(tab);
             return (
               <TabPanel key={tab} value={tab} className="pt-4">
@@ -172,7 +181,9 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
         <span className="min-w-0 flex-1">
           <span className="block truncate font-medium">{task.title}</span>
           <span className="mt-0.5 block truncate text-xs text-fg-muted">
-            {task.status === "failed" && task.error ? (
+            {task.status === "needs_input" && task.question ? (
+              <span className="text-warn">{task.question.question}</span>
+            ) : (task.status === "failed" || task.status === "interrupted" || task.status === "paused") && task.error ? (
               <span className="text-danger">{task.error}</span>
             ) : (
               [t[`status_${task.status}`], sched].filter(Boolean).join(" · ")
@@ -237,17 +248,28 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
   const t = useT();
   const action = useTaskAction();
   const remove = useDeleteTask();
-  const live = task.status === "queued" || task.status === "running" || task.status === "waiting";
+  const live = ["queued", "running", "waiting", "needs_input"].includes(task.status);
   const sched = scheduleText(task.schedule, t);
 
   return (
     <div className="flex flex-col gap-6 p-4">
+      <TaskQuestion task={task} />
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" disabled={action.isPending || task.status === "running"} onClick={() => action.mutate({ id: task.id, action: "run" }, { onError: notifyError })}>
+        {(task.status === "review" || task.status === "interrupted") && (
+          <Button variant="primary" disabled={action.isPending} onClick={() => action.mutate({ id: task.id, action: "resolve" }, { onError: notifyError })}>
+            <CircleCheck aria-hidden />
+            {t.markResolved}
+          </Button>
+        )}
+        <Button
+          variant={task.status === "review" || task.status === "interrupted" ? "secondary" : "primary"}
+          disabled={action.isPending || task.status === "running"}
+          onClick={() => action.mutate({ id: task.id, action: "run" }, { onError: notifyError })}
+        >
           <Play aria-hidden />
           {t.runNow}
         </Button>
-        {(live || task.status === "scheduled") && (
+        {(live || task.status === "scheduled" || task.status === "paused") && (
           <Button disabled={action.isPending} onClick={() => action.mutate({ id: task.id, action: "cancel" }, { onError: notifyError })}>
             <Ban aria-hidden />
             {t.cancelTask}

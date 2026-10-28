@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { Task, TaskInput } from "@z/core";
+import type { Task, TaskAnswer, TaskInput } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
@@ -18,8 +18,16 @@ export function useCreateTask() {
 
 export function useTaskAction() {
   return useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "run" | "cancel" }) =>
+    mutationFn: ({ id, action }: { id: string; action: "run" | "cancel" | "resolve" }) =>
       api<Task>(`/tasks/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
+    onSuccess: put,
+  });
+}
+
+export function useAnswerTask() {
+  return useMutation({
+    mutationFn: ({ id, text }: { id: string; text: string }) =>
+      api<Task>(`/tasks/${encodeURIComponent(id)}/answer`, { body: { text } satisfies TaskAnswer }),
     onSuccess: put,
   });
 }

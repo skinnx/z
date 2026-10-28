@@ -1,5 +1,5 @@
-import type { BriefItem, Briefing } from "@z/core";
-import { ArrowUpRight, Check, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
+import type { BriefItem, Briefing, Task } from "@z/core";
+import { ArrowUpRight, Check, CircleAlert, Hand, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { usePendingApprovals } from "../api/approvals.ts";
@@ -7,14 +7,15 @@ import { useBriefing, useGenerateBriefing } from "../api/briefing.ts";
 import { useMarkRead, useNotices } from "../api/notices.ts";
 import { useProviders } from "../api/providers.ts";
 import { useSettings } from "../api/settings.ts";
-import { useCreateTask } from "../api/tasks.ts";
+import { useCreateTask, useTasks } from "../api/tasks.ts";
 import { ApprovalCard } from "../components/approval-card.tsx";
 import { Composer } from "../components/composer.tsx";
+import { TaskQuestion } from "../components/task-question.tsx";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { parseCron } from "../lib/cron.ts";
 import { longDate, relativeTime } from "../lib/format.ts";
-import { briefKindIcon } from "../lib/icons.tsx";
+import { briefKindIcon, StatusIcon } from "../lib/icons.tsx";
 import { Button, buttonClass } from "../ui/button.tsx";
 import { Card, Empty, Section, Spinner } from "../ui/card.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
@@ -73,9 +74,42 @@ export default function Today() {
         )}
       </Section>
 
+      <NeedsYou />
       <WatchHits />
       <BriefingSection />
     </div>
+  );
+}
+
+/** Tasks waiting on the owner (approvals have their own cards above): questions, reviews, interruptions. */
+const NEEDS: Task["status"][] = ["needs_input", "interrupted", "review"];
+
+function NeedsYou() {
+  const t = useT();
+  const needs = (useTasks().data ?? []).filter((x) => NEEDS.includes(x.status)).sort((a, b) => NEEDS.indexOf(a.status) - NEEDS.indexOf(b.status));
+  if (needs.length === 0) return null;
+
+  return (
+    <Section label={`${t.needsYou} (${needs.length})`} icon={<Hand aria-hidden className="text-warn" />}>
+      <ul aria-live="polite" className="flex flex-col gap-3">
+        {needs.map((task) => (
+          <li key={task.id}>
+            <Card className="flex flex-col gap-3 p-4">
+              <Link to={`/tasks?task=${task.id}`} className="flex items-start gap-3 hover:underline">
+                <StatusIcon status={task.status} t={t} className="mt-0.5 size-4" />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium leading-snug break-words">{task.title}</span>
+                  <span className={cn("mt-0.5 block text-xs", task.status === "interrupted" ? "text-danger" : "text-fg-muted")}>
+                    {task.status === "interrupted" && task.error ? task.error : t[`status_${task.status}`]}
+                  </span>
+                </span>
+              </Link>
+              <TaskQuestion task={task} />
+            </Card>
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 
@@ -210,6 +244,21 @@ function BriefingBody({ briefing }: { briefing: Briefing }) {
           </Card>
         ))}
       </div>
+      {briefing.couldNotCheck?.length ? (
+        <section aria-label={t.couldNotCheck} className="flex flex-col gap-1 text-sm">
+          <h3 className="flex items-center gap-1.5 text-xs font-semibold text-fg-muted">
+            <CircleAlert aria-hidden className="size-3.5 text-warn" />
+            {t.couldNotCheck}
+          </h3>
+          <ul className="flex flex-col gap-0.5 text-fg-muted">
+            {briefing.couldNotCheck.map((c) => (
+              <li key={c.source} className="break-words">
+                <span className="font-mono text-xs text-fg">{c.source}</span> · {c.reason}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <p className="text-xs text-fg-muted">
         <time dateTime={briefing.createdAt}>{relativeTime(briefing.createdAt)}</time>
       </p>
