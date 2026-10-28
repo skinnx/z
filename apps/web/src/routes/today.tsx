@@ -1,9 +1,10 @@
 import type { BriefItem, Briefing } from "@z/core";
-import { Check, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
+import { ArrowUpRight, Brain, Check, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { usePendingApprovals } from "../api/approvals.ts";
 import { useBriefing, useGenerateBriefing } from "../api/briefing.ts";
+import { useMemories } from "../api/memories.ts";
 import { useMarkRead, useNotices } from "../api/notices.ts";
 import { useProviders } from "../api/providers.ts";
 import { useSettings } from "../api/settings.ts";
@@ -17,7 +18,9 @@ import { parseCron } from "../lib/cron.ts";
 import { longDate, relativeTime } from "../lib/format.ts";
 import { briefKindIcon } from "../lib/icons.tsx";
 import { Button, buttonClass } from "../ui/button.tsx";
+import { MemoryManager } from "../settings/panels/memories.tsx";
 import { Card, Empty, Section, Spinner } from "../ui/card.tsx";
+import { Dialog } from "../ui/dialog.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 
@@ -74,9 +77,29 @@ export default function Today() {
         )}
       </Section>
 
+      <MemoryReview />
       <WatchHits />
       <BriefingSection />
     </div>
+  );
+}
+
+/** One line while z has memories awaiting review; opens the memory manager in place. */
+function MemoryReview() {
+  const t = useT();
+  const waiting = (useMemories().data ?? []).filter((m) => m.status === "unreviewed").length;
+  if (waiting === 0) return null;
+  return (
+    <Card className="flex items-center gap-3 border-accent/40 py-2 ps-4 pe-2">
+      <Brain aria-hidden className="size-4 shrink-0 text-accent-text" />
+      <p className="min-w-0 flex-1 text-sm font-medium">{t.wantsToRemember(waiting)}</p>
+      <Dialog.Root>
+        <Dialog.Trigger render={<Button size="sm" />}>{t.review}</Dialog.Trigger>
+        <Dialog.Content wide title={t.memories}>
+          <MemoryManager />
+        </Dialog.Content>
+      </Dialog.Root>
+    </Card>
   );
 }
 

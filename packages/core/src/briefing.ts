@@ -3,8 +3,8 @@
  * summarize, suggest follow-ups on items and propose a few tasks worth delegating.
  */
 import { z } from "zod";
-import type { BriefItem, Briefing, Memory, Routing, Settings, Task } from "./contract.ts";
-import { memoryPrompt } from "./memory.ts";
+import type { BriefItem, Briefing, Routing, Settings, Task } from "./contract.ts";
+import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, localDate } from "./prompt.ts";
 import { laneConfigured, type ModelResolver } from "./providers.ts";
 import { generateStructured } from "./structured.ts";
@@ -19,7 +19,7 @@ export type BriefingDeps = {
   tasks: Task[];
   since: Date;
   /** The owner's long-term memories, used to propose tasks. */
-  memories?: Memory[];
+  memories?: MemoryRecall;
   log?: (text: string) => void;
 };
 
