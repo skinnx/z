@@ -56,9 +56,10 @@ or `docker build -t z . && docker run -p 8787:8787 -v z-data:/data z`.
 | `Z_DATA_DIR` | `./.data` | SQLite database and generated master key |
 | `Z_MASTER_KEY` | generated into `Z_DATA_DIR/master.key` | 32-byte key (hex or base64) encrypting provider keys and channel secrets |
 | `Z_TOKEN` | unset | Require `Authorization: Bearer <token>` on `/api` — set it whenever the server is reachable by others |
-| `Z_PUBLIC_URL` | unset | Public base URL, needed for webhook channels (Slack, Telegram webhook mode) |
+| `Z_PUBLIC_URL` | unset | Public base URL, needed for webhook channels (Slack, Telegram webhook mode) and as the OAuth redirect for connectors |
 | `Z_PLUGINS` | unset | Comma-separated module paths of extra plugins |
 | `Z_VAPID_SUBJECT` | `Z_PUBLIC_URL` if https, else `mailto:z@localhost` | Contact push services see for Web Push (`mailto:` or `https:`) |
+| `Z_ALLOW_PRIVATE_MCP` | unset | `1` lets connectors reach MCP servers on localhost, your LAN and plain `http` (blocked by default) |
 
 ## Layout
 
@@ -82,6 +83,24 @@ Every tool declares a risk:
 | `external` | post publicly, send a message, open an issue | always asks |
 
 Change the policy per tool under **Settings**. Bots answering in channels only ever get `read` tools that are marked `public` (web search and reference lookups, never your notifications, feeds or browser), so strangers can't make z act on your behalf or read your data.
+
+## Connectors
+
+A connector plugs any [MCP](https://modelcontextprotocol.io) server into z as a data source: its tools join chat, tasks, watches and (if you allow it) the bot, under the same approval policy, sensitive-data guard and task log as plugin tools. No vendor is required; presets are only starting points:
+
+| | Presets |
+| --- | --- |
+| Docs | DeepWiki, Context7, Cloudflare Docs, GitMCP (`https://gitmcp.io/{owner}/{repo}`) |
+| Dev | Hugging Face, GitHub (personal access token), Custom (any Streamable HTTP or SSE server) |
+| Work | Linear, Notion (OAuth) |
+| Aggregators | Composio, Zapier (connection token), Pipedream (OAuth) |
+
+Each tool gets a risk from the server's annotations, which are hints from a third party: `readOnlyHint` → `read`, `destructiveHint` or `openWorldHint` → `external`, other hints → `write`, no hints at all → `write` (so it asks). Override any tool's risk per connector. Tools are named `mcp_<connector>_<tool>` in approvals and policies. Only connectors you mark **public** offer their `read` tools to the bot.
+
+- **URLs and headers are secrets.** They are stored encrypted and never returned or logged (the app shows `https://host/…`), since services like Zapier put the key in the URL.
+- **OAuth** (Linear, Notion, Pipedream, any server that advertises it) uses discovery, dynamic client registration and PKCE; tokens are stored encrypted and refreshed automatically. The provider redirects back to `/oauth/callback`, so set `Z_PUBLIC_URL` in production; without it z uses the address you opened it on.
+- **Network safety.** Connector requests (including OAuth discovery) must be `https` to public addresses; localhost, private ranges and cloud metadata are refused and redirects are not followed. Set `Z_ALLOW_PRIVATE_MCP=1` to use a self-hosted MCP server on your own network.
+- **Aggregators hold your tokens.** Composio, Zapier and Pipedream keep the OAuth tokens for every app you connect through them and run the calls on their servers; Composio and Zapier bill per tool call (Zapier: two tasks per call). Connect the app's own MCP server instead when it has one.
 
 ## Fact checks
 
