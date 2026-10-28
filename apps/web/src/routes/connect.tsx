@@ -17,7 +17,7 @@ import { effectivePolicy, LivePolicyControl } from "../components/tool-policy.ts
 import { useSettings } from "../api/settings.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
-import { authIcon, CATEGORIES, fillTemplate, headerValue, isSecretName, placeholders, presetOf, templateParts, uniqueId, urlHost } from "../lib/connectors.ts";
+import { authIcon, CATEGORIES, statusDot as dot, fillTemplate, headerValue, isSecretName, placeholders, presetOf, templateParts, uniqueId, urlHost } from "../lib/connectors.ts";
 import { slug } from "../lib/format.ts";
 import { riskIcon, RiskIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
@@ -195,14 +195,6 @@ function PresetTile({ preset: p, connected, onClick }: { preset: ConnectorPreset
     </Tile>
   );
 }
-
-const dot: Record<ConnectorView["status"], string> = {
-  connected: "bg-ok",
-  connecting: "bg-accent motion-safe:animate-pulse-dot",
-  needs_auth: "bg-warn",
-  error: "bg-danger",
-  disabled: "bg-line-strong",
-};
 
 function StatusLine({ connector: c, className }: { connector: ConnectorView; className?: string }) {
   const t = useT();

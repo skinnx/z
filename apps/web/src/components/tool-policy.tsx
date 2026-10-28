@@ -1,10 +1,7 @@
-import type { Risk, Settings } from "@z/core";
-import { useMutation } from "@tanstack/react-query";
-import { api } from "../api/client.ts";
-import { keys, queryClient } from "../api/query.ts";
-import { useSettings } from "../api/settings.ts";
+import type { Risk } from "@z/core";
+import { useSaveSetting, useSettings } from "../api/settings.ts";
 import { useT } from "../i18n.ts";
-import { notifyError } from "../ui/toast.tsx";
+import { SavedMark } from "../ui/row.tsx";
 import { Segmented } from "../ui/toggle-group.tsx";
 
 export type Policy = "ask" | "allow" | "deny";
@@ -40,31 +37,25 @@ export function PolicyControl({ toolKey, risk, value, onChange, className }: { t
   );
 }
 
-/** A policy control that saves right away (outside the Settings form), optimistically. */
-export function LivePolicyControl({ toolKey, risk, className }: { toolKey: string; risk: Risk; className?: string }) {
+/** A policy control that saves right away, optimistically, with a quiet check once it lands. */
+export function LivePolicyControl({ toolKey, risk, declared, showSaved, className }: { toolKey: string; risk: Risk; declared?: Policy; showSaved?: boolean; className?: string }) {
   const settings = useSettings();
-  const save = useMutation({
-    mutationFn: (approvals: Settings["approvals"]) => api<Settings>("/settings", { method: "PUT", body: { approvals } }),
-    onMutate: async (approvals) => {
-      await queryClient.cancelQueries({ queryKey: keys.settings });
-      const previous = queryClient.getQueryData<Settings>(keys.settings);
-      if (previous) queryClient.setQueryData<Settings>(keys.settings, { ...previous, approvals });
-      return { previous };
-    },
-    onError: (e, _v, ctx) => {
-      queryClient.setQueryData(keys.settings, ctx?.previous);
-      notifyError(e);
-    },
-    onSuccess: (data) => queryClient.setQueryData(keys.settings, data),
-  });
+  const { save, saved } = useSaveSetting();
   const approvals = settings.data?.approvals ?? {};
-  return (
+  const control = (
     <PolicyControl
       toolKey={toolKey}
       risk={risk}
       className={className}
-      value={effectivePolicy(risk, approvals[toolKey])}
-      onChange={(v) => settings.data && save.mutate({ ...approvals, [toolKey]: v })}
+      value={effectivePolicy(risk, approvals[toolKey], declared)}
+      onChange={(v) => settings.data && save({ approvals: { ...approvals, [toolKey]: v } })}
     />
+  );
+  if (!showSaved) return control;
+  return (
+    <span className="flex items-center gap-1.5">
+      <SavedMark show={saved} iconOnly />
+      {control}
+    </span>
   );
 }

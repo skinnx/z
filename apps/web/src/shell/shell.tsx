@@ -1,4 +1,4 @@
-import { Command, Ellipsis, SunMoon } from "lucide-react";
+import { Command, Ellipsis, Settings, SunMoon } from "lucide-react";
 import { Suspense, useCallback } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { usePendingApprovals } from "../api/approvals.ts";
@@ -14,6 +14,10 @@ import { CommandMenu, commandMenuOpen } from "./command-menu.tsx";
 import { NoticeBell, NoticeTab } from "./notices.tsx";
 import { NAV } from "./nav.ts";
 import { TokenDialog } from "./token-dialog.tsx";
+import { SettingsHost } from "../settings/host.tsx";
+import { useSettingsRoute } from "../settings/route.ts";
+
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 function Logo() {
   return (
@@ -40,6 +44,7 @@ export function Shell() {
   const pending = usePendingApprovals().data?.length ?? 0;
   const go = useCallback((path: string) => navigate(path), [navigate]);
   useLiveEvents(go);
+  const settings = useSettingsRoute();
   const isChat = location.pathname.startsWith("/chat");
   const morePaths = NAV.filter((n) => !n.primary).map((n) => n.to);
   const moreActive = morePaths.some((p) => location.pathname.startsWith(p));
@@ -84,7 +89,16 @@ export function Shell() {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto">
+        <div className="mt-auto flex flex-col gap-0.5">
+          <Button
+            variant="ghost"
+            className={cn("w-full justify-start px-3", settings.isOpen ? "bg-surface text-fg ring-1 ring-line" : "text-fg-muted")}
+            onClick={() => settings.open()}
+          >
+            <Settings aria-hidden />
+            <span className="min-w-0 flex-1 truncate text-start">{t.nav_settings}</span>
+            <Kbd>{isMac ? "⌘," : "Ctrl ,"}</Kbd>
+          </Button>
           <Button variant="ghost" className="w-full justify-start px-3 text-fg-muted" onClick={() => commandMenuOpen.set(true)}>
             <Command aria-hidden />
             <span className="min-w-0 flex-1 truncate text-start">{t.commandMenu}</span>
@@ -153,6 +167,9 @@ export function Shell() {
               {t[n.label]}
             </MenuLinkItem>
           ))}
+          <MenuItem icon={<Settings aria-hidden />} onClick={() => settings.open()}>
+            {t.nav_settings}
+          </MenuItem>
           <MenuSeparator />
           <MenuItem icon={<Command aria-hidden />} onClick={() => commandMenuOpen.set(true)}>
             {t.commandMenu}
@@ -164,6 +181,7 @@ export function Shell() {
       </nav>
 
       <CommandMenu />
+      <SettingsHost />
       <TokenDialog />
     </div>
   );

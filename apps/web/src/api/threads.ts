@@ -35,3 +35,14 @@ export function useDeleteThread() {
       queryClient.setQueryData<ThreadSummary[]>(keys.threads, (list) => list?.filter((t) => t.id !== id)),
   });
 }
+
+export function useDeleteAllThreads() {
+  return useMutation({
+    mutationFn: () => api<{ deleted: number }>("/threads", { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.setQueryData<ThreadSummary[]>(keys.threads, []);
+      // An open chat refetches and comes back empty.
+      void queryClient.invalidateQueries({ queryKey: ["thread"] });
+    },
+  });
+}

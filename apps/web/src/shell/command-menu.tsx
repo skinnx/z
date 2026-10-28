@@ -28,6 +28,7 @@ import { itemClass } from "../ui/popup.ts";
 import { notifyError } from "../ui/toast.tsx";
 import { ScrollArea } from "../ui/scroll-area.tsx";
 import { NAV } from "./nav.ts";
+import { SECTIONS, sectionIcon, sectionLabel, useSettingsRoute } from "../settings/route.ts";
 
 export const commandMenuOpen = createSignal(false);
 
@@ -44,6 +45,7 @@ export function CommandMenu() {
   const threads = useThreads();
   const briefing = useGenerateBriefing();
   const connectors = useConnectors();
+  const settings = useSettingsRoute();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -86,6 +88,12 @@ export function CommandMenu() {
         run: () => locale.set(locale.get() === "vi" ? "en" : "vi"),
       },
     ];
+    const settingsItems: Item[] = SECTIONS.map((id) => ({
+      value: `settings:${id}`,
+      label: t.settingsSection(sectionLabel(t, id)),
+      icon: icon(sectionIcon[id]),
+      run: () => settings.open(id),
+    }));
     const recentTasks: Item[] = (tasks.data ?? []).slice(0, 8).map((task) => ({
       value: `task:${task.id}`,
       label: task.title,
@@ -109,11 +117,12 @@ export function CommandMenu() {
     return [
       { value: t.group_do, items: actions },
       { value: t.group_go, items: go },
+      { value: t.nav_settings, items: settingsItems },
       { value: t.group_tasks, items: recentTasks },
       { value: t.group_threads, items: recentThreads },
       { value: t.group_connectors, items: sources },
     ].filter((g) => g.items.length > 0);
-  }, [t, navigate, tasks.data, threads.data, connectors.data, briefing]);
+  }, [t, navigate, tasks.data, threads.data, connectors.data, briefing, settings]);
 
   return (
     <Dialog.Root open={open} onOpenChange={(o) => commandMenuOpen.set(o)}>
