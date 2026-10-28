@@ -42,7 +42,7 @@ export function reachRoutes({ rt, push, pairing }: Services) {
 
   app.post("/push/test", async (c) =>
     c.json({
-      sent: await push.send({ id: crypto.randomUUID(), kind: "test", title: "z", body: "Notifications work on this device.", path: "/settings" }),
+      sent: await push.send({ id: crypto.randomUUID(), kind: "test", title: "z", body: "Notifications work on this device.", path: "/?settings=notifications" }),
     }),
   );
 
