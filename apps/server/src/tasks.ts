@@ -71,6 +71,15 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     pump();
   }
 
+  /**
+   * A run ended: drop its controller, unless a cancel already did and a newer run of the task holds the
+   * slot now (a cancelled run slow to unwind must not remove the next run's controller).
+   */
+  function release(id: string, controller: AbortController) {
+    if (running.get(id) === controller) running.delete(id);
+    pump();
+  }
+
   function pump() {
     while (running.size < CONCURRENCY && queue.length) void execute(queue.shift()!);
   }
@@ -137,8 +146,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
       endRun(id);
       finish(task, { error: error instanceof Error ? error.message : String(error) }, "failed");
     } finally {
-      running.delete(id);
-      pump();
+      release(id, controller);
     }
   }
 
@@ -181,8 +189,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     } catch (error) {
       finish(task, { error: error instanceof Error ? error.message : String(error) }, "failed");
     } finally {
-      running.delete(id);
-      pump();
+      release(id, controller);
     }
   }
 
@@ -375,6 +382,8 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
       withdrawQuestion(id);
       endRun(id);
       const queued = update(id, { status: "queued", error: null });
+      // A cancel stopped the cron job: re-arm it, so the run ends `scheduled` with a job behind its nextRunAt.
+      if (queued?.schedule && !jobs.has(id)) schedule(queued);
       enqueue(id);
       return queued;
     },
@@ -468,6 +477,11 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
         }
         if (store.tasks.get(task.id)?.status === "queued") enqueue(task.id);
       }
+    },
+
+    /** When the task's cron job fires next; null when no job is armed. */
+    nextFire(id: string): Date | null {
+      return jobs.get(id)?.nextRun() ?? null;
     },
 
     stopAll() {

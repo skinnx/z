@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { collectBriefItems, MAX_CONSECUTIVE_FAILURES } from "@z/core";
+import { collectBriefItems, definePlugin, MAX_CONSECUTIVE_FAILURES, MAX_FINGERPRINTS } from "@z/core";
 import type { ModelMessage } from "ai";
+import { z as zod } from "zod";
 import { planRecovery } from "../src/recovery.ts";
 import type { TaskCall } from "../src/store.ts";
 import { boot, cleanup, scriptedModel, statusOf, tempDir, testPlugin, until } from "./harness.ts";
@@ -251,4 +252,124 @@ test("briefing: a plugin source that throws is listed under couldNotCheck", asyn
   const { items, couldNotCheck } = await collectBriefItems({ ...deps, tasks: [], since: new Date(0) });
   assert.deepEqual(items, []);
   assert.deepEqual(couldNotCheck, [{ source: "test", reason: "feed is down" }]);
+});
+
+// ─── Cancel and Run now ────────────────────────────────────────────────────
+
+const tick = (ms = 50) => new Promise((r) => setTimeout(r, ms));
+
+test("cancel: a cancelled run slow to unwind leaves the next run's controller, so a second cancel stops it", async () => {
+  const gates: (() => void)[] = [];
+  let looks = 0;
+  const sent: unknown[] = [];
+  const plugin = definePlugin({
+    id: "slow",
+    name: "Slow",
+    description: "",
+    tools: {
+      look: {
+        description: "Look something up (ignores abort)",
+        risk: "read",
+        inputSchema: zod.object({}),
+        execute: async () => {
+          looks++;
+          await new Promise<void>((r) => gates.push(r));
+          return { ok: true };
+        },
+      },
+      send: {
+        description: "Send a message",
+        risk: "write",
+        defaultPolicy: "allow",
+        inputSchema: zod.object({ to: zod.string() }),
+        execute: async (input: unknown) => {
+          sent.push(input);
+          return { sent: true };
+        },
+      },
+    },
+  });
+  const dir = tempDir();
+  dirs.push(dir);
+  const model = scriptedModel();
+  const z = boot(dir, [plugin], model.model);
+  engines.push(z.tasks);
+
+  model.push({ call: "slow_look", input: {} });
+  const task = z.tasks.create(oneShot);
+  await until(() => looks === 1, "run 1 inside the slow tool");
+  z.tasks.cancel(task.id);
+  model.push({ call: "slow_look", input: {} }, { call: "slow_send", input: { to: "ana" } }, { text: "Sent to Ana." });
+  z.tasks.runNow(task.id);
+  await until(() => looks === 2, "run 2 inside the slow tool");
+  gates[0]!(); // run 1 unwinds now, while run 2 is in flight
+  await tick();
+  z.tasks.cancel(task.id); // the owner cancels run 2
+  gates[1]!();
+  await tick(200);
+  assert.equal(statusOf(z.store, task.id), "cancelled");
+  assert.deepEqual(sent, [], "the cancelled run never reached its write tool");
+});
+
+test("cancel then Run now on a recurring task keeps its cron job armed", async () => {
+  const z = setup();
+  const task = z.tasks.create(recurring);
+  assert.ok(z.tasks.nextFire(task.id));
+  z.tasks.cancel(task.id);
+  assert.equal(z.tasks.nextFire(task.id), null, "cancel stops the job");
+
+  await runOnce(z, task.id, { text: "All good" });
+  const t = z.store.tasks.get(task.id)!;
+  assert.equal(t.status, "scheduled");
+  assert.equal(z.tasks.nextFire(task.id)?.toISOString(), t.nextRunAt, "a job stands behind the shown next run");
+});
+
+// ─── Watch de-duplication ──────────────────────────────────────────────────
+
+test("watch: an unchanged item notifies once, however many other URLs later checks observe", async () => {
+  const ITEM = "https://status.example.com/incidents/42";
+  let check = 0;
+  const plugin = definePlugin({
+    id: "page",
+    name: "Page",
+    description: "",
+    tools: {
+      read: {
+        description: "Read the status page",
+        risk: "read",
+        public: true,
+        inputSchema: zod.object({}),
+        // The incident stays; 300 tracking links per load change every time.
+        execute: async () => ({ text: `Incident 42 ${ITEM}\n` + Array.from({ length: 300 }, (_, i) => `https://ads.example.net/c/${check}-${i}`).join("\n") }),
+      },
+    },
+  });
+  const dir = tempDir();
+  dirs.push(dir);
+  const model = scriptedModel();
+  const z = boot(dir, [plugin], model.model);
+  engines.push(z.tasks);
+  const queueCheck = () =>
+    model.push(
+      { call: "page_read", input: {} },
+      { text: `Incident 42 — ${ITEM}` },
+      { text: JSON.stringify({ notify: true, title: "Incident 42", body: `Incident 42 ${ITEM}`, fingerprint: ITEM }) },
+    );
+  const watchNotices = () => z.store.notices.list().filter((n) => n.kind === "watch").length;
+
+  queueCheck();
+  const task = z.tasks.create({ instructions: "Tell me about incidents on status.example.com", lane: "agent", mode: "watch", missedPolicy: "once" });
+  const counts: number[] = [];
+  for (check = 0; check < 6; check++) {
+    if (check > 0) {
+      queueCheck();
+      z.tasks.runNow(task.id);
+    }
+    await until(() => statusOf(z.store, task.id) === "scheduled" && model.pending() === 0, `check ${check}`);
+    counts.push(watchNotices());
+  }
+  assert.deepEqual(counts, [1, 1, 1, 1, 1, 1]);
+  const seen = z.store.tasks.fingerprints(task.id);
+  assert.ok(seen.length <= MAX_FINGERPRINTS);
+  assert.equal(seen.at(-1), ITEM, "the item seen again is the most recently seen");
 });

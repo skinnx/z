@@ -43,14 +43,17 @@ export type WatchOutcome =
       status: "done";
       /** After de-duplication: `notify` is false unless something not seen before matched. */
       decision: WatchDecision;
-      /** New fingerprints to remember: everything this check observed or reported. */
+      /**
+       * Fingerprints this check saw, to remember or refresh: everything it observed or reported, known ones
+       * included (so an item still present is never evicted), reported items last (most recently seen).
+       */
       fingerprints: string[];
       report: string;
     }
   | { status: "failed"; error: string };
 
 export type RunWatchOptions = {
-  /** Fingerprints seen by earlier checks, oldest first. */
+  /** Fingerprints seen by earlier checks, least recently seen first. */
   seen: string[];
   signal?: AbortSignal;
   onEvent: (event: TaskEvent) => void;
@@ -82,6 +85,12 @@ function urlsIn(value: unknown, out: Set<string>, depth = 0) {
   if (typeof value === "string") for (const url of value.match(URL_RE) ?? []) out.add(normalizeFingerprint(url));
   else if (Array.isArray(value)) for (const v of value) urlsIn(v, out, depth + 1);
   else if (value && typeof value === "object") for (const v of Object.values(value)) urlsIn(v, out, depth + 1);
+}
+
+/** Everything a check saw, de-duplicated, with the reported items last so they are evicted last. */
+function seenNow(observed: Set<string>, reported: string[]): string[] {
+  const last = new Set(reported);
+  return [...[...observed].filter((p) => !last.has(p)), ...last];
 }
 
 export async function runWatch(task: Task, deps: AgentDeps, opts: RunWatchOptions): Promise<WatchOutcome> {
@@ -151,7 +160,7 @@ export async function runWatch(task: Task, deps: AgentDeps, opts: RunWatchOption
     if (signals.failure) return { status: "failed", error: signals.failure };
     if (signals.noUpdate) {
       opts.onEvent({ type: "step", at: at(), text: "Nothing new." });
-      const fingerprints = [...new Set([...observed, ...fingerprintParts("", report)])].filter((p) => !known.has(p));
+      const fingerprints = seenNow(observed, fingerprintParts("", report));
       return { status: "done", decision: { notify: false, title: "", body: "", fingerprint: "" }, fingerprints, report };
     }
     // Matching items that earlier checks already saw are dropped before the decision.
@@ -193,7 +202,7 @@ export async function runWatch(task: Task, deps: AgentDeps, opts: RunWatchOption
           ? "Nothing new: everything it found was seen in an earlier check."
           : "Nothing new.",
     });
-    const remember = [...new Set([...observed, ...fingerprintParts("", report), ...(notify ? newParts : [])])].filter((p) => !known.has(p));
+    const remember = seenNow(observed, [...fingerprintParts("", report), ...(notify ? newParts : [])]);
     return { status: "done", decision, fingerprints: remember, report };
   } catch (error) {
     if (opts.signal?.aborted) return { status: "failed", error: "Cancelled" };

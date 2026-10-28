@@ -270,11 +270,15 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     messages: (id: string): ModelMessage[] | null => parse(get("SELECT messages FROM tasks WHERE id = ?", id)?.messages, null),
     setMessages: (id: string, messages: ModelMessage[] | null) =>
       run("UPDATE tasks SET messages = ? WHERE id = ?", messages ? json(messages) : null, id),
-    /** Watch tasks: fingerprints of findings already notified, oldest first. */
+    /** Watch tasks: fingerprints of findings already seen, least recently seen first. */
     fingerprints: (id: string): string[] => parse(get("SELECT fingerprints FROM tasks WHERE id = ?", id)?.fingerprints, []),
-    /** Record a watch check; `added` fingerprints are appended (capped). */
-    recordWatch: (id: string, watch: NonNullable<Task["watch"]>, added: string[], cap: number) => {
-      const next = [...tasks.fingerprints(id), ...added].slice(-cap);
+    /**
+     * Record a watch check. `seen` fingerprints (new or already known) move to the end, so the cap
+     * evicts the least recently seen, never an item that is still turning up.
+     */
+    recordWatch: (id: string, watch: NonNullable<Task["watch"]>, seen: string[], cap: number) => {
+      const refreshed = new Set(seen);
+      const next = [...tasks.fingerprints(id).filter((f) => !refreshed.has(f)), ...refreshed].slice(-cap);
       run("UPDATE tasks SET watch = ?, fingerprints = ?, updated_at = ? WHERE id = ?", json(watch), json(next), now(), id);
     },
     /** The open `ask_person` question, with its tool call id. */
