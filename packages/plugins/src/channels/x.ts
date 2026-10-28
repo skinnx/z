@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, sleep } from "../util.ts";
 import { config, untilAuthorized } from "./shared.ts";
@@ -123,20 +124,110 @@ function rateLimitWait(res: Response): number {
   return reset ? Math.max(1000, reset * 1000 - Date.now() + 1000) : 15 * 60_000;
 }
 
-async function xApi<T>(runtime: ChannelRuntime, path: string, init: RequestInit = {}, signal?: AbortSignal) {
+// ─── OAuth2 user tokens: X's expire after 2 hours; with a refresh token z renews them ──────
+
+const TOKEN_URL = `${API}/oauth2/token`;
+/** Renew this long before the access token expires (polls run every minute or so). */
+const REFRESH_AHEAD_MS = 5 * 60_000;
+const REFRESH_TIMEOUT_MS = 15_000;
+
+/**
+ * The bearer token to send, renewed with the refresh token when there is one. X rotates refresh
+ * tokens on every use, so the current pair lives in `runtime.state` (keyed by a hash of the
+ * configured refresh token: pasting a new one in the settings starts over from it). Token values
+ * never reach logs or status text.
+ */
+type XAuth = { refreshable: boolean; token: (signal?: AbortSignal) => Promise<string>; refresh: (signal?: AbortSignal) => Promise<void> };
+
+const auths = new WeakMap<ChannelRuntime, XAuth>();
+
+export function xAuth(runtime: ChannelRuntime): XAuth {
+  const cached = auths.get(runtime);
+  if (cached) return cached;
+  const seedToken = config(runtime, "refreshToken");
+  const clientId = config(runtime, "clientId");
+  const clientSecret = config(runtime, "clientSecret");
+  const refreshable = Boolean(seedToken && clientId);
+  const key = (name: string) => `oauth:${name}`;
+  if (refreshable) {
+    const seed = createHash("sha256").update(`${clientId}\n${seedToken}`).digest("base64url");
+    if (runtime.state.get(key("seed")) !== seed) {
+      runtime.state.set(key("seed"), seed);
+      for (const name of ["access", "refresh", "expiresAt"]) runtime.state.set(key(name), "");
+    }
+  }
+  let inFlight: Promise<void> | null = null;
+
+  async function exchange(signal?: AbortSignal): Promise<void> {
+    const refreshToken = runtime.state.get(key("refresh")) || seedToken;
+    const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
+    const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientId });
+    // Confidential apps authenticate with Basic; public (PKCE) apps send only client_id.
+    if (clientSecret) headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(clientId)}:${encodeURIComponent(clientSecret)}`).toString("base64")}`;
+    const timeout = AbortSignal.timeout(REFRESH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await runtime.fetch(TOKEN_URL, { method: "POST", headers, body, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new XError(`X token refresh: could not reach X (${errorMessage(error)}); retrying`, 503, 0);
+    }
+    const data = (await res.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string; expires_in?: number; error?: string; error_description?: string };
+    if (res.ok && data.access_token) {
+      runtime.state.set(key("access"), data.access_token);
+      if (data.refresh_token) runtime.state.set(key("refresh"), data.refresh_token);
+      runtime.state.set(key("expiresAt"), data.expires_in ? String(Date.now() + data.expires_in * 1000) : "");
+      runtime.log("x: access token renewed");
+      return;
+    }
+    if (res.status === 429 || res.status >= 500 || res.ok) {
+      throw new XError(`X token refresh: HTTP ${res.status}; retrying`, res.status === 429 ? 429 : 503, rateLimitWait(res));
+    }
+    // invalid_grant (used, revoked or expired refresh token), invalid_client, …: only a new token helps.
+    const why = [data.error, data.error_description].filter(Boolean).join(": ") || `HTTP ${res.status}`;
+    throw new XError(`X rejected the refresh token (${why}). Authorize the app again and paste the new refresh token in the channel settings.`, 401, 0);
+  }
+
+  const auth: XAuth = {
+    refreshable,
+    refresh: (signal) => (inFlight ??= exchange(signal).finally(() => (inFlight = null))),
+    async token(signal) {
+      if (!refreshable) return config(runtime, "bearerToken");
+      const expiresAt = Number(runtime.state.get(key("expiresAt")) || 0);
+      const access = runtime.state.get(key("access")) || "";
+      // A pasted access token of unknown age is used until X answers 401.
+      if (!access && !config(runtime, "bearerToken")) await auth.refresh(signal);
+      else if (access && expiresAt && expiresAt - Date.now() < REFRESH_AHEAD_MS) await auth.refresh(signal);
+      return runtime.state.get(key("access")) || config(runtime, "bearerToken");
+    },
+  };
+  auths.set(runtime, auth);
+  return auth;
+}
+
+export async function xApi<T>(runtime: ChannelRuntime, path: string, init: RequestInit = {}, signal?: AbortSignal, retried = false): Promise<{ data: T; wait: number }> {
+  const auth = xAuth(runtime);
   const res = await runtime.fetch(`${API}${path}`, {
     ...init,
     headers: {
-      authorization: `Bearer ${config(runtime, "bearerToken")}`,
+      authorization: `Bearer ${await auth.token(signal)}`,
       ...(init.body ? { "content-type": "application/json" } : {}),
     },
     ...(signal ? { signal } : {}),
   });
+  // A 401 means the request did nothing, so after a renewal it is safe to send once more.
+  if (res.status === 401 && auth.refreshable && !retried) {
+    await res.body?.cancel();
+    await auth.refresh(signal);
+    return xApi<T>(runtime, path, init, signal, true);
+  }
   const wait = rateLimitWait(res);
   const data = (await res.json().catch(() => ({}))) as T & { title?: string; detail?: string };
   if (!res.ok) {
     let detail = data.detail ?? data.title ?? res.statusText;
-    if (res.status === 401) detail += " (OAuth2 user tokens expire after 2 hours; issue a fresh one)";
+    if (res.status === 401 && !auth.refreshable) {
+      detail += " (OAuth2 user tokens expire after 2 hours: issue a fresh one, or add a refresh token and client id to renew it automatically)";
+    }
     throw new XError(`X ${init.method ?? "GET"} ${path.split("?")[0]}: ${res.status} ${detail}`, res.status, wait);
   }
   return { data, wait };
@@ -246,23 +337,34 @@ export const xAdapter: ChannelAdapter = {
   config: [
     {
       key: "bearerToken",
-      label: "OAuth2 user access token (tweet.read, tweet.write, users.read)",
+      label: "OAuth2 user access token (tweet.read, tweet.write, users.read); optional with a refresh token",
       secret: true,
-      required: true,
     },
+    { key: "refreshToken", label: "OAuth2 refresh token (scope offline.access): renews the 2-hour access token", secret: true },
+    { key: "clientId", label: "OAuth2 client id of your X app (needed with a refresh token)" },
+    { key: "clientSecret", label: "OAuth2 client secret (confidential apps only)", secret: true },
     { key: "userId", label: "Bot user id (optional, resolved from the token)" },
     { key: "pollSeconds", label: "Poll interval in seconds (default 60)" },
   ],
   start: async (runtime) => {
-    if (!config(runtime, "bearerToken")) {
-      runtime.status("error", "bearerToken is required");
+    const refreshToken = config(runtime, "refreshToken");
+    const clientId = config(runtime, "clientId");
+    const problem =
+      refreshToken && !clientId
+        ? "A refresh token needs the app's OAuth2 client id too"
+        : !config(runtime, "bearerToken") && !refreshToken
+          ? "bearerToken (or a refresh token with the client id) is required"
+          : null;
+    if (problem) {
+      runtime.status("error", problem);
       return () => {};
     }
     const controller = new AbortController();
     const { signal } = controller;
     let me: XUser | undefined;
     const auth = await untilAuthorized(runtime, async () => (me = await whoAmI(runtime, signal)), signal);
-    if (auth.first) runtime.status("ok", `Watching mentions of @${me!.username}`);
+    const expiryNote = xAuth(runtime).refreshable ? "" : " · no refresh token: the access token stops working 2 hours after it was issued";
+    if (auth.first) runtime.status("ok", `Watching mentions of @${me!.username}${expiryNote}`);
     void auth.ready.then((ok) => {
       if (ok) return poll(runtime, me!, signal);
     });
