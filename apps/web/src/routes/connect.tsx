@@ -569,8 +569,7 @@ const ToolRow = memo(function ToolRow({
   return (
     <ToolPolicyRow
       as="li"
-      // Rows out of view skip layout and paint until scrolled to.
-      className="px-4 [content-visibility:auto] [contain-intrinsic-size:auto_5.5rem]"
+      className="px-4"
       tool={asPolicyTool}
       policy={policy}
       saved={saved}

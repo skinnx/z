@@ -58,7 +58,15 @@ export function SettingsHost() {
   // The popup takes focus first; the body then hands it to the active tab once the tab list has
   // registered its items (focusing a tab earlier breaks arrow-key navigation). Touch doesn't move focus.
   const initialFocus = (type: string) => (type === "touch" ? false : (popup.current ?? true));
-  const finalFocus = () => settingsOpener() ?? true;
+  // Back to the opener; when it is gone, to <main> itself (handing Base UI a non-tabbable element makes
+  // it search the whole screen for a tabbable one, a long task right when the next tap comes). Touch
+  // closes leave focus alone, as touch opens do.
+  const finalFocus = (type: string) => {
+    const el = settingsOpener();
+    if (el && el.id !== "main") return el;
+    if (type !== "touch") requestAnimationFrame(() => el?.focus({ preventScroll: true }));
+    return false;
+  };
 
   // The same element across the host's own re-renders (opening, closing): the panels don't re-render with it.
   const body = useMemo(
