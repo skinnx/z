@@ -43,8 +43,10 @@ export type ChannelInput = z.input<typeof ChannelInput>;
 export type ChannelView = Omit<z.output<typeof ChannelInput>, "config"> & {
   /** Config keys that have a value; values are never returned. */
   configured: string[];
-  /** Public URL the platform should call, when the adapter uses webhooks. */
+  /** Public URL the platform should call, when the adapter uses webhooks (needs Z_PUBLIC_URL). */
   webhookUrl: string | null;
+  /** The same `/hooks/:id` on the server's own address: works from this machine, not for platforms. */
+  localWebhookUrl: string | null;
   lastEventAt: string | null;
   status: "ok" | "error" | "idle";
   statusDetail: string | null;
@@ -79,8 +81,71 @@ export type Verdict = "true" | "false" | "misleading" | "unverified";
  */
 export type OutboundReply = { text: string; replyTo: string; verdict?: Verdict; sources?: Source[] };
 
+// ─── Channel activity: what reached the bot and what it did (owner only) ────
+/**
+ * `answered` replied · `silent` addressed but nothing to say · `ignored` not addressed to the bot ·
+ * `limited` over a ChannelLimits cap · `error` the bot failed · `rejected` refused before reading
+ * (bad signature or secret).
+ */
+export type ChannelOutcome = "answered" | "silent" | "ignored" | "limited" | "error" | "rejected";
+/** One inbound event. Kept per channel (sealed), newest {@link CHANNEL_ACTIVITY_MAX}, deleted with the channel. */
+export type ChannelActivity = {
+  at: string;
+  outcome: ChannelOutcome;
+  /** Display name; null when nothing was read (rejected) or the message wasn't for the bot (ignored). */
+  author: string | null;
+  /** First {@link CHANNEL_PREVIEW_CHARS} characters of the message; null for ignored and rejected. */
+  preview: string | null;
+  /** First {@link CHANNEL_PREVIEW_CHARS} characters of the reply. */
+  reply: string | null;
+  verdict: Verdict | null;
+  /** How many sources the reply linked. */
+  sources: number;
+  /** Time from receipt to reply. */
+  ms: number | null;
+  /** Refusal reason or error text (English or the platform's wording). */
+  detail: string | null;
+  /** Repeats of this ignored/rejected event folded into one entry (1 = just this one). */
+  count: number;
+};
+export const CHANNEL_ACTIVITY_MAX = 20;
+export const CHANNEL_PREVIEW_CHARS = 120;
+
+// ─── Channel setup: the platform's next steps, checked live by the adapter ──
+export type ChannelSetupStep = {
+  /** Stable id, e.g. `slack.events`; the web words the ones it knows and falls back to `label`. */
+  id: string;
+  /** English fallback wording. */
+  label: string;
+  /** `info` is a step z cannot check. */
+  status: "done" | "todo" | "error" | "info";
+  /** Something to paste into the platform (a URL, a scope list). */
+  value?: string;
+  /** What the platform said: bot name, missing scopes, an error. Not translated. */
+  detail?: string;
+  /** Where on the platform to do it. */
+  link?: string;
+};
+
+/** `POST /api/channels/:id/test`: z signs a message with the channel's secret and posts it to its own hook. */
+export const ChannelTestInput = z.object({
+  text: z.string().trim().min(1).max(2000),
+});
+export type ChannelTestResult = {
+  /** HTTP status the hook answered. */
+  status: number;
+  ms: number;
+  reply: string | null;
+  verdict: Verdict | null;
+  sources: Source[];
+  error: string | null;
+};
+
 // Routes (HTTP API; overview in ../contract.ts):
 // GET    /api/channels                     → ChannelView[]
+// GET    /api/channels/:id/activity        → ChannelActivity[] (newest first)
+// GET    /api/channels/:id/setup           → ChannelSetupStep[] (asks the platform live; a few seconds at most)
+// POST   /api/channels/:id/test  ChannelTestInput → ChannelTestResult (webhook kind; signed like any caller)
 // PUT    /api/channels/:id  ChannelInput   → ChannelView
 // DELETE /api/channels/:id                 → { ok: true }
 // POST   /hooks/:channelId                 → adapter defined (inbound platform webhooks)

@@ -24,6 +24,8 @@ export const keys = {
   briefing: ["briefing"] as const,
   adapters: ["adapters"] as const,
   channels: ["channels"] as const,
+  channelActivity: (id: string) => ["channels", id, "activity"] as const,
+  channelSetup: (id: string) => ["channels", id, "setup"] as const,
   plugins: ["plugins"] as const,
   push: ["push"] as const,
   pushHere: ["push", "here"] as const,

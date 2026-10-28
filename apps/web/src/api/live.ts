@@ -5,7 +5,7 @@ import { notify } from "../ui/toast.tsx";
 import { authRequired, eventsUrl, token, unreachable } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
-const TYPES = ["task", "approval", "briefing", "channel", "notice", "connector"] as const;
+const TYPES = ["task", "approval", "briefing", "channel", "channelActivity", "notice", "connector"] as const;
 
 function apply(event: LiveEvent, go: (path: string) => void) {
   switch (event.type) {
@@ -29,6 +29,9 @@ function apply(event: LiveEvent, go: (path: string) => void) {
       break;
     case "channel":
       queryClient.setQueryData<ChannelView[]>(keys.channels, (list) => (list ? upsert(list, event.channel, false) : list));
+      break;
+    case "channelActivity":
+      void queryClient.invalidateQueries({ queryKey: keys.channelActivity(event.channelId) });
       break;
     case "connector":
       queryClient.setQueryData<ConnectorView[]>(keys.connectors, (list) => (list ? upsert(list, event.connector, false) : list));

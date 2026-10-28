@@ -11,3 +11,5 @@ export const builtinPlugins: ZPlugin[] = [web, browser, rss, github, clock, chan
 
 /** The SSRF guard, reused by the server for MCP connector URLs. */
 export { isPrivateAddress, resolvePublicHost } from "./util.ts";
+/** Webhook signing, reused by the server's "Send a test" for webhook channels. */
+export { signedHeaders } from "./channels/webhook.ts";

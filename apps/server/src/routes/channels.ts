@@ -2,7 +2,7 @@
  * Bot channels. Config values are write-only: omitted keys keep their value, empty strings clear them.
  * Omitted `limits` keep the stored ones.
  */
-import { ChannelInput } from "@z/core";
+import { ChannelInput, ChannelTestInput } from "@z/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Services } from "../app.ts";
@@ -30,6 +30,31 @@ export function channelRoutes({ rt, channels }: Services) {
     store.channels.upsert({ ...input, config, limits });
     await channels.sync(id);
     return c.json(channels.view(store.channels.get(id)!));
+  });
+
+  // Owner-only like every /api route: previews of what people asked the bot.
+  app.get("/channels/:id/activity", (c) => {
+    const activity = channels.activity(c.req.param("id"));
+    if (!activity) throw notFound("Channel");
+    return c.json(activity);
+  });
+
+  app.get("/channels/:id/setup", async (c) => {
+    const steps = await channels.setup(c.req.param("id"));
+    if (!steps) throw notFound("Channel");
+    return c.json(steps);
+  });
+
+  app.post("/channels/:id/test", async (c) => {
+    const { text } = await body(c, ChannelTestInput);
+    let result;
+    try {
+      result = await channels.test(c.req.param("id"), text);
+    } catch (error) {
+      throw badRequest(error instanceof Error ? error.message : String(error));
+    }
+    if (!result) throw notFound("Channel");
+    return c.json(result);
   });
 
   app.delete("/channels/:id", async (c) => {

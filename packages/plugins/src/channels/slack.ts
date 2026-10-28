@@ -1,6 +1,29 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage } from "@z/core";
 import { decodeEntities, errorMessage, hmacSha256Hex, mentionsHandle, safeEqual, truncate } from "../util.ts";
-import { config, imageDataUrl, pressed, requestSignal, shouldDispatch, withSources, type Action } from "./shared.ts";
+import { checked, config, imageDataUrl, pressed, requestSignal, shouldDispatch, step, withSources, type Action } from "./shared.ts";
+
+/** Bot token scopes z needs, and ones it uses when present (private channels, group DMs, images). */
+export const SLACK_SCOPES = ["app_mentions:read", "chat:write", "channels:history", "im:history"];
+export const SLACK_EXTRA_SCOPES = ["groups:history", "mpim:history", "files:read"];
+
+/** auth.test, plus the token's scopes from the `x-oauth-scopes` header Slack sends with every Web API answer. */
+async function slackIdentity(runtime: ChannelRuntime) {
+  const res = await runtime.fetch("https://slack.com/api/auth.test", {
+    method: "POST",
+    headers: { authorization: `Bearer ${config(runtime, "botToken")}` },
+    signal: requestSignal(),
+  });
+  const data = (await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }))) as {
+    ok: boolean;
+    error?: string;
+    user?: string;
+    team?: string;
+    url?: string;
+  };
+  if (!data.ok) throw new Error(`Slack auth.test: ${data.error}`);
+  const scopes = (res.headers.get("x-oauth-scopes") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return { user: data.user ?? "z", team: data.team ?? "", scopes };
+}
 
 export type SlackEvent = {
   type: string;
@@ -228,6 +251,36 @@ export const slackAdapter: ChannelAdapter = {
     const [channel] = threadId.split(":");
     await slackApi(runtime, "chat.update", { channel, ts: ref, text: truncate(text, 3900), blocks: [] });
   },
+  setup: async (runtime, hookUrl) => {
+    const apps = "https://api.slack.com/apps";
+    if (!config(runtime, "botToken")) return [step("slack.token", "Paste the Bot User OAuth Token (xoxb-…)", "error", { link: apps })];
+    const me = await checked(() => slackIdentity(runtime));
+    const steps = [
+      me.ok
+        ? step("slack.token", "Bot token", "done", { detail: `@${me.value.user}${me.value.team ? ` · ${me.value.team}` : ""}` })
+        : step("slack.token", "Bot token", "error", { detail: me.error, link: apps }),
+    ];
+    const missing = me.ok && me.value.scopes.length ? SLACK_SCOPES.filter((s) => !me.value.scopes.includes(s)) : [];
+    steps.push(
+      step("slack.scopes", "Bot token scopes (OAuth & Permissions), then reinstall the app", !me.ok ? "todo" : missing.length ? "todo" : "done", {
+        value: [...SLACK_SCOPES, ...SLACK_EXTRA_SCOPES].join(", "),
+        ...(missing.length ? { detail: `Missing: ${missing.join(", ")}` } : {}),
+        link: apps,
+      }),
+    );
+    if (!config(runtime, "signingSecret")) steps.push(step("slack.signing", "Paste the app's Signing Secret (Basic Information)", "error", { link: apps }));
+    const events = `Bot events: app_mention, message.im${runtime.channel.always ? ", message.channels, message.groups" : ""}`;
+    steps.push(
+      step("slack.events", "Event Subscriptions → Request URL", !runtime.webhookUrl ? "error" : runtime.state.get("eventsAt") ? "done" : "todo", {
+        value: hookUrl,
+        detail: runtime.webhookUrl ? events : `Needs Z_PUBLIC_URL: Slack can't reach this machine. ${events}`,
+        link: apps,
+      }),
+      step("slack.interactivity", "Interactivity → Request URL (same URL, for Approve/Deny buttons)", "info", { value: hookUrl, link: apps }),
+      step("slack.invite", `Invite the bot to a channel: /invite @${me.ok ? me.value.user : "z"}`, "info"),
+    );
+    return steps;
+  },
   webhook: async (request, runtime) => {
     const raw = await request.text();
     const ok = verifySlackSignature(
@@ -236,7 +289,12 @@ export const slackAdapter: ChannelAdapter = {
       request.headers.get("x-slack-signature"),
       raw,
     );
-    if (!ok) return new Response("Invalid signature", { status: 401 });
+    if (!ok) {
+      runtime.note?.("rejected", "Invalid Slack signature");
+      return new Response("Invalid signature", { status: 401 });
+    }
+    // For the setup checklist: Slack has reached the Events URL at least once.
+    if (!runtime.state.get("eventsAt")) runtime.state.set("eventsAt", new Date().toISOString());
     if (request.headers.get("content-type")?.includes("application/x-www-form-urlencoded")) {
       const action = slackAction(parseSlackForm(raw) ?? { type: "" });
       if (!action) return new Response("", { status: 200 });

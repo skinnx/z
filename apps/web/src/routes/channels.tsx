@@ -1,6 +1,6 @@
 import type { AdapterManifest, ChannelInput, ChannelKind, ChannelLimits, ChannelView, Lane } from "@z/core";
 import { Form } from "@base-ui/react/form";
-import { Check, Copy, Pencil, Plus, RadioTower, Trash2 } from "lucide-react";
+import { Check, Copy, Dices, Pencil, Plus, RadioTower, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useAdapters, useChannels, useDeleteChannel, useSaveChannel } from "../api/channels.ts";
@@ -23,8 +23,17 @@ import { RadioCards } from "../ui/radio-cards.tsx";
 import { Select } from "../ui/select.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
+import { ChannelDrawer, type DrawerTab } from "./channel-drawer.tsx";
 
-type Editing = { channel: ChannelView | null; kind: ChannelKind | null };
+/** The connect dialog for a new channel; existing ones open in the drawer. */
+type Editing = { kind: ChannelKind | null };
+/** The open drawer. `secret`: the signing secret just saved, shown once while the drawer stays open. */
+type Opened = { id: string; tab: DrawerTab; secret: string | null };
+
+/** 32 random bytes, hex: what `generate` config fields start with. */
+export function randomSecret(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export default function Channels() {
   const t = useT();
@@ -32,10 +41,11 @@ export default function Channels() {
   const adapters = useAdapters();
   const [params, setParams] = useSearchParams();
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [opened, setOpened] = useState<Opened | null>(null);
 
   useEffect(() => {
     if (params.has("add")) {
-      setEditing({ channel: null, kind: null });
+      setEditing({ kind: null });
       setParams({}, { replace: true });
     }
   }, [params, setParams]);
@@ -57,6 +67,7 @@ export default function Channels() {
   }
   const list = channels.data ?? [];
   const kinds = adapters.data ?? [];
+  const openChannel = opened ? (list.find((c) => c.id === opened.id) ?? null) : null;
 
   return (
     <Page title={t.nav_channels}>
@@ -66,7 +77,7 @@ export default function Channels() {
             {kinds.map((a) => {
               const Icon = channelIcon[a.kind];
               return (
-                <Button key={a.kind} onClick={() => setEditing({ channel: null, kind: a.kind })}>
+                <Button key={a.kind} onClick={() => setEditing({ kind: a.kind })}>
                   <Icon aria-hidden />
                   {a.label}
                 </Button>
@@ -79,7 +90,7 @@ export default function Channels() {
           label={t.nav_channels}
           hideLabel
           actions={
-            <Button variant="primary" onClick={() => setEditing({ channel: null, kind: null })}>
+            <Button variant="primary" onClick={() => setEditing({ kind: null })}>
               <Plus aria-hidden />
               {t.addChannel}
             </Button>
@@ -88,7 +99,10 @@ export default function Channels() {
           <ul className="grid gap-3 sm:grid-cols-2">
             {list.map((c) => (
               <li key={c.id} className="@container min-w-0">
-                <ChannelCard channel={c} onEdit={() => setEditing({ channel: c, kind: c.kind })} />
+                <ChannelCard
+                  channel={c}
+                  onOpen={(tab) => setOpened({ id: c.id, tab, secret: opened?.id === c.id ? opened.secret : null })}
+                />
               </li>
             ))}
           </ul>
@@ -96,34 +110,62 @@ export default function Channels() {
       )}
 
       <Dialog.Root open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
-        <Dialog.Content title={editing?.channel ? editing.channel.label : t.addChannel} wide>
+        <Dialog.Content title={t.addChannel} wide>
           {editing && (
             <ChannelForm
-              key={editing.channel?.id ?? "new"}
-              channel={editing.channel}
+              key="new"
+              channel={null}
               initialKind={editing.kind}
               adapters={kinds}
-              onDone={() => setEditing(null)}
+              onDone={(saved, secret) => {
+                setEditing(null);
+                // Straight on to the platform's next steps (and the secret, once).
+                if (saved) setOpened({ id: saved.id, tab: "setup", secret });
+              }}
             />
           )}
         </Dialog.Content>
       </Dialog.Root>
+
+      <ChannelDrawer
+        channel={openChannel}
+        tab={opened?.tab ?? "setup"}
+        onTab={(tab) => setOpened((o) => o && { ...o, tab })}
+        secret={opened?.secret ?? null}
+        onClose={() => setOpened(null)}
+        settings={
+          openChannel && (
+            <ChannelForm
+              key={openChannel.id}
+              channel={openChannel}
+              initialKind={openChannel.kind}
+              adapters={kinds}
+              onDone={(saved, secret) => {
+                if (!saved) return setOpened(null);
+                if (secret) setOpened({ id: saved.id, tab: "setup", secret });
+              }}
+            />
+          )
+        }
+      />
     </Page>
   );
 }
 
 const statusDot = { ok: "bg-ok", error: "bg-danger", idle: "bg-line-strong" } as const;
 
-function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () => void }) {
+function ChannelCard({ channel: c, onOpen }: { channel: ChannelView; onOpen: (tab: DrawerTab) => void }) {
   const t = useT();
   const save = useSaveChannel();
   const Icon = channelIcon[c.kind];
   const LaneIcon = laneIcon[c.lane];
   const [copied, setCopied] = useState(false);
+  // The webhook kind is called from the owner's own systems, so its local URL is useful too.
+  const url = c.webhookUrl ?? (c.kind === "webhook" ? c.localWebhookUrl : null);
   const copy = async () => {
-    if (!c.webhookUrl) return;
+    if (!url) return;
     try {
-      await navigator.clipboard.writeText(c.webhookUrl);
+      await navigator.clipboard.writeText(url);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch (e) {
@@ -139,9 +181,14 @@ function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () 
           <span className={cn("absolute -end-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-surface", statusDot[c.status])} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate font-semibold" title={c.label}>
+          <button
+            type="button"
+            className="block max-w-full truncate text-start font-semibold hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-accent"
+            title={t.ch_open(c.label)}
+            onClick={() => onOpen("setup")}
+          >
             {c.label}
-          </p>
+          </button>
           <p className="flex flex-wrap items-center gap-x-2 text-xs text-fg-muted">
             <span className={cn(c.status === "error" && "text-danger")}>{t[`st_${c.status}`]}</span>
             <span aria-hidden>·</span>
@@ -157,10 +204,10 @@ function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () 
         />
       </div>
       {c.statusDetail && <p className={cn("text-xs break-words", c.status === "error" ? "text-danger" : "text-fg-muted")}>{channelDetail(c.statusDetail, t)}</p>}
-      {c.webhookUrl && (
+      {url && (
         <div className="flex items-center gap-1 rounded-lg border border-line bg-subtle ps-3">
-          <code className="min-w-0 flex-1 truncate font-mono text-xs" title={c.webhookUrl}>
-            {c.webhookUrl}
+          <code className="min-w-0 flex-1 truncate font-mono text-xs" title={url}>
+            {url}
           </code>
           <IconButton label={copied ? t.copied : t.copyWebhook} size="icon-sm" onClick={copy}>
             {copied ? <Check aria-hidden className="text-ok" /> : <Copy aria-hidden />}
@@ -173,7 +220,13 @@ function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () 
           {t[`lane_${c.lane}`]}
         </Badge>
         {c.always && <Badge>{t.alwaysAnswer}</Badge>}
-        <IconButton label={`${t.edit}: ${c.label}`} size="icon-sm" className="ms-auto" onClick={onEdit}>
+        <Button size="sm" variant="ghost" className="ms-auto" onClick={() => onOpen("activity")}>
+          {t.ch_tabActivity}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => onOpen("setup")}>
+          {t.ch_tabSetup}
+        </Button>
+        <IconButton label={`${t.edit}: ${c.label}`} size="icon-sm" onClick={() => onOpen("settings")}>
           <Pencil aria-hidden />
         </IconButton>
       </div>
@@ -190,7 +243,8 @@ function ChannelForm({
   channel: ChannelView | null;
   initialKind: ChannelKind | null;
   adapters: AdapterManifest[];
-  onDone: () => void;
+  /** `saved` is null after a delete; `secret` is a signing secret that was just set, to show once. */
+  onDone: (saved: ChannelView | null, secret: string | null) => void;
 }) {
   const t = useT();
   const save = useSaveChannel();
@@ -201,7 +255,10 @@ function ChannelForm({
   const adapter = adapters.find((a) => a.kind === kind);
   const [label, setLabel] = useState(channel?.label ?? adapter?.label ?? "");
   const [id, setId] = useState(channel?.id ?? "");
-  const [config, setConfig] = useState<Record<string, string>>({});
+  // A new channel starts with generated secrets where the adapter asks for them.
+  const generated = (a: AdapterManifest | undefined) =>
+    Object.fromEntries((a?.config ?? []).filter((f) => f.generate).map((f) => [f.key, randomSecret()]));
+  const [config, setConfig] = useState<Record<string, string>>(() => (channel ? {} : generated(adapter)));
   const [always, setAlways] = useState(channel?.always ?? false);
   const [lane, setLane] = useState<Lane>(channel?.lane ?? "bot");
   const [enabled, setEnabled] = useState(channel?.enabled ?? true);
@@ -211,7 +268,8 @@ function ChannelForm({
     Object.fromEntries((adapter?.config ?? []).filter((f) => f.toggle).map((f) => [f.key, channel?.configured.includes(f.key) ?? false])),
   );
   const textFields = adapter?.config.filter((f) => !f.toggle) ?? [];
-  const toggleFields = adapter?.config.filter((f) => f.toggle) ?? [];
+  // A legacy switch only shows where it is already on (so it can be turned off).
+  const toggleFields = adapter?.config.filter((f) => f.toggle && (!f.legacy || channel?.configured.includes(f.key))) ?? [];
   const finalId = channel?.id ?? (id || uniqueId(slug(label) || kind || "channel", existing));
   const idValid = /^[a-z0-9][a-z0-9-]{0,31}$/.test(finalId);
 
@@ -219,7 +277,7 @@ function ChannelForm({
     setKind(k);
     const a = adapters.find((x) => x.kind === k);
     if (!channel) setLabel(a?.label ?? k);
-    setConfig({});
+    setConfig(channel ? {} : generated(a));
     setToggles({});
   };
 
@@ -233,10 +291,11 @@ function ChannelForm({
         const typed = Object.fromEntries(Object.entries(config).filter(([, v]) => v !== ""));
         for (const f of toggleFields) typed[f.key] = toggles[f.key] ? "on" : "";
         const input: ChannelInput = { id: finalId, kind, label: label.trim() || kind, enabled, config: typed, always, lane, limits };
+        const secret = adapter?.config.find((f) => f.generate && typed[f.key])?.key;
         save.mutate(input, {
           onSuccess: (c) => {
             notify("success", t.saved, c.label);
-            onDone();
+            onDone(c, secret ? typed[secret]! : null);
           },
           onError: notifyError,
         });
@@ -275,23 +334,33 @@ function ChannelForm({
           <legend className="sr-only">{adapter.label}</legend>
           {textFields.map((f) => {
             const stored = channel?.configured.includes(f.key) ?? false;
+            // A generated value is shown in clear (it is new, and the owner needs to copy it).
+            const fresh = !!f.generate && !!config[f.key];
             return (
               <Field
                 key={f.key}
                 label={f.label}
-                description={stored ? (f.secret ? t.keepSecret : t.saved) : undefined}
-                className={cn(textFields.length === 1 && "sm:col-span-2")}
+                description={fresh ? t.ch_secretGenerated : stored ? (f.secret ? t.keepSecret : t.saved) : undefined}
+                className={cn((textFields.length === 1 || f.generate) && "sm:col-span-2")}
               >
-                <Input
-                  type={f.secret ? "password" : "text"}
-                  autoComplete="off"
-                  required={f.required && !stored}
-                  value={config[f.key] ?? ""}
-                  placeholder={stored ? (f.secret ? "••••••••" : t.blankKeeps) : f.required ? t.required : t.optional}
-                  onValueChange={(v) => setConfig((c) => ({ ...c, [f.key]: v }))}
-                  spellCheck={false}
-                  className={cn(f.secret && "font-mono text-sm")}
-                />
+                <div className="flex items-center gap-1">
+                  <Input
+                    type={f.secret && !fresh ? "password" : "text"}
+                    autoComplete="off"
+                    required={f.required && !stored}
+                    value={config[f.key] ?? ""}
+                    placeholder={stored ? (f.secret ? "••••••••" : t.blankKeeps) : f.required ? t.required : t.optional}
+                    onValueChange={(v) => setConfig((c) => ({ ...c, [f.key]: v }))}
+                    spellCheck={false}
+                    className={cn(f.secret && "font-mono text-sm")}
+                  />
+                  {f.generate && (
+                    <IconButton label={t.ch_secretRegenerate} onClick={() => setConfig((c) => ({ ...c, [f.key]: randomSecret() }))}>
+                      <Dices aria-hidden />
+                    </IconButton>
+                  )}
+                  {fresh && <CopyField value={config[f.key]!} />}
+                </div>
               </Field>
             );
           })}
@@ -306,25 +375,22 @@ function ChannelForm({
         />
       ))}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={t.lane}>
-          <Select<Lane>
-            value={lane}
-            onChange={setLane}
-            options={LANES.map((l) => {
-              const Icon = laneIcon[l];
-              return { value: l, label: t[`lane_${l}`], icon: <Icon aria-hidden /> };
-            })}
-          />
-        </Field>
-        <div className="flex flex-col justify-end gap-1">
-          <SwitchRow label={t.enabled} checked={enabled} onCheckedChange={setEnabled} />
-        </div>
-      </div>
+      <SwitchRow label={t.enabled} checked={enabled} onCheckedChange={setEnabled} />
       <SwitchRow label={t.alwaysAnswer} hint={`${t.alwaysAnswerHint} (@${handle})`} checked={always} onCheckedChange={setAlways} />
 
-      <Disclosure summary={t.botLimits}>
+      <Disclosure summary={t.ch_advanced}>
         <div className="flex flex-col gap-3 pt-2">
+          <Field label={t.lane}>
+            <Select<Lane>
+              value={lane}
+              onChange={setLane}
+              options={LANES.map((l) => {
+                const Icon = laneIcon[l];
+                return { value: l, label: t[`lane_${l}`], icon: <Icon aria-hidden /> };
+              })}
+            />
+          </Field>
+          <p className="pt-2 text-sm font-medium">{t.botLimits}</p>
           <p className="text-xs text-fg-muted">{t.botLimitsHint}</p>
           <div className="grid gap-4 sm:grid-cols-2">
             {LIMIT_KEYS.map((key) => (
@@ -342,7 +408,7 @@ function ChannelForm({
         </div>
       </Disclosure>
 
-      {channel && adapter?.mode === "webhook" && !channel.webhookUrl && <p className="text-xs text-fg-muted">{t.needsPublicUrl}</p>}
+      {channel && adapter?.mode === "webhook" && channel.kind !== "webhook" && !channel.webhookUrl && <p className="text-xs text-fg-muted">{t.needsPublicUrl}</p>}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
         {channel && (
@@ -355,7 +421,7 @@ function ChannelForm({
             }
             title={t.deleteChannelConfirm}
             confirmLabel={t.deleteChannel}
-            onConfirm={() => remove.mutateAsync(channel.id).then(onDone, notifyError)}
+            onConfirm={() => remove.mutateAsync(channel.id).then(() => onDone(null, null), notifyError)}
           />
         )}
         <Button type="submit" variant="primary" className="ms-auto" disabled={save.isPending || !kind || !idValid}>
@@ -364,6 +430,27 @@ function ChannelForm({
         </Button>
       </div>
     </Form>
+  );
+}
+
+function CopyField({ value }: { value: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  return (
+    <IconButton
+      label={copied ? t.copied : t.ch_copySecret}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch (e) {
+          notifyError(e);
+        }
+      }}
+    >
+      {copied ? <Check aria-hidden className="text-ok" /> : <Copy aria-hidden />}
+    </IconButton>
   );
 }
 

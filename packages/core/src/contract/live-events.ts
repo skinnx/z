@@ -12,6 +12,8 @@ export type LiveEvent =
   | { type: "approval"; approval: Approval }
   | { type: "briefing"; briefing: Briefing }
   | { type: "channel"; channel: ChannelView }
+  /** A channel's activity log grew (fetch GET /api/channels/:id/activity; entries are owner-only). */
+  | { type: "channelActivity"; channelId: string }
   | { type: "notice"; notice: Notice }
   | { type: "connector"; connector: ConnectorView };
 
