@@ -107,3 +107,15 @@ export async function untilAuthorized(
       })();
   return { first, ready };
 }
+
+/**
+ * How long one platform API request may take. Well under the outbox lease (60 s), so a send that
+ * hangs fails and is retried later instead of overlapping a second attempt. Mutable for tests.
+ */
+export const channelTimeouts = { requestMs: 20_000 };
+
+/** The signal for one outbound request: the channel timeout (plus `extraMs`, for long polls), and `signal` when given. */
+export function requestSignal(signal?: AbortSignal, extraMs = 0): AbortSignal {
+  const timeout = AbortSignal.timeout(channelTimeouts.requestMs + extraMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}

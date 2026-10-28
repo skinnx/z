@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, sleep } from "../util.ts";
-import { config, untilAuthorized } from "./shared.ts";
+import { config, requestSignal, untilAuthorized } from "./shared.ts";
 
 const API = "https://api.x.com/2";
 
@@ -213,7 +213,7 @@ export async function xApi<T>(runtime: ChannelRuntime, path: string, init: Reque
       authorization: `Bearer ${await auth.token(signal)}`,
       ...(init.body ? { "content-type": "application/json" } : {}),
     },
-    ...(signal ? { signal } : {}),
+    signal: requestSignal(signal),
   });
   // A 401 means the request did nothing, so after a renewal it is safe to send once more.
   if (res.status === 401 && auth.refreshable && !retried) {

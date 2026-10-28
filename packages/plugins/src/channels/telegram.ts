@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, safeEqual, sha256Hex, sleep, truncate } from "../util.ts";
-import { config, imageDataUrl, pressed, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
+import { config, imageDataUrl, pressed, requestSignal, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
 
 type TgUser = { id: number; is_bot: boolean; first_name: string; last_name?: string; username?: string };
 type TgEntity = { type: string; offset: number; length: number; user?: TgUser };
@@ -103,6 +103,11 @@ export function telegramKeyboard(actions: Action[]) {
 
 // ─── Bot API ────────────────────────────────────────────────────────────────
 
+const longPollMs = (body: unknown) => {
+  const seconds = (body as { timeout?: unknown } | null)?.timeout;
+  return typeof seconds === "number" && seconds > 0 ? seconds * 1000 : 0;
+};
+
 async function call<T>(runtime: ChannelRuntime, method: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const token = config(runtime, "botToken");
   if (!token) throw new Error("botToken is not configured");
@@ -113,7 +118,8 @@ async function call<T>(runtime: ChannelRuntime, method: string, body: unknown, s
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body ?? {}),
-      ...(signal ? { signal } : {}),
+      // A long poll holds the request open for its own `timeout` seconds on top.
+      signal: requestSignal(signal, longPollMs(body)),
     });
   } catch (error) {
     throw new Error(`Telegram ${method}: ${errorMessage(error).replaceAll(token, "***")}`);

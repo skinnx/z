@@ -4,7 +4,11 @@
  */
 
 /** What was found, phrased for "blocked: contains …". */
-export type SensitiveKind = "a card number" | "an IBAN" | "a private key" | "an API key";
+export type SensitiveKind = "a card number" | "an IBAN" | "a private key" | "an API key" | "data nested too deeply to check";
+
+/** How deep the guard reads a tool input; anything nested deeper is blocked rather than skipped. */
+const MAX_DEPTH = 20;
+const TOO_DEEP = Symbol("too deep");
 
 const CARD = /(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d-])/g;
 /** Issuer prefixes (Visa, Mastercard, Amex, Discover, JCB, Diners, UnionPay, Maestro). Keeps timestamps and ids out. */
@@ -45,9 +49,9 @@ function ibanValid(raw: string): boolean {
   return rest === 1;
 }
 
-/** Every string (and number) inside a tool input, keys included. */
+/** Every string (and number) inside a tool input, keys included. Throws `TOO_DEEP` past `MAX_DEPTH`. */
 function strings(value: unknown, out: string[] = [], depth = 0): string[] {
-  if (depth > 20) return out;
+  if (depth > MAX_DEPTH && value !== null && typeof value === "object") throw TOO_DEEP;
   if (typeof value === "string") out.push(value);
   else if (typeof value === "number" || typeof value === "bigint") out.push(String(value));
   else if (Array.isArray(value)) for (const v of value) strings(v, out, depth + 1);
@@ -62,7 +66,13 @@ function strings(value: unknown, out: string[] = [], depth = 0): string[] {
 
 /** The first kind of sensitive data found in `value`, or null. */
 export function findSensitive(value: unknown): SensitiveKind | null {
-  const text = strings(value).join("\n");
+  let text: string;
+  try {
+    text = strings(value).join("\n");
+  } catch (error) {
+    if (error === TOO_DEEP) return "data nested too deeply to check";
+    throw error;
+  }
   if (PRIVATE_KEY.test(text)) return "a private key";
   for (const m of text.matchAll(CARD)) {
     const digits = m[0].replace(/\D/g, "");

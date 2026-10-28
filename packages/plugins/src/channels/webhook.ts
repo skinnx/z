@@ -1,7 +1,7 @@
 import { RateLimitedError, type ChannelAdapter, type ChannelRuntime, type InboundMessage } from "@z/core";
 import { z } from "zod";
 import { errorMessage, hmacSha256Hex, safeEqual } from "../util.ts";
-import { config, pressed } from "./shared.ts";
+import { config, pressed, requestSignal } from "./shared.ts";
 
 /** Public http(s) image URLs; the server downloads them for the model. */
 const Images = z.array(z.url({ protocol: /^https?$/ })).max(4).optional();
@@ -110,7 +110,7 @@ async function notifyPost(runtime: ChannelRuntime, payload: unknown, delivery: s
       ...(config(runtime, "legacySecret") === "on" ? { "x-z-secret": secret } : {}),
     },
     body,
-    signal: AbortSignal.timeout(15_000),
+    signal: requestSignal(),
   });
   await res.body?.cancel();
   if (!res.ok) throw new Error(`notifyUrl answered ${res.status}`);

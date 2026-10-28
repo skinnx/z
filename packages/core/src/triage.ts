@@ -80,9 +80,13 @@ export type TriageAnswer = z.output<typeof TriageAnswer>;
 const FENCE_OPEN = "<<<ITEMS";
 const FENCE_CLOSE = "ITEMS>>>";
 
-/** One line per item; anything that could close the fence or start a new line is flattened. */
+/**
+ * One line per item; anything that could close the fence or start a new line is flattened.
+ * Every run of two or more angle brackets goes whole, so what is left holds only lone `<` or `>`
+ * between other characters: no removal can join pieces back into `<<<` or `>>>`.
+ */
 function itemLine(item: BriefSourceItem, n: number): string {
-  const text = item.text.replace(/<<<|>>>/g, "").replace(/\s+/g, " ").trim();
+  const text = item.text.replace(/[<>]{2,}/g, "").replace(/\s+/g, " ").trim();
   return `${n}. [${item.source}/${item.kind}] ${text}${item.url ? ` <${item.url.replace(/[\s<>]/g, "")}>` : ""}`;
 }
 

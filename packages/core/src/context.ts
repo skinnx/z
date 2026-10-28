@@ -154,6 +154,21 @@ const DEFAULT_RESERVE = 4096;
 export const SUMMARY_PREFIX = "Earlier in this conversation (summary):";
 
 /**
+ * The summary rides as a user message (some providers require one first), but it is the
+ * assistant's own condensation of old turns, tool results and fetched pages included: never the
+ * owner's words. This marker lets the action reviewer fence it as untrusted.
+ */
+const SUMMARY_MARK = { z: { contextSummary: true } };
+
+/** A message `fitToContext` made from summarised history (marked, or carrying the summary prefix). */
+export function isContextSummary(message: ModelMessage): boolean {
+  if ((message.providerOptions?.z as { contextSummary?: unknown } | undefined)?.contextSummary === true) return true;
+  if (message.role !== "user") return false;
+  const first = typeof message.content === "string" ? message.content : message.content.find((p) => p.type === "text")?.text;
+  return Boolean(first?.trimStart().startsWith(SUMMARY_PREFIX));
+}
+
+/**
  * Fit messages into the window: (1) shrink old tool results; (2) if still over ~80%, summarise the
  * oldest turns into one message, reusing `summary` when it still fits. System messages, the latest
  * user message and any tool call or approval whose pair is not complete are never summarised away.
@@ -179,7 +194,7 @@ export async function fitToContext(messages: ModelMessage[], opts: FitOptions): 
   const { cuts, protectFrom, lastUser } = boundaries(shrunk.messages);
   const build = (text: string, upTo: number) => [
     ...shrunk.messages.slice(0, upTo).filter((m, i) => m.role === "system" || i === lastUser),
-    { role: "user" as const, content: `${SUMMARY_PREFIX}\n${text}` },
+    { role: "user" as const, content: `${SUMMARY_PREFIX}\n${text}`, providerOptions: SUMMARY_MARK },
     ...shrunk.messages.slice(upTo),
   ];
 

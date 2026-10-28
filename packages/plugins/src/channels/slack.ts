@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage } from "@z/core";
 import { decodeEntities, errorMessage, hmacSha256Hex, mentionsHandle, safeEqual, truncate } from "../util.ts";
-import { config, imageDataUrl, pressed, shouldDispatch, withSources, type Action } from "./shared.ts";
+import { config, imageDataUrl, pressed, requestSignal, shouldDispatch, withSources, type Action } from "./shared.ts";
 
 export type SlackEvent = {
   type: string;
@@ -145,6 +145,7 @@ async function slackApi<T>(runtime: ChannelRuntime, method: string, params: Reco
     method: get ? "GET" : "POST",
     headers: { authorization: `Bearer ${token}`, ...(get ? {} : { "content-type": "application/json; charset=utf-8" }) },
     ...(get ? {} : { body: JSON.stringify(params) }),
+    signal: requestSignal(),
   });
   const data = (await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }))) as T & {
     ok: boolean;
@@ -250,6 +251,7 @@ export const slackAdapter: ChannelAdapter = {
               ? { replace_original: true, text: truncate(`${action.text}\n\n${ack}`, 3900) }
               : { replace_original: false, response_type: "ephemeral", text: ack },
           ),
+          signal: requestSignal(),
         });
         if (!res.ok) throw new Error(`Slack response_url: ${res.status}`);
       })().catch((error) => runtime.log(`slack: ${errorMessage(error)}`));

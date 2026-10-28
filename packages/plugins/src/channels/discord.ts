@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelRuntime, InboundMessage, OutboundReply } from "@z/core";
 import { backoff, errorMessage, mentionsHandle, sleep, truncate } from "../util.ts";
-import { config, pressed, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
+import { config, pressed, requestSignal, shouldDispatch, untilAuthorized, withSources, type Action } from "./shared.ts";
 
 const API = "https://discord.com/api/v10";
 const GATEWAY = "wss://gateway.discord.gg";
@@ -134,6 +134,9 @@ async function postReply(runtime: ChannelRuntime, m: DMessage, reply: OutboundRe
   });
 }
 
+/** Longest Discord 429 `retry_after` (seconds) waited out in place. */
+const MAX_RETRY_AFTER_S = 5;
+
 /** POST a new message, or PATCH `messageId`; resolves to the message. Waits out short 429s. */
 async function postMessage(runtime: ChannelRuntime, channelId: string, payload: unknown, messageId?: string): Promise<{ id: string }> {
   const body = JSON.stringify(payload);
@@ -143,10 +146,13 @@ async function postMessage(runtime: ChannelRuntime, channelId: string, payload: 
       method,
       headers: { authorization: `Bot ${config(runtime, "botToken")}`, "content-type": "application/json" },
       body,
+      signal: requestSignal(),
     });
     if (res.ok) return (await res.json().catch(() => ({ id: "" }))) as { id: string };
     if (res.status === 429) {
       const { retry_after } = (await res.json().catch(() => ({ retry_after: 1 }))) as { retry_after: number };
+      // Only short waits: a long one would hold the delivery past its lease; the outbox retries later.
+      if (!(retry_after <= MAX_RETRY_AFTER_S)) break;
       await sleep(Math.ceil(retry_after * 1000));
       continue;
     }
@@ -165,6 +171,7 @@ async function onInteraction(runtime: ChannelRuntime, interaction: DInteraction)
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(discordInteractionResponse(action.text, ack, final)),
+    signal: requestSignal(),
   });
   if (!res.ok) throw new Error(`Discord interaction callback: ${res.status}`);
 }
@@ -172,7 +179,7 @@ async function onInteraction(runtime: ChannelRuntime, interaction: DInteraction)
 async function checkToken(runtime: ChannelRuntime, signal: AbortSignal): Promise<void> {
   const res = await runtime.fetch(`${API}/users/@me`, {
     headers: { authorization: `Bot ${config(runtime, "botToken")}` },
-    signal,
+    signal: requestSignal(signal),
   });
   if (res.ok) return;
   const detail = ((await res.json().catch(() => ({}))) as { message?: string }).message ?? res.statusText;
