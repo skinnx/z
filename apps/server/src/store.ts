@@ -463,11 +463,19 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
   };
 
   /** Adapter cursors and ids (ChannelRuntime.state). */
+  // Adapters keep cursors here, but also rotated credentials (X refresh tokens), so every value is sealed.
   const channelState = {
-    get: (channelId: string, key: string): string | null =>
-      get("SELECT value FROM channel_state WHERE channel_id = ? AND key = ?", channelId, key)?.value ?? null,
+    get: (channelId: string, key: string): string | null => {
+      const value = get("SELECT value FROM channel_state WHERE channel_id = ? AND key = ?", channelId, key)?.value;
+      if (value == null) return null;
+      try {
+        return sealer.open(value);
+      } catch {
+        return value; // written before values were sealed; sealed on the next set
+      }
+    },
     set: (channelId: string, key: string, value: string) =>
-      run("INSERT OR REPLACE INTO channel_state (channel_id, key, value) VALUES (?, ?, ?)", channelId, key, value),
+      run("INSERT OR REPLACE INTO channel_state (channel_id, key, value) VALUES (?, ?, ?)", channelId, key, sealer.seal(value)),
   };
 
   const memory = {
