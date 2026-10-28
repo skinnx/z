@@ -43,8 +43,11 @@ export function ruleVerdict(item: BriefSourceItem): Triage | null {
 export const NOT_CHECKED = "Not checked: no model sorted this item.";
 const notChecked: Triage = { priority: "needs_you", reason: NOT_CHECKED, decidedBy: "rule" };
 
-/** Items per model call; a briefing rarely has more, and batching keeps keyless tiers inside their rate. */
-export const TRIAGE_BATCH = 60;
+/**
+ * Items per model call. Each verdict costs ~50 output tokens, so 15 fit even providers that cap a reply at
+ * ~1,500 tokens (larger batches came back cut off, leaving most items "not checked").
+ */
+export const TRIAGE_BATCH = 15;
 
 const Priority = z.preprocess(
   (v) => (typeof v === "string" ? v.trim().toLowerCase().replace(/[\s-]+/g, "_") : v),
