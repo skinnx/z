@@ -301,12 +301,76 @@ export const PushSubscriptionInput = z.object({
   device: z.string().max(80).default(""),
 });
 
+// ─── Connectors: any MCP server as a data source (Composio, Zapier, Pipedream, self-hosted…) ─
+
+export const ConnectorAuth = z.enum(["none", "headers", "oauth"]);
+export type ConnectorAuth = z.infer<typeof ConnectorAuth>;
+
+export const ConnectorInput = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
+  label: z.string().min(1).max(64),
+  url: z.url(),
+  transport: z.enum(["http", "sse"]).default("http"),
+  auth: ConnectorAuth.default("none"),
+  /** Static headers (e.g. `Authorization`, `x-api-key`). Write-only like provider keys; omit to keep, `{}` clears. */
+  headers: z.record(z.string(), z.string()).optional(),
+  enabled: z.boolean().default(true),
+  /** Offer this connector's read tools to channel bots, which strangers reach. Off by default. */
+  public: z.boolean().default(false),
+  /** Per-tool risk override, keyed by the server's own tool name. Wins over the server's hints. */
+  risks: z.record(z.string(), Risk).default({}),
+});
+export type ConnectorInput = z.input<typeof ConnectorInput>;
+
+export type ConnectorTool = {
+  /** The server's own tool name. */
+  name: string;
+  /** Name the model sees and approval policy keys use: `mcp_<connectorId>_<name>`, sanitised. */
+  toolName: string;
+  title: string | null;
+  description: string;
+  risk: Risk;
+  /** `hint`: derived from the server's annotations (untrusted); `default`: no hints, treated as write; `user`: overridden. */
+  riskSource: "hint" | "default" | "user";
+};
+
+export type ConnectorView = Omit<z.output<typeof ConnectorInput>, "headers"> & {
+  /** Header names that have a stored value; values are never returned. */
+  headerKeys: string[];
+  status: "connected" | "connecting" | "needs_auth" | "error" | "disabled";
+  statusDetail: string | null;
+  server: { name: string; version: string } | null;
+  /** Server-provided usage instructions, shown to the model with its tools. */
+  instructions: string | null;
+  tools: ConnectorTool[];
+  /** Present when auth is `oauth` and a token is stored. */
+  oauth: { connected: boolean; scope: string | null; expiresAt: string | null } | null;
+  updatedAt: string;
+};
+
+/** A one-tap starting point in the UI. Static catalog shipped with z. */
+export type ConnectorPreset = {
+  id: string;
+  label: string;
+  /** May contain `{placeholders}` the user fills, e.g. `https://gitmcp.io/{owner}/{repo}`. */
+  url: string;
+  transport: "http" | "sse";
+  auth: ConnectorAuth;
+  /** For `headers` auth: the header to fill and how its value is built, e.g. `Authorization: Bearer {token}`. */
+  header?: { name: string; template: string; label: string };
+  docsUrl: string;
+  /** Plain-language caveat shown before connecting, e.g. who holds the OAuth tokens. */
+  note?: string;
+  category: "docs" | "dev" | "work" | "aggregator";
+};
+
 export type LiveEvent =
   | { type: "task"; task: Task }
   | { type: "approval"; approval: Approval }
   | { type: "briefing"; briefing: Briefing }
   | { type: "channel"; channel: ChannelView }
-  | { type: "notice"; notice: Notice };
+  | { type: "notice"; notice: Notice }
+  | { type: "connector"; connector: ConnectorView };
 
 // ─── HTTP API ───────────────────────────────────────────────────────────────
 // All JSON. Errors: `{ error: string }` with a 4xx/5xx status.
@@ -353,6 +417,13 @@ export type LiveEvent =
 // POST   /api/push/test                    → { sent: number }
 // POST   /api/owner/link                   → { code: string, expiresAt: string }  (send `/link <code>` to the bot)
 // DELETE /api/owner                        → Settings
+// GET    /api/connector-presets            → ConnectorPreset[]
+// GET    /api/connectors                   → ConnectorView[]
+// PUT    /api/connectors/:id ConnectorInput → ConnectorView   (saves, connects, lists tools)
+// DELETE /api/connectors/:id               → { ok: true }    (also revokes stored OAuth tokens locally)
+// POST   /api/connectors/:id/refresh       → ConnectorView   (reconnect and re-list tools)
+// POST   /api/connectors/:id/oauth         → { authorizationUrl: string }  (start OAuth; open it in a new tab)
+// GET    /oauth/callback?code&state        → redirects to `/connect?connector=<id>` (no /api prefix; no bearer needed, state-verified)
 // GET    /api/events                       → text/event-stream of LiveEvent
 // POST   /hooks/:channelId                 → adapter defined (inbound platform webhooks)
 //
