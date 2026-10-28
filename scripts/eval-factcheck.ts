@@ -101,12 +101,26 @@ if (process.env.SEARXNG_URL) webSettings.searxngUrl = process.env.SEARXNG_URL;
 
 /** Count tool calls per item without changing what the tools do. */
 let toolCalls: string[] = [];
+/** Tool calls that failed because a source was rate limiting or unavailable (the bot never saw evidence). */
+let sourceOutages = 0;
+const OUTAGE = /rate limit|HTTP (429|503)|unavailable/i;
 const counted = (plugin: ZPlugin): ZPlugin => ({
   ...plugin,
   tools: Object.fromEntries(
     Object.entries(plugin.tools ?? {}).map(([name, t]) => [
       name,
-      { ...t, execute: (input: unknown, ctx) => (toolCalls.push(`${plugin.id}_${name}`), t.execute(input, ctx)) },
+      {
+        ...t,
+        execute: async (input: unknown, ctx) => {
+          toolCalls.push(`${plugin.id}_${name}`);
+          try {
+            return await t.execute(input, ctx);
+          } catch (error) {
+            if (OUTAGE.test(describeError(error))) sourceOutages++;
+            throw error;
+          }
+        },
+      },
     ]),
   ),
 });
@@ -158,6 +172,7 @@ async function run(item: Item): Promise<Attempt> {
     receivedAt: new Date().toISOString(),
   };
   toolCalls = [];
+  sourceOutages = 0;
   callTokens = [];
   paceWaitMs = 0;
   const started = Date.now();
@@ -171,7 +186,10 @@ async function run(item: Item): Promise<Attempt> {
       memory: [],
     });
     const sources = answer?.reply.sources ?? [];
+    // Every lookup hit a rate-limited or down source: the bot had nothing to judge on, so this is infra.
+    const blind = toolCalls.length > 0 && sourceOutages === toolCalls.length && sources.length === 0;
     return {
+      ...(blind && { error: `every source was rate limited or unavailable (${sourceOutages} lookups)` }),
       verdict: answer?.reply.verdict ?? null,
       ms: Date.now() - started - paceWaitMs,
       sources: sources.length,
