@@ -1,9 +1,9 @@
 /** Tasks, approvals and the briefing. */
-import { ApprovalDecision, describeError, TaskAnswer, TaskInput } from "@z/core";
+import { ApprovalDecision, describeError, say, TaskAnswer, TaskInput } from "@z/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Services } from "../app.ts";
-import { badRequest, body, notFound, validate } from "../http.ts";
+import { badRequest, body, errorBody, notFound, validate } from "../http.ts";
 import { isValidCron } from "../schedule.ts";
 
 const ApprovalStatusQuery = z.enum(["pending", "approved", "denied", "expired"]).optional();
@@ -53,7 +53,7 @@ export function workRoutes({ rt, tasks, briefings }: Services) {
     try {
       return c.json(await briefings.generate());
     } catch (error) {
-      return c.json({ error: `Briefing failed: ${describeError(error)}` }, 500);
+      return c.json(errorBody(say("errBriefing", { error: describeError(error) })), 500);
     }
   });
 

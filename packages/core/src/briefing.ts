@@ -4,7 +4,7 @@
  * propose a few tasks worth delegating.
  */
 import { z } from "zod";
-import type { BriefItem, BriefSourceItem, Briefing, CouldNotCheck, Routing, Settings, Task } from "./contract.ts";
+import { english, say, type BriefItem, type BriefSourceItem, type Briefing, type CouldNotCheck, type Routing, type ServerText, type Settings, type Task } from "./contract.ts";
 import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, localDate } from "./prompt.ts";
 import { laneConfigured, type ModelResolver } from "./providers.ts";
@@ -31,10 +31,16 @@ const MAX_PROPOSALS = 3;
 
 const OPEN: Task["status"][] = ["queued", "running", "waiting", "needs_input", "scheduled"];
 
-const NEEDS_YOU: Partial<Record<Task["status"], string>> = {
-  waiting: "Waiting for your approval",
-  needs_input: "Waiting for your answer",
+const NEEDS_YOU: Partial<Record<Task["status"], "briefTaskWaiting" | "briefTaskNeedsInput">> = {
+  waiting: "briefTaskWaiting",
+  needs_input: "briefTaskNeedsInput",
 };
+
+/** An open task's line: "Waiting for your answer: <title>" or "<title> (scheduled)". */
+function taskText(t: Task): ServerText {
+  const key = NEEDS_YOU[t.status];
+  return key ? say(key, { title: t.title }) : say("briefTaskOpen", { title: t.title, status: t.status });
+}
 
 /** Items from plugins and tasks, plus the plugin sources that failed (listed, never silently dropped). */
 export async function collectBriefItems(deps: BriefingDeps): Promise<{ items: BriefSourceItem[]; couldNotCheck: CouldNotCheck[] }> {
@@ -62,7 +68,8 @@ export async function collectBriefItems(deps: BriefingDeps): Promise<{ items: Br
       id: `tasks:${t.id}`,
       source: "tasks",
       kind: NEEDS_YOU[t.status] ? "followup" : "todo",
-      text: NEEDS_YOU[t.status] ? `${NEEDS_YOU[t.status]}: ${t.title}` : `${t.title} (${t.status})`,
+      text: english(taskText(t)),
+      textMsg: taskText(t),
       ...(NEEDS_YOU[t.status] ? {} : { signals: { delegated: true } }),
     }));
 
@@ -85,7 +92,7 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
   const hasModel = laneConfigured(deps.routing, "briefing");
   const model = () => deps.models.forLane(deps.routing, "briefing", { background: true });
 
-  if (collected.items.length === 0 && !memories) return { date, summary: "Nothing new since your last briefing.", items: [], ...failed };
+  if (collected.items.length === 0 && !memories) return { date, ...plainSummary([]), items: [], ...failed };
   // Without a model the rules still demote what they can; everything else shows as needing the user.
   const items = await triageBriefItems(collected.items, {
     model: hasModel ? model() : null,
@@ -95,7 +102,7 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
     ...(deps.log ? { log: deps.log } : {}),
   });
   // No model: a plain summary, and plugin-provided suggestions only.
-  if (!hasModel) return { date, summary: plainSummary(items), items, ...failed };
+  if (!hasModel) return { date, ...plainSummary(items), items, ...failed };
 
   const open = deps.tasks.filter((t) => OPEN.includes(t.status)).map((t) => t.title);
   try {
@@ -131,7 +138,7 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(120_000),
     }, deps.log);
-    if (!draft) return { date, summary: plainSummary(items), items, ...failed };
+    if (!draft) return { date, ...plainSummary(items), items, ...failed };
 
     const byRef = new Map(draft.suggestions.map((s) => [s.ref, clean(s.suggestion)]));
     // Proposals are z's own ideas, never something waiting on the user.
@@ -143,6 +150,7 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
       suggestion: clean(p.instruction),
       priority: "can_wait",
       reason: "Proposed by z; optional.",
+      reasonMsg: say("briefProposed"),
       decidedBy: "model",
     }));
     return {
@@ -159,17 +167,17 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
     };
   } catch (error) {
     deps.log?.(`briefing summary failed, using plain summary: ${error instanceof Error ? error.message : String(error)}`);
-    return { date, summary: plainSummary(items), items, ...failed };
+    return { date, ...plainSummary(items), items, ...failed };
   }
 }
 
 const clean = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 600);
 
-function plainSummary(items: BriefItem[]): string {
-  if (items.length === 0) return "Nothing new since your last briefing.";
+function plainSummary(items: BriefItem[]): { summary: string; summaryMsg: ServerText } {
   const bySource = new Map<string, number>();
   for (const item of items) bySource.set(item.source, (bySource.get(item.source) ?? 0) + 1);
-  const parts = [...bySource].map(([source, n]) => `${n} from ${source}`);
-  return `${items.length} item${items.length === 1 ? "" : "s"} since your last briefing: ${parts.join(", ")}.`;
+  const parts = [...bySource].map(([source, count]) => say("briefFromSource", { count, source }));
+  const summaryMsg = items.length === 0 ? say("briefNothingNew") : say("briefPlain", { count: items.length, parts });
+  return { summary: english(summaryMsg), summaryMsg };
 }
 

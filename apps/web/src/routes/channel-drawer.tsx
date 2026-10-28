@@ -23,6 +23,7 @@ import { CodeBlock, CodeBlockCopyButton } from "../components/ai-elements/code-b
 import { useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
+import { useServerText } from "../lib/server-text.ts";
 import { channelIcon } from "../lib/icons.tsx";
 import { Button } from "../ui/button.tsx";
 import { Badge, LoadError, Loading, Spinner } from "../ui/card.tsx";
@@ -156,6 +157,7 @@ function WebhookPanel({ channel, secret }: { channel: ChannelView; secret: strin
   const [text, setText] = useState(() => t.ch_testDefault(handle));
   const test = useTestChannel(channel.id);
   const result = test.data;
+  const st = useServerText();
 
   return (
     <div className="flex flex-col gap-5">
@@ -207,7 +209,7 @@ function WebhookPanel({ channel, secret }: { channel: ChannelView; secret: strin
           <div aria-live="polite" className={cn("flex flex-col gap-1.5 rounded-lg p-3 text-sm", result.error ? "bg-danger-soft" : "bg-subtle")}>
             {result.error ? (
               <p className="text-danger">
-                {t.ch_testFailed(String(result.status))}: {result.error}
+                {t.ch_testFailed(String(result.status))}: {st(result.error, result.errorMsg)}
               </p>
             ) : result.reply ? (
               <>
@@ -363,6 +365,7 @@ function ActivityLog({ id }: { id: string }) {
 
 function ActivityRow({ entry: a }: { entry: ChannelActivity }) {
   const t = useT();
+  const st = useServerText();
   return (
     <li className="flex gap-3 p-3" data-outcome={a.outcome}>
       <span className="mt-0.5 shrink-0">{outcomeIcon[a.outcome]}</span>
@@ -390,7 +393,7 @@ function ActivityRow({ entry: a }: { entry: ChannelActivity }) {
             <span className="min-w-0">{a.reply}</span>
           </p>
         )}
-        {a.detail && <p className="text-xs break-words text-fg-muted">{a.detail}</p>}
+        {a.detail && <p className="text-xs break-words text-fg-muted">{st(a.detail, a.detailMsg)}</p>}
       </div>
     </li>
   );

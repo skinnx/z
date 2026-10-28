@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Risk } from "./common.ts";
+import type { ServerText } from "./messages.ts";
 
 // ─── Connectors: any MCP server as a data source (Composio, Zapier, Pipedream, self-hosted…) ─
 
@@ -45,6 +46,8 @@ export type ConnectorView = Omit<z.output<typeof ConnectorInput>, "headers" | "u
   headerKeys: string[];
   status: "connected" | "connecting" | "needs_auth" | "error" | "disabled";
   statusDetail: string | null;
+  /** The same in words the client translates (see contract/messages.ts); null/absent for plugin, adapter or platform text. */
+  statusDetailMsg?: ServerText | null;
   server: { name: string; version: string } | null;
   /** Server-provided usage instructions, shown to the model with its tools. */
   instructions: string | null;

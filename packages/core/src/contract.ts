@@ -20,9 +20,10 @@ export * from "./contract/logins.ts";
 export * from "./contract/setup.ts";
 export * from "./contract/skills.ts";
 export * from "./contract/live-events.ts";
+export * from "./contract/messages.ts";
 
 // ─── HTTP API ───────────────────────────────────────────────────────────────
-// All JSON. Errors: `{ error: string }` with a 4xx/5xx status.
+// All JSON. Errors: `{ error: string, errorMsg?: ServerText }` with a 4xx/5xx status (errorMsg: see contract/messages.ts).
 // Each route group is listed next to its types, under "Routes" in the domain file:
 //
 // /api/settings                        contract/settings.ts

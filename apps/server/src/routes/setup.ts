@@ -1,6 +1,6 @@
 /** The setup checklist and the diagnostics export. Neither carries a secret or a URL beyond its origin. */
 import { arch, platform, release } from "node:os";
-import type { Diagnostics } from "@z/core";
+import { say, type Diagnostics } from "@z/core";
 import { Hono } from "hono";
 import pkg from "../../package.json" with { type: "json" };
 import type { Services } from "../app.ts";
@@ -17,7 +17,7 @@ export function setupRoutes({ rt, setup, connectors }: Services) {
   app.post("/setup/check", async (c) => c.json(await setup.check()));
 
   app.post("/setup/:id/ack", (c) => {
-    if (!setup.ack(c.req.param("id"))) throw badRequest("This item can't be confirmed by hand");
+    if (!setup.ack(c.req.param("id"))) throw badRequest(say("errNoAck"));
     return c.json(setup.checklist());
   });
 

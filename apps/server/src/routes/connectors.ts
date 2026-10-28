@@ -1,5 +1,5 @@
 /** MCP connectors. URL and header values are write-only: views carry `urlDisplay` and `headerKeys` only. */
-import { ConnectorInput, describeError, OAuthCompleteInput, PRESETS } from "@z/core";
+import { ConnectorInput, describeError, OAuthCompleteInput, PRESETS, say } from "@z/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Services } from "../app.ts";
@@ -80,7 +80,7 @@ export function connectorRoutes({ rt, connectors }: Services) {
   // The paste fallback for a callback that can't reach z; bearer-protected like the rest of /api.
   app.post("/connectors/:id/oauth/complete", async (c) => {
     const id = c.req.param("id");
-    if (record(id).auth !== "oauth") throw badRequest("This connector does not use OAuth");
+    if (record(id).auth !== "oauth") throw badRequest(say("errNotOAuth"));
     const { url } = await body(c, OAuthCompleteInput);
     return c.json(await connectors.completeOAuth(id, url).catch((error) => Promise.reject(fixable(error))));
   });

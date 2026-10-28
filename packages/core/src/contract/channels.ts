@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Lane } from "./common.ts";
+import type { ServerText } from "./messages.ts";
 
 // ─── Channels: the summonable bot ───────────────────────────────────────────
 
@@ -50,6 +51,8 @@ export type ChannelView = Omit<z.output<typeof ChannelInput>, "config"> & {
   lastEventAt: string | null;
   status: "ok" | "error" | "idle";
   statusDetail: string | null;
+  /** The same in words the client translates (see contract/messages.ts); null/absent for plugin, adapter or platform text. */
+  statusDetailMsg?: ServerText | null;
 };
 
 /** What an adapter hands to the bot runtime for one inbound message. */
@@ -105,6 +108,8 @@ export type ChannelActivity = {
   ms: number | null;
   /** Refusal reason or error text (English or the platform's wording). */
   detail: string | null;
+  /** `detail` as a message key when z worded it itself (contract/messages.ts). */
+  detailMsg?: ServerText | null;
   /** Repeats of this ignored/rejected event folded into one entry (1 = just this one). */
   count: number;
 };
@@ -139,6 +144,8 @@ export type ChannelTestResult = {
   verdict: Verdict | null;
   sources: Source[];
   error: string | null;
+  /** `error` as a message key when z worded it itself. */
+  errorMsg?: ServerText | null;
 };
 
 // Routes (HTTP API; overview in ../contract.ts):

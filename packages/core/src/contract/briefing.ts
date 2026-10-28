@@ -1,3 +1,4 @@
+import type { ServerText } from "./messages.ts";
 import type { CouldNotCheck } from "./tasks.ts";
 
 // ─── Briefing: the morning summary ──────────────────────────────────────────
@@ -9,6 +10,8 @@ export type BriefSourceItem = {
   source: string;
   kind: "headline" | "todo" | "followup" | "metric";
   text: string;
+  /** `text` as a message key, when z wrote it (open tasks); plugin items have none. */
+  textMsg?: ServerText;
   url?: string;
   /** Suggested follow-up the user can turn into a task with one tap. */
   suggestion?: string;
@@ -46,6 +49,8 @@ export type BriefItem = BriefSourceItem & {
   priority: BriefPriority;
   /** One line a person would accept, at most `BRIEF_REASON_MAX` characters. */
   reason: string;
+  /** `reason` as a message key, when a rule (not the model) gave it. */
+  reasonMsg?: ServerText;
   /** `rule`: settled by a signal, or not checked (no model, or the model left it out; always `needs_you`). */
   decidedBy: "rule" | "model";
 };
@@ -55,6 +60,8 @@ export type Briefing = {
   /** Local date, YYYY-MM-DD. */
   date: string;
   summary: string;
+  /** `summary` as a message key when z wrote it without a model (plain summary, nothing new). */
+  summaryMsg?: ServerText;
   items: BriefItem[];
   /** Plugin briefing sources that threw (see "Task engine" in tasks.ts); shown at the bottom. */
   couldNotCheck?: CouldNotCheck[];

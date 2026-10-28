@@ -13,6 +13,8 @@ import {
   capText,
   connectorPlugin,
   describeError,
+  english,
+  say,
   describeTools,
   MAX_INSTRUCTIONS,
   type ActivePlugin,
@@ -20,6 +22,7 @@ import {
   type McpCallResult,
   type McpToolDefinition,
   type OAuthStart,
+  type ServerText,
 } from "@z/core";
 import { resolvePublicHost } from "@z/plugins";
 import pkg from "../package.json" with { type: "json" };
@@ -109,6 +112,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
       headerKeys: Object.keys(record.headers),
       status: record.status,
       statusDetail: record.statusDetail,
+      statusDetailMsg: record.statusDetailMsg,
       server: record.cache?.server ?? null,
       instructions: record.cache?.instructions ? capText(record.cache.instructions, MAX_INSTRUCTIONS) : null,
       tools: record.cache ? describeTools(record.id, record.cache.tools, record.risks) : [],
@@ -124,8 +128,9 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
     };
   }
 
-  function setStatus(id: string, status: ConnectorView["status"], detail: string | null) {
-    store.connectors.setStatus(id, status, detail);
+  /** `detail` as `say(…)` when z words it itself, so the app can translate it. */
+  function setStatus(id: string, status: ConnectorView["status"], detail: string | ServerText | null) {
+    store.connectors.setStatus(id, status, detail === null ? null : english(detail), detail === null || typeof detail === "string" ? null : detail);
     const record = store.connectors.get(id);
     if (record) bus.emit({ type: "connector", connector: view(record) });
   }
@@ -214,7 +219,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
     }
     const delay = scheduleRetry(id);
     log(id, `${result.detail}; retrying in ${Math.round(delay / 1000)}s`);
-    setStatus(id, "error", `${result.detail} · retrying in ${Math.round(delay / 1000)}s`);
+    setStatus(id, "error", say("cnRetrying", { detail: result.detail, seconds: Math.round(delay / 1000) }));
     return false;
   }
 
@@ -257,7 +262,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
     if (!record.enabled) return setStatus(id, "disabled", null);
     if (record.auth === "oauth") {
       const oauth = readOAuth(store, id);
-      if (!oauth.tokens) return setStatus(id, "needs_auth", oauth.state ? "Waiting for sign-in" : "Sign in to connect");
+      if (!oauth.tokens) return setStatus(id, "needs_auth", say(oauth.state ? "cnWaitingSignIn" : "cnSignIn"));
       const expiry = expiresAt(oauth);
       if (oauth.tokens.refresh_token && expiry && expiry - Date.now() < REFRESH_AHEAD_MS && !(await refreshForConnect(id))) return;
     }
@@ -267,13 +272,8 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
       const outcome = await openClient(record);
       if (outcome !== "unauthorized") return;
       if (refreshed || record.auth !== "oauth" || !readOAuth(store, id).tokens?.refresh_token) {
-        const detail =
-          record.auth === "oauth"
-            ? "Sign in again to connect"
-            : record.auth === "headers"
-              ? "The server rejected the credentials (HTTP 401): check the header values"
-              : "The server requires sign-in: use OAuth or add an authorization header";
-        log(id, `needs auth: ${detail}`);
+        const detail = say(record.auth === "oauth" ? "cnSignInAgain" : record.auth === "headers" ? "cnRejectedHeaders" : "cnRequiresSignIn");
+        log(id, `needs auth: ${english(detail)}`);
         return setStatus(id, "needs_auth", detail);
       }
       if (!(await refreshForConnect(id))) return;
@@ -332,7 +332,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
       }
       const delay = scheduleRetry(id);
       log(id, `connect failed: ${message}; retrying in ${Math.round(delay / 1000)}s`);
-      setStatus(id, "error", `${message} · retrying in ${Math.round(delay / 1000)}s`);
+      setStatus(id, "error", say("cnRetrying", { detail: message, seconds: Math.round(delay / 1000) }));
       return "failed";
     }
   }
@@ -363,7 +363,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
           await sync(id);
           if (clients.has(id)) return call(id, name, args, signal, true);
         } else {
-          setStatus(id, "needs_auth", record?.auth === "oauth" ? "Sign in again to connect" : "The server rejected the credentials (HTTP 401)");
+          setStatus(id, "needs_auth", say(record?.auth === "oauth" ? "cnSignInAgain" : "cnRejected"));
         }
       }
       throw record ? new Error(redact(record, describeError(error))) : error;
@@ -403,7 +403,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
     const { record, redirectUri } = taken;
     if (params.error || !params.code) {
       writeOAuth(store, record.id, { verifier: undefined, redirectUri: undefined });
-      setStatus(record.id, "needs_auth", "Sign-in was cancelled");
+      setStatus(record.id, "needs_auth", say("cnSignInCancelled"));
       return { id: record.id, error: params.errorDescription || params.error || "Missing code" };
     }
     const provider = createOAuthProvider(store, record.id, { redirectUri, interactive: true });
@@ -412,7 +412,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
     } catch (error) {
       const message = redact(record, describeError(error));
       log(record.id, `code exchange failed: ${message}`);
-      setStatus(record.id, "needs_auth", `Sign-in failed: ${message}`);
+      setStatus(record.id, "needs_auth", say("cnSignInFailed", { error: message }));
       return { id: record.id, error: `Sign-in failed: ${message}` };
     } finally {
       writeOAuth(store, record.id, { verifier: undefined, redirectUri: undefined });
@@ -507,7 +507,7 @@ export function createConnectors(env: Env, store: Store, bus: Bus) {
       const resource = (authorizationUrl as URL).searchParams.get("resource");
       if (resource) writeOAuth(store, id, { resource });
       await disconnect(id);
-      setStatus(id, "needs_auth", "Waiting for sign-in");
+      setStatus(id, "needs_auth", say("cnWaitingSignIn"));
       log(id, `sign-in started (redirect ${redirectUri})`);
       return { authorizationUrl: (authorizationUrl as URL).href, redirectUri };
     },

@@ -3,7 +3,10 @@ import {
   answerMessage,
   CHANNEL_PREVIEW_CHARS,
   describeError,
+  english,
+  say,
   linkCode,
+  NoModelConfiguredError,
   previewFits,
   type ChannelActivity,
   type ChannelAdapter,
@@ -15,9 +18,11 @@ import {
   type ChannelView,
   type InboundMessage,
   type OutboundReply,
+  type ServerText,
 } from "@z/core";
 import { signedHeaders } from "@z/plugins";
-import { approvalBody } from "./notify.ts";
+import { badRequest, errorBody } from "./http.ts";
+import { approvalBody, approvalComplete } from "./notify.ts";
 import type { Pairing } from "./owner.ts";
 import type { Runtime } from "./runtime.ts";
 import type { ChannelRecord } from "./store.ts";
@@ -60,8 +65,9 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     if (record) bus.emit({ type: "channel", channel: view(record) });
   }
 
-  function setStatus(id: string, status: ChannelRecord["status"], detail: string | null) {
-    store.channels.setStatus(id, status, detail);
+  /** `detail` as `say(…)` when z words it itself, so the app can translate it; adapters pass plain text. */
+  function setStatus(id: string, status: ChannelRecord["status"], detail: string | ServerText | null) {
+    store.channels.setStatus(id, status, detail === null ? null : english(detail), detail === null || typeof detail === "string" ? null : detail);
     emit(id);
   }
 
@@ -92,6 +98,8 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     return Math.max(1, Math.ceil(((gate.queue.length / limits.running + 1) * gate.averageMs) / 60_000));
   }
 
+  const NO_MODEL = new NoModelConfiguredError().message;
+
   // ─── Activity log: the owner's view of what reached each bot ───────────────
   const clip = (text: string) => {
     const flat = text.replace(/\s+/g, " ").trim();
@@ -101,7 +109,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   function logActivity(
     channelId: string,
     outcome: ChannelOutcome,
-    entry: { message?: InboundMessage; reply?: OutboundReply | null; started?: number; detail?: string | null } = {},
+    entry: { message?: InboundMessage; reply?: OutboundReply | null; started?: number; detail?: string | ServerText | null } = {},
   ) {
     // Nothing of a message the bot wasn't asked about, or of a request it refused, is kept.
     const kept = outcome !== "ignored" && outcome !== "rejected" ? entry.message : undefined;
@@ -115,7 +123,8 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       verdict: entry.reply?.verdict ?? null,
       sources: entry.reply?.sources?.length ?? 0,
       ms: entry.started === undefined ? null : Date.now() - entry.started,
-      detail: entry.detail ? clip(entry.detail) : null,
+      detail: entry.detail ? clip(english(entry.detail)) : null,
+      ...(entry.detail && typeof entry.detail !== "string" ? { detailMsg: entry.detail } : {}),
       count: 1,
     };
     try {
@@ -133,12 +142,12 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       if (outcome) logActivity(channelId, outcome, { message, reply, started, detail: detail ?? null });
       return reply;
     } catch (error) {
-      logActivity(channelId, "error", { message, started, detail: describeError(error) });
+      logActivity(channelId, "error", { message, started, detail: error instanceof NoModelConfiguredError ? say("errNoModel") : describeError(error) });
       throw error;
     }
   }
 
-  type Routed = { reply: OutboundReply | null; outcome: ChannelOutcome | null; detail?: string };
+  type Routed = { reply: OutboundReply | null; outcome: ChannelOutcome | null; detail?: ServerText };
   const answered = (reply: OutboundReply | null, message: InboundMessage, always: boolean): Routed => ({
     reply,
     outcome: reply ? "answered" : message.addressed || always ? "silent" : "ignored",
@@ -162,7 +171,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     const author = authorFor(channelId, message.author.id);
     const wait = overLimit(gate, author, record.limits);
     if (wait !== null) {
-      const detail = `Over a limit: may try again in ${wait} min`;
+      const detail = say("chOverLimit", { minutes: wait });
       // One reply per stretch over the cap, then quiet until the author is under it again.
       if (author.busyNotified) return { reply: null, outcome: "limited", detail };
       author.busyNotified = true;
@@ -192,7 +201,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   async function answer(record: ChannelRecord, message: InboundMessage): Promise<OutboundReply | null> {
     const channelId = record.id;
     try {
-      const { config: _secret, configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, ...channel } = record;
+      const { config: _secret, configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, statusDetailMsg: _m, ...channel } = record;
       const answer = await answerMessage(
         { ...message, channelId },
         { ...rt.deps(`bot:${channelId}`), channel, memory: store.memory.get(channelId, message.threadId) },
@@ -202,7 +211,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       if (record.status === "error") setStatus(channelId, "ok", null);
       return answer.reply;
     } catch (error) {
-      setStatus(channelId, "error", `Bot failed: ${describeError(error)}`);
+      setStatus(channelId, "error", say("chBotFailed", { error: describeError(error) }));
       throw error;
     }
   }
@@ -236,7 +245,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     // Approve only what fits here in full; a long action is reviewed in the app (deny is always fine).
     const pending = match[1] === "approve" ? store.approvals.get(match[2]!) : null;
     const limit = adapterFor(record.kind)?.noticeLimit ?? Number.POSITIVE_INFINITY;
-    if (pending && !previewFits(approvalBody(pending), limit)) throw new Error("This one is too long to approve here. Open z to review it.");
+    if (pending && (!approvalComplete(pending) || !previewFits(approvalBody(pending), limit))) throw new Error("This one is too long to approve here. Open z to review it.");
     try {
       const approval = tasks.decide(match[2]!, { approve: match[1] === "approve", remember: false });
       if (!approval) return "That approval no longer exists.";
@@ -261,7 +270,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   }
 
   function runtimeFor(record: ChannelRecord): ChannelRuntime {
-    const { configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, ...channel } = record;
+    const { configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, statusDetailMsg: _m, ...channel } = record;
     return {
       channel,
       handle: store.settings.get().handle,
@@ -276,7 +285,8 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
         claim: (deliveryId) => store.deliveries.claim(record.id, deliveryId),
         release: (deliveryId) => void store.deliveries.release(record.id, deliveryId),
       },
-      status: (status, detail) => setStatus(record.id, status, detail ?? null),
+      // Adapters pass plain text; z's own no-model error still gets its key.
+      status: (status, detail) => setStatus(record.id, status, detail === NO_MODEL ? say("errNoModel") : (detail ?? null)),
       note: (outcome, detail) => recordNote(record.id, outcome, detail),
       log: (text) => console.log(`[z:channel:${record.id}] ${text}`),
       fetch,
@@ -316,9 +326,9 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   async function testWebhook(id: string, text: string): Promise<ChannelTestResult | null> {
     const record = store.channels.get(id);
     if (!record) return null;
-    if (record.kind !== "webhook") throw new Error("Only webhook channels can be tested this way");
+    if (record.kind !== "webhook") throw badRequest(say("chTestWebhookOnly"));
     const secret = record.config.secret?.trim();
-    if (!secret) throw new Error("The channel has no signing secret");
+    if (!secret) throw badRequest(say("chTestNoSecret"));
     const body = JSON.stringify({ text, author: { id: "z-test", name: "Test from z" }, threadId: `z-test-${crypto.randomUUID()}` });
     const url = localWebhookUrl(record)!;
     const started = Date.now();
@@ -331,6 +341,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       verdict?: ChannelTestResult["verdict"];
       sources?: ChannelTestResult["sources"];
       error?: string;
+      errorMsg?: ServerText;
       retryAfter?: number;
     };
     return {
@@ -340,6 +351,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       verdict: data.verdict ?? null,
       sources: data.sources ?? [],
       error: response.ok ? null : (data.error ?? `HTTP ${response.status}`) + (data.retryAfter ? ` (retry in ${data.retryAfter} s)` : ""),
+      ...(!response.ok && data.errorMsg && !data.retryAfter ? { errorMsg: data.errorMsg } : {}),
     };
   }
 
@@ -351,8 +363,8 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     try {
       return await adapter.webhook(request, runtimeFor(record));
     } catch (error) {
-      setStatus(id, "error", `Webhook failed: ${describeError(error)}`);
-      return Response.json({ error: "Webhook handler failed" }, { status: 500 });
+      setStatus(id, "error", say("chWebhookFailed", { error: describeError(error) }));
+      return Response.json(errorBody(say("chHookFailed")), { status: 500 });
     }
   }
 
@@ -371,22 +383,22 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     await stopConnection(id);
     const record = store.channels.get(id);
     if (!record) return;
-    if (!record.enabled) return setStatus(id, "idle", "Disabled");
+    if (!record.enabled) return setStatus(id, "idle", say("chDisabled"));
 
     const adapter = adapterFor(record.kind);
-    if (!adapter) return setStatus(id, "error", `No enabled plugin provides a "${record.kind}" adapter`);
+    if (!adapter) return setStatus(id, "error", say("chNoAdapter", { kind: record.kind }));
     if (!adapter.start) {
-      if (!webhookUrl(record)) return setStatus(id, "idle", "Set Z_PUBLIC_URL so the platform can reach /hooks");
-      if (record.status !== "ok") setStatus(id, "idle", "Waiting for the first webhook");
+      if (!webhookUrl(record)) return setStatus(id, "idle", say("chNeedsPublicUrl"));
+      if (record.status !== "ok") setStatus(id, "idle", say("chWaitingWebhook"));
       return;
     }
 
     try {
       const stop = await adapter.start(runtimeFor(record));
       connections.set(id, { stop });
-      if (store.channels.get(id)?.status !== "error") setStatus(id, "ok", "Connected");
+      if (store.channels.get(id)?.status !== "error") setStatus(id, "ok", say("chConnected"));
     } catch (error) {
-      setStatus(id, "error", `Could not connect: ${describeError(error)}`);
+      setStatus(id, "error", say("chCouldNotConnect", { error: describeError(error) }));
     }
   }
 
@@ -433,7 +445,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
         if (record.status === "error") setStatus(id, "ok", null);
         return adapter.edit && sent ? sent.ref : null;
       } catch (error) {
-        setStatus(id, "error", `Could not reach the owner: ${describeError(error)}`);
+        setStatus(id, "error", say("chOwnerUnreachable", { error: describeError(error) }));
         throw error;
       }
     },
@@ -452,7 +464,6 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     activity: (id: string) => (store.channels.get(id) ? store.channelActivity.list(id) : null),
     setup: setupSteps,
     test: testWebhook,
-
 
     stopAll: () => Promise.all([...connections.keys()].map(stopConnection)),
   };

@@ -100,7 +100,7 @@ test("migrations: settings saved before timezoneSet keep their timezone as chose
   const dir = tempDir();
   try {
     const old = new DatabaseSync(join(dir, "z.db"));
-    migrate(old, MIGRATION_COUNT - 1);
+    migrate(old, MIGRATION_COUNT - 2); // up to, not including, 0017-timezone-chosen (0018-server-text follows it)
     old.prepare("INSERT INTO kv (key, value) VALUES ('settings', ?)").run(JSON.stringify({ timezone: "UTC", handle: "z" }));
     old.close();
     const db = openDatabase(dir);

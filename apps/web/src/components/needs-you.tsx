@@ -11,6 +11,7 @@ import { Card, Section, Spinner } from "../ui/card.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 import { ApprovalCard } from "./approval-card.tsx";
 import { TaskQuestion } from "./task-question.tsx";
+import { serverText } from "../lib/server-text.ts";
 
 const taskPath = (id: string) => `/tasks?task=${id}`;
 const WORKING_SHOWN = 3;
@@ -58,7 +59,7 @@ export function NeedsYouBlock({ needs, titles }: { needs: NeedsYou; titles: Map<
             ))}
             {needs.interrupted.map((task) => (
               <li key={task.id}>
-                <ResolveCard task={task} preview={task.error ?? ""} danger />
+                <ResolveCard task={task} preview={task.error ? serverText(task.error, task.errorMsg) : ""} danger />
               </li>
             ))}
           </ul>

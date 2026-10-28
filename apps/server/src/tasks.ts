@@ -13,25 +13,37 @@ import {
   pendingQuestion,
   runTask,
   runWatch,
+  english,
+  NoModelConfiguredError,
+  say,
   withAnswer,
   withApprovalResponses,
   type Approval,
   type ApprovalDecision,
   type PendingQuestion,
+  type ServerText,
   type Task,
   type TaskEvent,
   type TaskInput,
 } from "@z/core";
 import type { ModelMessage } from "ai";
 import type { z } from "zod";
-import { approvalBody, buttonable, clip, notify, settleApproval, settleQuestion, settleTask } from "./notify.ts";
+import { approvalBodyMsg, buttonable, clip, notify, settleApproval, settleQuestion, settleTask } from "./notify.ts";
 import { planRecovery } from "./recovery.ts";
 import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
 
 const CONCURRENCY = 2;
+const NO_MODEL = new NoModelConfiguredError().message;
 
-export class ConflictError extends Error {}
+/** A request that conflicts with the task's state (409); `msg` lets the app word it. */
+export class ConflictError extends Error {
+  readonly msg: ServerText;
+  constructor(msg: ServerText) {
+    super(english(msg));
+    this.msg = msg;
+  }
+}
 
 /** Statuses a scheduled run may start from: not busy, not waiting on the owner, not paused. */
 const RUNNABLE: Task["status"][] = ["scheduled", "done", "failed"];
@@ -126,7 +138,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
           events.push({ type: "approval", at: approval.createdAt, approvalId: approval.id });
           bus.emit({ type: "approval", approval });
           const title = store.tasks.get(id)?.title ?? task.title;
-          notify({ kind: "approval", title: `Approval needed · ${clip(title, 80)}`, body: approvalBody(approval), path: "/", approvalId: approval.id });
+          notify({ kind: "approval", title: say("noticeApproval", { title: clip(title, 80) }), body: approvalBodyMsg(approval), path: "/", approvalId: approval.id });
         }
         store.tasks.appendEvents(id, events);
         update(id, { status: "waiting" });
@@ -159,8 +171,8 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     // Stored on the notice, so the app keeps its answer buttons; channels and push add buttons when they fit.
     notify({
       kind: "question",
-      title: `Question · ${titleOf(task)}`,
-      body: clip(q.question + (q.choices.length && !buttonable(q.choices) ? `\nChoices: ${q.choices.join(" / ")}` : ""), 1000),
+      title: say("noticeQuestion", { title: titleOf(task) }),
+      body: say("noticeQuestionBody", { question: clip(q.question, 1000), ...(q.choices.length && !buttonable(q.choices) ? { choices: q.choices } : {}) }),
       path: `/tasks?task=${task.id}`,
       question: { taskId: task.id, text: q.question, choices: q.choices },
     });
@@ -199,7 +211,10 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
    * `quiet` (no_update, or a watch) suppresses the completion notice, and so does a result that repeats
    * the last successful run's (whitespace-normalized hash), unless this run ends a failure streak.
    */
-  function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed", quiet = false) {
+  function finish(task: Task, given: { result?: string; error: string | null; errorMsg?: ServerText }, status: "done" | "failed", quiet = false) {
+    // z's own "no model" error (core words it in English, also inside a failed run) gets its message key.
+    const patch = given.error === NO_MODEL ? { ...given, errorMsg: say("errNoModel") } : given;
+    const errorText = (max: number) => (patch.errorMsg ? patch.errorMsg : clip(patch.error || "", max));
     const path = `/tasks?task=${task.id}`;
     if (task.schedule) {
       if (status === "done") {
@@ -210,7 +225,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
         const repeated = hash === store.tasks.resultHash(task.id);
         store.tasks.setResultHash(task.id, hash);
         if (repeated && !recovered) return step(task.id, "Same result as the last run: no notice.");
-        notify({ kind: "task", status: "done", title: `Done · ${titleOf(task)}`, body: clip(patch.result, 300), path });
+        notify({ kind: "task", status: "done", title: say("noticeDone", { title: titleOf(task) }), body: clip(patch.result, 300), path });
         return;
       }
       const failures = (store.tasks.get(task.id)?.failures ?? 0) + 1;
@@ -220,14 +235,14 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
         notify({
           kind: "task",
           status: "paused",
-          title: `Paused · ${titleOf(task)}`,
-          body: clip(`Failed ${failures} runs in a row, so z stopped running it. Last error: ${patch.error ?? "unknown"}. Run it again once fixed.`, 400),
+          title: say("noticePaused", { title: titleOf(task) }),
+          body: say("noticePausedBody", { failures, error: patch.errorMsg ?? (patch.error ? clip(patch.error, 300) : say("unknown")) }),
           path,
         });
         return;
       }
       update(task.id, { ...patch, status: "scheduled", failures, nextRunAt: nextRun(task.schedule) });
-      if (failures === 1) notify({ kind: "task", status: "failed", title: `Failing · ${titleOf(task)}`, body: clip(patch.error || "", 300), path });
+      if (failures === 1) notify({ kind: "task", status: "failed", title: say("noticeFailing", { title: titleOf(task) }), body: errorText(300), path });
       return;
     }
     update(task.id, { ...patch, status: status === "done" ? "review" : "failed", nextRunAt: null });
@@ -235,8 +250,8 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     notify({
       kind: "task",
       status: status === "done" ? "review" : "failed",
-      title: `${status === "done" ? "Ready for review" : "Failed"} · ${titleOf(task)}`,
-      body: clip((status === "done" ? patch.result : patch.error) || "", 300),
+      title: say(status === "done" ? "noticeReview" : "noticeFailed", { title: titleOf(task) }),
+      body: status === "done" ? clip(patch.result || "", 300) : errorText(300),
       path,
     });
   }
@@ -329,12 +344,19 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
       return;
     }
     const summary = plan.calls.map((c) => c.summary).join("; ");
-    const error = `z stopped mid-action: ${summary}. Check and run again if needed.`;
+    const errorMsg = say("taskInterrupted", { summary });
+    const error = english(errorMsg);
     endRun(task.id);
     step(task.id, error);
-    update(task.id, { status: "interrupted", error, nextRunAt: null });
+    update(task.id, { status: "interrupted", error, errorMsg, nextRunAt: null });
     console.log(`[z:tasks] ${task.id.slice(0, 8)} interrupted mid-action (${plan.calls.map((c) => c.tool).join(", ")}): not re-run`);
-    notify({ kind: "task", status: "interrupted", title: `Interrupted · ${titleOf(task)}`, body: clip(error, 400), path: `/tasks?task=${task.id}` });
+    notify({
+      kind: "task",
+      status: "interrupted",
+      title: say("noticeInterrupted", { title: titleOf(task) }),
+      body: say("taskInterrupted", { summary: clip(summary, 320) }),
+      path: `/tasks?task=${task.id}`,
+    });
   }
 
   return {
@@ -377,7 +399,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     runNow(id: string): Task | null {
       const task = store.tasks.get(id);
       if (!task) return null;
-      if (task.status === "running" || task.status === "queued") throw new ConflictError(`Task is already ${task.status}`);
+      if (task.status === "running" || task.status === "queued") throw new ConflictError(say("errTaskBusy", { status: task.status }));
       expireApprovals(id);
       withdrawQuestion(id);
       endRun(id);
@@ -405,7 +427,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
       if (!task) return null;
       const question = store.tasks.question(id);
       const messages = store.tasks.messages(id);
-      if (task.status !== "needs_input" || !question || !messages) throw new ConflictError(`Task is ${task.status}, not waiting for an answer`);
+      if (task.status !== "needs_input" || !question || !messages) throw new ConflictError(say("errTaskNotAsking", { status: task.status }));
       store.tasks.setQuestion(id, null);
       settleQuestion(id, text);
       step(id, `Answered: ${text}`);
@@ -417,7 +439,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     resolve(id: string): Task | null {
       const task = store.tasks.get(id);
       if (!task) return null;
-      if (task.status !== "review" && task.status !== "interrupted") throw new ConflictError(`Task is ${task.status}, not ready for review`);
+      if (task.status !== "review" && task.status !== "interrupted") throw new ConflictError(say("errTaskNotReview", { status: task.status }));
       endRun(id);
       const done = update(id, { status: "done" });
       settleTask(id);
@@ -428,7 +450,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     decide(approvalId: string, decision: z.output<typeof ApprovalDecision>): Approval | null {
       const approval = store.approvals.get(approvalId);
       if (!approval) return null;
-      if (approval.status !== "pending") throw new ConflictError(`Approval is already ${approval.status}`);
+      if (approval.status !== "pending") throw new ConflictError(say("errApprovalDecided", { status: approval.status }));
 
       const decided = store.approvals.decide(approvalId, decision.approve ? "approved" : "denied", decision.note ?? null);
       bus.emit({ type: "approval", approval: decided });

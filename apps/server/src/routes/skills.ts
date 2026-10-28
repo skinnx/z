@@ -1,13 +1,13 @@
 /** Skills: reusable instructions the owner invokes with `/name` in chat or the Today composer. */
 import { randomUUID } from "node:crypto";
-import { SkillInput } from "@z/core";
+import { say, SkillInput } from "@z/core";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Services } from "../app.ts";
-import { body, notFound } from "../http.ts";
+import { body, errorResponse, notFound } from "../http.ts";
 
 const taken = (name: string) =>
-  new HTTPException(409, { res: Response.json({ error: `A skill named /${name} already exists` }, { status: 409 }) });
+  new HTTPException(409, { res: errorResponse(say("errSkillExists", { name }), 409) });
 
 export function skillRoutes({ rt }: Services) {
   const { store } = rt;

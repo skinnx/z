@@ -36,6 +36,7 @@ import { Page } from "../ui/page.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 import { Segmented } from "../ui/toggle-group.tsx";
+import { serverText } from "../lib/server-text.ts";
 
 type Editing = { preset: ConnectorPreset | null; connector: ConnectorView | null };
 
@@ -231,7 +232,7 @@ function StatusLine({ connector: c, hideDetail, className }: { connector: Connec
       <span aria-hidden className={cn("mt-1 size-2 shrink-0 rounded-full", dot[c.status])} />
       <span className="min-w-0 break-words">
         <span className={cn("font-medium", c.status === "error" ? "text-danger" : c.status === "needs_auth" ? "text-warn" : "text-fg")}>{t[`cst_${c.status}`]}</span>
-        {c.statusDetail && !hideDetail && <span className="text-fg-muted"> · {c.statusDetail}</span>}
+        {c.statusDetail && !hideDetail && <span className="text-fg-muted"> · {serverText(c.statusDetail, c.statusDetailMsg)}</span>}
       </span>
     </p>
   );
@@ -336,6 +337,7 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
                 className="mt-2"
                 kind={failure}
                 error={c.statusDetail ?? ""}
+                errorMsg={c.statusDetailMsg}
                 provider={{ id: c.id, label: c.label }}
                 source={c.label}
                 pending={oauth.isPending}

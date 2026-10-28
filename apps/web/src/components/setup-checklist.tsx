@@ -10,6 +10,7 @@ import { useAckSetup, useCheckSetup, useSetup } from "../api/setup.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
+import { useServerText } from "../lib/server-text.ts";
 import { isSection, useSettingsRoute } from "../settings/route.ts";
 import { Button } from "../ui/button.tsx";
 import { LoadError, Loading, Spinner } from "../ui/card.tsx";
@@ -39,7 +40,7 @@ export function SetupChecklistView({ autoCheck = false, className }: { autoCheck
   // With no provider there is nothing to check yet: the row's own fix ("Add a provider") leads instead.
   const nothingToCheck = useProviders().data?.length === 0;
   const chat = setup.data?.rows.find((r) => r.id === "chat_model");
-  const untested = chat?.state === "not_checked" && chat.detail.endsWith("send it a test message.");
+  const untested = chat?.state === "not_checked" && (chat.detailMsg ? chat.detailMsg.key === "setupCheckChat" : chat.detail.endsWith("send it a test message."));
 
   useEffect(() => {
     if (autoCheck && untested && !autoChecked) {
@@ -84,6 +85,7 @@ export function SetupChecklistView({ autoCheck = false, className }: { autoCheck
 /** `lead`: this row's fix is the screen's primary action. */
 function SetupItem({ row, lead = false }: { row: SetupRow; lead?: boolean }) {
   const t = useT();
+  const st = useServerText();
   const route = useSettingsRoute();
   const ack = useAckSetup();
   const { icon: Icon, className } = stateIcon[row.state];
@@ -99,10 +101,10 @@ function SetupItem({ row, lead = false }: { row: SetupRow; lead?: boolean }) {
       label={
         <span className="flex items-center gap-2">
           <Icon role="img" aria-label={t[`setup_${row.state}`]} className={cn("size-4 shrink-0", className)} />
-          {row.label}
+          {st(row.label, row.labelMsg)}
         </span>
       }
-      hint={<span className="block ps-6 break-words [overflow-wrap:anywhere]">{row.detail}</span>}
+      hint={<span className="block ps-6 break-words [overflow-wrap:anywhere]">{st(row.detail, row.detailMsg)}</span>}
     >
       {row.ack || row.fix
         ? ({ labelId }) => (
@@ -110,12 +112,12 @@ function SetupItem({ row, lead = false }: { row: SetupRow; lead?: boolean }) {
               {row.ack && (
                 <Button size="sm" aria-describedby={labelId} disabled={ack.isPending} onClick={() => ack.mutate(row.id, { onError: notifyError })}>
                   {ack.isPending ? <Spinner /> : <Check aria-hidden />}
-                  {row.ack}
+                  {st(row.ack, row.ackMsg)}
                 </Button>
               )}
               {row.fix && (
                 <Button size="sm" variant={lead ? "primary" : row.state === "needs_setup" ? "secondary" : "ghost"} aria-describedby={labelId} onClick={() => go(row.fix!.path)}>
-                  {row.fix.label}
+                  {st(row.fix.label, row.fix.labelMsg)}
                   <ArrowUpRight aria-hidden className="rtl:-scale-x-100" />
                 </Button>
               )}

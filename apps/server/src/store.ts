@@ -27,6 +27,7 @@ import {
   type MemoryStatus,
   type Notice,
   type NoticeDelivery,
+  type ServerText,
   type NoticeQuestion,
   type ProviderConfig,
   type Skill,
@@ -46,6 +47,7 @@ export type ChannelRecord = ChannelConfig & {
   lastEventAt: string | null;
   status: "ok" | "error" | "idle";
   statusDetail: string | null;
+  statusDetailMsg: ServerText | null;
 };
 
 /** A write/external tool call a task run started (the crash journal). `finishedAt` null: no recorded result. */
@@ -74,6 +76,7 @@ export type ConnectorRecord = ConnectorConfig & {
   urlDisplay: string;
   status: ConnectorView["status"];
   statusDetail: string | null;
+  statusDetailMsg: ServerText | null;
   cache: ConnectorCache | null;
   hasOAuth: boolean;
   updatedAt: string;
@@ -81,6 +84,15 @@ export type ConnectorRecord = ConnectorConfig & {
 
 const json = (value: unknown) => JSON.stringify(value ?? null);
 const parse = <T>(value: string | null | undefined, fallback: T): T => (value ? (JSON.parse(value) as T) : fallback);
+/** A stored ServerText column (JSON), or null. */
+const msg = (value: string | null | undefined): ServerText | null => {
+  try {
+    const m = parse<ServerText | null>(value, null);
+    return m && typeof m === "object" && typeof m.key === "string" ? m : null;
+  } catch {
+    return null;
+  }
+};
 const now = () => new Date().toISOString();
 const month = () => new Date().toISOString().slice(0, 7);
 const MAX_EVENTS = 300;
@@ -197,6 +209,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     status: r.status,
     result: r.result,
     error: r.error,
+    ...(r.error_msg ? { errorMsg: msg(r.error_msg) } : {}),
     events: parse(r.events, []),
     nextRunAt: r.next_run_at,
     createdAt: r.created_at,
@@ -247,16 +260,21 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         t.updatedAt,
         t.missedPolicy ?? "once",
       ),
-    update: (id: string, patch: Partial<Pick<Task, "title" | "status" | "result" | "error" | "nextRunAt" | "failures">>): Task | null => {
+    update: (id: string, patch: Partial<Pick<Task, "title" | "status" | "result" | "error" | "errorMsg" | "nextRunAt" | "failures">>): Task | null => {
       const columns: Record<string, string> = {
         title: "title",
         status: "status",
         result: "result",
         error: "error",
+        errorMsg: "error_msg",
         nextRunAt: "next_run_at",
         failures: "failures",
       };
-      const entries = Object.entries(patch).filter(([k]) => k in columns);
+      // A new error without its own key replaces the old key too.
+      const full = "error" in patch && !("errorMsg" in patch) ? { ...patch, errorMsg: null } : patch;
+      const entries = Object.entries(full)
+        .filter(([k]) => k in columns)
+        .map(([k, v]) => [k, k === "errorMsg" && v ? json(v) : v] as const);
       if (entries.length) {
         run(
           `UPDATE tasks SET ${entries.map(([k]) => `${columns[k]} = ?`).join(", ")}, updated_at = ? WHERE id = ?`,
@@ -383,8 +401,9 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     id: r.id,
     date: r.date,
     summary: r.summary,
+    ...(r.summary_msg ? { summaryMsg: msg(r.summary_msg) ?? undefined } : {}),
     // Briefings from before triage: nothing sorted them, so they read as needing the user.
-    items: parse<Partial<BriefItem>[]>(r.items, []).map((i) => ({ priority: "needs_you", reason: NOT_CHECKED, decidedBy: "rule", ...i }) as BriefItem),
+    items: parse<Partial<BriefItem>[]>(r.items, []).map((i) => (i.priority ? i : { priority: "needs_you", reason: NOT_CHECKED, reasonMsg: { key: "briefNotChecked" }, decidedBy: "rule", ...i }) as BriefItem),
     ...(r.could_not_check ? { couldNotCheck: parse(r.could_not_check, []) } : {}),
     createdAt: r.created_at,
   });
@@ -397,10 +416,11 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     all: () => all("SELECT * FROM briefings ORDER BY created_at DESC").map(toBriefing),
     insert: (b: Briefing) =>
       run(
-        "INSERT INTO briefings (id, date, summary, items, could_not_check, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO briefings (id, date, summary, summary_msg, items, could_not_check, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         b.id,
         b.date,
         b.summary,
+        b.summaryMsg ? json(b.summaryMsg) : null,
         json(b.items),
         b.couldNotCheck?.length ? json(b.couldNotCheck) : null,
         b.createdAt,
@@ -422,6 +442,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     lastEventAt: r.last_event_at,
     status: r.status,
     statusDetail: r.status_detail,
+    statusDetailMsg: msg(r.status_detail_msg),
   });
 
   const channels = {
@@ -431,11 +452,11 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       return r ? toChannel(r) : null;
     },
     upsert: (c: ChannelConfig) => {
-      const existing = get("SELECT created_at, last_event_at, status, status_detail FROM channels WHERE id = ?", c.id);
+      const existing = get("SELECT created_at, last_event_at, status, status_detail, status_detail_msg FROM channels WHERE id = ?", c.id);
       const configured = Object.keys(c.config).filter((k) => c.config[k]);
       run(
-        `INSERT OR REPLACE INTO channels (id, kind, label, enabled, config, configured, always, lane, limits, last_event_at, status, status_detail, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO channels (id, kind, label, enabled, config, configured, always, lane, limits, last_event_at, status, status_detail, status_detail_msg, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         c.id,
         c.kind,
         c.label,
@@ -448,11 +469,12 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         existing?.last_event_at ?? null,
         existing?.status ?? "idle",
         existing?.status_detail ?? null,
+        existing?.status_detail_msg ?? null,
         existing?.created_at ?? now(),
       );
     },
-    setStatus: (id: string, status: ChannelRecord["status"], detail: string | null) =>
-      run("UPDATE channels SET status = ?, status_detail = ? WHERE id = ?", status, detail, id),
+    setStatus: (id: string, status: ChannelRecord["status"], detail: string | null, detailMsg: ServerText | null = null) =>
+      run("UPDATE channels SET status = ?, status_detail = ?, status_detail_msg = ? WHERE id = ?", status, detail, detailMsg ? json(detailMsg) : null, id),
     touch: (id: string) => run("UPDATE channels SET last_event_at = ? WHERE id = ?", now(), id),
     delete: (id: string) => {
       run("DELETE FROM bot_memory WHERE channel_id = ?", id);
@@ -566,6 +588,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     risks: parse(r.risks, {}),
     status: r.status,
     statusDetail: r.status_detail,
+    statusDetailMsg: msg(r.status_detail_msg),
     cache: parse(r.cache, null),
     hasOAuth: Boolean(r.oauth),
     updatedAt: r.updated_at,
@@ -578,10 +601,10 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       return r ? toConnector(r) : null;
     },
     upsert: (c: ConnectorConfig) => {
-      const existing = get("SELECT created_at, status, status_detail, cache, oauth FROM connectors WHERE id = ?", c.id);
+      const existing = get("SELECT created_at, status, status_detail, status_detail_msg, cache, oauth FROM connectors WHERE id = ?", c.id);
       run(
-        `INSERT OR REPLACE INTO connectors (id, label, url, url_display, transport, auth, headers, header_keys, enabled, public, risks, oauth, cache, status, status_detail, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO connectors (id, label, url, url_display, transport, auth, headers, header_keys, enabled, public, risks, oauth, cache, status, status_detail, status_detail_msg, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         c.id,
         c.label,
         sealer.seal(c.url),
@@ -597,12 +620,13 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         existing?.cache ?? null,
         existing?.status ?? "connecting",
         existing?.status_detail ?? null,
+        existing?.status_detail_msg ?? null,
         existing?.created_at ?? now(),
         now(),
       );
     },
-    setStatus: (id: string, status: ConnectorRecord["status"], detail: string | null) =>
-      run("UPDATE connectors SET status = ?, status_detail = ? WHERE id = ?", status, detail, id),
+    setStatus: (id: string, status: ConnectorRecord["status"], detail: string | null, detailMsg: ServerText | null = null) =>
+      run("UPDATE connectors SET status = ?, status_detail = ?, status_detail_msg = ? WHERE id = ?", status, detail, detailMsg ? json(detailMsg) : null, id),
     setCache: (id: string, cache: ConnectorCache | null) => run("UPDATE connectors SET cache = ? WHERE id = ?", cache ? json(cache) : null, id),
     /** Sealed OAuth state (tokens, client registration, PKCE verifier, pending state). */
     oauth: <T>(id: string): T | null => sealer.openJson<T | null>(get("SELECT oauth FROM connectors WHERE id = ?", id)?.oauth ?? null, null),
@@ -822,6 +846,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     kind: r.kind,
     title: r.title,
     body: r.body,
+    ...(msg(r.title_msg) ? { titleMsg: msg(r.title_msg)! } : {}),
+    ...(msg(r.body_msg) ? { bodyMsg: msg(r.body_msg)! } : {}),
     path: r.path,
     ...(r.approval_id ? { approvalId: r.approval_id } : {}),
     ...(r.approval_id && r.approval_status ? { approvalStatus: r.approval_status } : {}),
@@ -837,11 +863,13 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     list: (limit = 100): Notice[] => all(`${NOTICES} ORDER BY n.created_at DESC LIMIT ?`, limit).map(toNotice),
     insert: (n: Notice) =>
       run(
-        "INSERT INTO notices (id, kind, title, body, path, approval_id, question, status, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notices (id, kind, title, body, title_msg, body_msg, path, approval_id, question, status, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         n.id,
         n.kind,
         n.title,
         n.body,
+        n.titleMsg ? json(n.titleMsg) : null,
+        n.bodyMsg ? json(n.bodyMsg) : null,
         n.path,
         n.approvalId ?? null,
         n.question ? json(n.question) : null,

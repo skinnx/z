@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ServerText } from "./messages.ts";
 import type { NoticeQuestion, TaskStatus } from "./tasks.ts";
 import type { ApprovalStatus } from "./tools.ts";
 
@@ -10,6 +11,9 @@ export type Notice = {
   kind: "approval" | "watch" | "task" | "briefing" | "memory" | "question";
   title: string;
   body: string;
+  /** `title` / `body` as message keys the app words in the owner's language; absent for model or plugin text. */
+  titleMsg?: ServerText;
+  bodyMsg?: ServerText;
   /** App path to open, e.g. `/tasks?id=…`. */
   path: string;
   /** Present for approvals: lets push and channels offer Approve / Deny. */

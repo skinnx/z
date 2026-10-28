@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ActivePlugin, ChannelAdapter, LoginVault, PluginManifest, ZPlugin } from "@z/core";
+import { say, type ActivePlugin, type ChannelAdapter, type LoginVault, type PluginManifest, type ZPlugin } from "@z/core";
 import { builtinPlugins } from "@z/plugins";
 import { notify } from "./notify.ts";
 import type { Store } from "./store.ts";
@@ -8,15 +8,16 @@ import type { Store } from "./store.ts";
 /** Saved sign-ins, for the built-in browser alone: it fills them into the page, the model never sees them. */
 const browserPlugin = builtinPlugins.find((p) => p.id === "browser");
 
-function loginVault(store: Store): LoginVault {
+/** Exported for tests. */
+export function loginVault(store: Store): LoginVault {
   return {
     login: async (origin) => {
       const login = store.logins.byOrigin(origin);
       if (!login) {
         notify({
           kind: "task",
-          title: `Save a sign-in for ${new URL(origin).host}?`,
-          body: `z was asked to sign in to ${origin} but nothing is saved for it. Add it under Settings → Security → Saved sign-ins.`,
+          title: say("noticeSaveLogin", { host: new URL(origin).host }),
+          body: say("noticeSaveLoginBody", { origin }),
           path: "/?settings=security",
         });
         return null;

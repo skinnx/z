@@ -16,32 +16,32 @@
  */
 import type { LanguageModel } from "ai";
 import { z } from "zod";
-import { BRIEF_REASON_MAX, type BriefItem, type BriefSignals, type BriefSourceItem, type Settings } from "./contract.ts";
+import { BRIEF_REASON_MAX, say, type BriefItem, type BriefSignals, type BriefSourceItem, type ServerText, type Settings } from "./contract.ts";
 import { baseInstructions, joinSections } from "./prompt.ts";
 import { generateStructured } from "./structured.ts";
 
-type Rule = { signal: keyof BriefSignals; reason: string };
+type Rule = { signal: keyof BriefSignals; reason: string; reasonMsg: ServerText };
 
 /** In order; the first signal set decides. */
 const RULES: Rule[] = [
-  { signal: "delegated", reason: "Already delegated; z is on it." },
-  { signal: "closed", reason: "Already closed or merged." },
-  { signal: "read", reason: "Already seen." },
-  { signal: "ciPassed", reason: "The check passed; nothing to fix." },
-  { signal: "bot", reason: "Routine upkeep opened by a bot." },
-  { signal: "promotional", reason: "A newsletter or promotion." },
+  { signal: "delegated", reason: "Already delegated; z is on it.", reasonMsg: say("briefDelegated") },
+  { signal: "closed", reason: "Already closed or merged.", reasonMsg: say("briefClosed") },
+  { signal: "read", reason: "Already seen.", reasonMsg: say("briefRead") },
+  { signal: "ciPassed", reason: "The check passed; nothing to fix.", reasonMsg: say("briefCiPassed") },
+  { signal: "bot", reason: "Routine upkeep opened by a bot.", reasonMsg: say("briefBot") },
+  { signal: "promotional", reason: "A newsletter or promotion.", reasonMsg: say("briefPromotional") },
 ];
 
-export type Triage = Pick<BriefItem, "priority" | "reason" | "decidedBy">;
+export type Triage = Pick<BriefItem, "priority" | "reason" | "reasonMsg" | "decidedBy">;
 
 /** What the rules settle on their own (always `can_wait`), or null when the model has to read the item. */
 export function ruleVerdict(item: BriefSourceItem): Triage | null {
   const rule = RULES.find((r) => item.signals?.[r.signal]);
-  return rule ? { priority: "can_wait", reason: rule.reason, decidedBy: "rule" } : null;
+  return rule ? { priority: "can_wait", reason: rule.reason, reasonMsg: rule.reasonMsg, decidedBy: "rule" } : null;
 }
 
 export const NOT_CHECKED = "Not checked: no model sorted this item.";
-const notChecked: Triage = { priority: "needs_you", reason: NOT_CHECKED, decidedBy: "rule" };
+const notChecked: Triage = { priority: "needs_you", reason: NOT_CHECKED, reasonMsg: say("briefNotChecked"), decidedBy: "rule" };
 
 /**
  * Items per model call. Each verdict costs ~50 output tokens, so 15 fit even providers that cap a reply at

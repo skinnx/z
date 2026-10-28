@@ -4,6 +4,7 @@
  */
 import { ChannelInput, ChannelTestInput } from "@z/core";
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import type { Services } from "../app.ts";
 import { badRequest, body, notFound, validate } from "../http.ts";
@@ -51,6 +52,7 @@ export function channelRoutes({ rt, channels }: Services) {
     try {
       result = await channels.test(c.req.param("id"), text);
     } catch (error) {
+      if (error instanceof HTTPException) throw error;
       throw badRequest(error instanceof Error ? error.message : String(error));
     }
     if (!result) throw notFound("Channel");

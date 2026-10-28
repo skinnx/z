@@ -1,12 +1,14 @@
 /** A failure, said plainly, with the one action that fixes it (see lib/errors.ts for the mapping). */
-import type { Lane } from "@z/core";
+import type { Lane, ServerText } from "@z/core";
 import { CircleAlert, CloudOff, Cpu, KeyRound, LogIn, RotateCw, ServerCrash } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router";
+import { ApiError } from "../api/client.ts";
 import { queryClient } from "../api/query.ts";
 import { useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyError, errorMessage, type ErrorKind } from "../lib/errors.ts";
+import { useServerText } from "../lib/server-text.ts";
 import { Button } from "../ui/button.tsx";
 import { Spinner } from "../ui/card.tsx";
 
@@ -14,6 +16,8 @@ type Action = { label: string; icon: ReactNode; run: () => void; primary?: boole
 
 export type ErrorFixProps = {
   error: unknown;
+  /** The error as a message key (a task's `errorMsg`, a connector's `statusDetailMsg`); an ApiError carries its own. */
+  errorMsg?: ServerText | null;
   /** When the caller already knows what failed (a connector's status), instead of reading the text. */
   kind?: ErrorKind;
   /** The model provider the failure is about, for "Fix key" and the wording. */
@@ -64,11 +68,13 @@ const kindIcon: Record<ErrorKind, typeof CircleAlert> = {
   unknown: CircleAlert,
 };
 
-export function ErrorFix({ error, kind: known, provider, source, lane = "chat", onRetry, onPickModel, onFixKey, onSignIn, pending, variant = "box", className }: ErrorFixProps) {
+export function ErrorFix({ error, errorMsg, kind: known, provider, source, lane = "chat", onRetry, onPickModel, onFixKey, onSignIn, pending, variant = "box", className }: ErrorFixProps) {
   const t = useT();
   const navigate = useNavigate();
   const kind = known ?? classifyError(error);
-  const detail = errorMessage(error);
+  const st = useServerText();
+  // Classified from the English; shown in the app's language when the server sent a key.
+  const detail = st(errorMessage(error), errorMsg ?? (error instanceof ApiError ? error.msg : null));
   const who = provider?.label ?? t.theProvider;
   const { title, hint } = explain(kind, t, who, source ?? t.theProvider);
   const pickModel = onPickModel ?? (() => navigate(`/models?lane=${lane}`));

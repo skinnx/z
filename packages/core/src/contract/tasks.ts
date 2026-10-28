@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Lane, type ModelRef } from "./common.ts";
 import type { MissedPolicy } from "./delivery.ts";
+import type { ServerText } from "./messages.ts";
 
 // ─── Tasks: the proactive agent ─────────────────────────────────────────────
 
@@ -54,6 +55,8 @@ export type Task = {
   status: TaskStatus;
   result: string | null;
   error: string | null;
+  /** `error` in words the client translates, when z wrote it itself (an interrupted run). */
+  errorMsg?: ServerText | null;
   events: TaskEvent[];
   nextRunAt: string | null;
   createdAt: string;

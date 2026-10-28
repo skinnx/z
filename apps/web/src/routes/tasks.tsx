@@ -26,6 +26,7 @@ import { Dialog } from "../ui/dialog.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { TabList, TabPanel, TabsRoot } from "../ui/tabs.tsx";
 import { notifyError } from "../ui/toast.tsx";
+import { serverText } from "../lib/server-text.ts";
 
 type Tab = "needs" | "active" | "scheduled" | "watch" | "done";
 const TAB_OF: Record<TaskStatus, Tab> = {
@@ -197,7 +198,7 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
             {task.status === "needs_input" && task.question ? (
               <span className="text-warn">{task.question.question}</span>
             ) : (task.status === "failed" || task.status === "interrupted" || task.status === "paused") && task.error ? (
-              <span className="text-danger">{task.error}</span>
+              <span className="text-danger">{serverText(task.error, task.errorMsg)}</span>
             ) : (
               [t[`status_${task.status}`], sched].filter(Boolean).join(" · ")
             )}
@@ -235,7 +236,7 @@ function WatchRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
           </span>
           <span className="mt-0.5 block truncate text-xs text-fg-muted">
             {task.error ? (
-              <span className="text-danger">{task.error}</span>
+              <span className="text-danger">{serverText(task.error, task.errorMsg)}</span>
             ) : finding ? (
               <>
                 <span className="text-fg">{finding.title}</span> · <time dateTime={finding.at}>{relativeTime(finding.at)}</time>
@@ -265,7 +266,7 @@ function TaskErrorFix({ task }: { task: Task }) {
   const routing = useRouting();
   const used = task.events.findLast((e) => e.type === "model");
   const refs = used?.type === "model" ? [used.model] : (routing.data?.[task.lane] ?? []);
-  return <ErrorFix error={task.error} provider={providerForError(task.error, refs, providers.data ?? [])} lane={task.lane} />;
+  return <ErrorFix error={task.error} errorMsg={task.errorMsg} provider={providerForError(task.error, refs, providers.data ?? [])} lane={task.lane} />;
 }
 
 function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) {

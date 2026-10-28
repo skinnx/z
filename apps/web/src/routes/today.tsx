@@ -27,6 +27,7 @@ import { Page } from "../ui/page.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
+import { serverText } from "../lib/server-text.ts";
 
 /** Set when the owner chose to continue past the first-run checklist, for this tab session. */
 const FIRST_RUN_KEY = "z.first-run-skipped";
@@ -42,6 +43,7 @@ const TASK_PREFIX: [string, "status_waiting" | "status_needs_input"][] = [
 
 /** Task items read "Title (scheduled)" or "Waiting for your answer: Title": reword them in the owner's language. */
 function briefText(item: BriefItem, t: Dict): string {
+  if (item.textMsg) return serverText(item.text, item.textMsg);
   if (item.source !== TASKS_SOURCE) return item.text;
   const suffix = TASK_SUFFIX.exec(item.text);
   if (suffix) return `${suffix[1]} (${t[`status_${suffix[2] as TaskStatus}`].toLocaleLowerCase(locale.get())})`;
@@ -98,7 +100,7 @@ export default function Today() {
 
   return (
     <Page title={t.nav_today}>
-      {chat?.state === "needs_setup" && !noProviders && <ChatBanner detail={chat.detail} fixPath={chat.fix?.path ?? "/models"} />}
+      {chat?.state === "needs_setup" && !noProviders && <ChatBanner detail={chat.detail} shown={serverText(chat.detail, chat.detailMsg)} fixPath={chat.fix?.path ?? "/models"} />}
       <NeedsYouBlock needs={needs} titles={titles} />
 
       <Section label={t.delegate} hideLabel>
@@ -151,7 +153,8 @@ const readSession = (key: string) => {
 };
 
 /** The chat model fails, but the rest of Today keeps working: say so, with the fix, without a wall. */
-function ChatBanner({ detail, fixPath }: { detail: string; fixPath: string }) {
+/** `detail`: the English, which keys the dismissal; `shown`: it in the app's language. */
+function ChatBanner({ detail, shown, fixPath }: { detail: string; shown: string; fixPath: string }) {
   const t = useT();
   const [dismissed, setDismissed] = useState(() => readSession(CHAT_BANNER_KEY));
   if (dismissed === detail) return null;
@@ -160,7 +163,7 @@ function ChatBanner({ detail, fixPath }: { detail: string; fixPath: string }) {
       <CircleAlert aria-hidden className="mt-1.5 size-4 shrink-0 text-danger" />
       <div className="min-w-0 flex-1 py-1">
         <p className="text-sm font-medium">{t.chatFailing}</p>
-        <p className="mt-0.5 text-xs break-words text-fg-muted">{detail}</p>
+        <p className="mt-0.5 text-xs break-words text-fg-muted">{shown}</p>
       </div>
       <Link to={fixPath} className={buttonClass("primary", "sm", "shrink-0")}>
         <KeyRound aria-hidden />
@@ -213,8 +216,8 @@ function WatchHits() {
               <div className="flex items-start gap-3">
                 <Radar aria-hidden className="mt-0.5 size-4 shrink-0 text-accent-text" />
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium leading-snug break-words">{n.title}</p>
-                  {n.body && <p className="mt-1 line-clamp-4 text-sm leading-relaxed break-words text-fg-muted">{n.body}</p>}
+                  <p className="font-medium leading-snug break-words">{serverText(n.title, n.titleMsg)}</p>
+                  {n.body && <p className="mt-1 line-clamp-4 text-sm leading-relaxed break-words text-fg-muted">{serverText(n.body, n.bodyMsg)}</p>}
                   <time dateTime={n.createdAt} className="mt-1 block text-xs text-fg-muted">
                     {relativeTime(n.createdAt)}
                   </time>
@@ -297,7 +300,7 @@ function BriefingBody({ briefing }: { briefing: Briefing }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {briefing.summary && <p className="text-[1.0625rem] leading-relaxed text-pretty">{briefing.summary}</p>}
+      {briefing.summary && <p className="text-[1.0625rem] leading-relaxed text-pretty">{serverText(briefing.summary, briefing.summaryMsg)}</p>}
       <div className="@container grid gap-3">
         {needs.length > 0 ? (
           <Card className="overflow-hidden border-warn/40">
@@ -370,7 +373,7 @@ function BriefRow({ item, proposed }: { item: BriefItem; proposed?: boolean }) {
   const t = useT();
   const create = useCreateTask();
   const Icon = briefKindIcon[item.kind];
-  const reason = item.reason === NOT_CHECKED ? t.notChecked : item.reason;
+  const reason = item.reasonMsg ? serverText(item.reason, item.reasonMsg) : item.reason === NOT_CHECKED ? t.notChecked : item.reason;
   return (
     <li className="flex flex-col gap-2 px-4 py-3 @lg:flex-row @lg:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">

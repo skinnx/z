@@ -23,6 +23,7 @@ import { RadioCards } from "../ui/radio-cards.tsx";
 import { Select } from "../ui/select.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
+import { serverText } from "../lib/server-text.ts";
 import { ChannelDrawer, type DrawerTab } from "./channel-drawer.tsx";
 
 /** The connect dialog for a new channel; existing ones open in the drawer. */
@@ -203,7 +204,7 @@ function ChannelCard({ channel: c, onOpen }: { channel: ChannelView; onOpen: (ta
           }
         />
       </div>
-      {c.statusDetail && <p className={cn("text-xs break-words", c.status === "error" ? "text-danger" : "text-fg-muted")}>{channelDetail(c.statusDetail, t)}</p>}
+      {c.statusDetail && <p className={cn("text-xs break-words", c.status === "error" ? "text-danger" : "text-fg-muted")}>{c.statusDetailMsg ? serverText(c.statusDetail, c.statusDetailMsg) : channelDetail(c.statusDetail, t)}</p>}
       {url && (
         <div className="flex items-center gap-1 rounded-lg border border-line bg-subtle ps-3">
           <code className="min-w-0 flex-1 truncate font-mono text-xs" title={url}>
@@ -460,8 +461,8 @@ const LIMIT_MIN: ChannelLimits = { running: 1, waiting: 0, authorWaiting: 1, aut
 const LIMIT_KEYS = ["running", "waiting", "authorWaiting", "authorHourly"] as const;
 
 /**
- * The server words channel status in English. Its fixed phrases are reworded here; the platform's own
- * error text after "Could not connect:" / "Bot failed:" stays as the platform wrote it.
+ * Channel status saved before the server sent message keys (statusDetailMsg) is English. Its fixed phrases
+ * are reworded here; the platform's own error text after "Could not connect:" / "Bot failed:" stays as written.
  */
 function channelDetail(detail: string, t: Dict): string {
   const fixed: Record<string, string> = {

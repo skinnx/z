@@ -10,6 +10,7 @@ import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
 import { NoticeIcon, noticeTitle } from "../lib/icons.tsx";
+import { useServerText } from "../lib/server-text.ts";
 import { Button } from "../ui/button.tsx";
 import { Badge } from "../ui/card.tsx";
 import { Field, Input } from "../ui/field.tsx";
@@ -35,6 +36,7 @@ function useOpenNotice(onDone: () => void) {
 
 function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }) {
   const t = useT();
+  const st = useServerText();
   const notices = useNotices().data ?? [];
   const markRead = useMarkRead();
   const open = useOpenNotice(onDone);
@@ -80,7 +82,7 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
                           n.approvalStatus === "pending" ? "block max-h-48 overflow-y-auto whitespace-pre-wrap" : "line-clamp-2",
                         )}
                       >
-                        {n.body}
+                        {st(n.body, n.bodyMsg)}
                       </span>
                     )}
                     <time dateTime={n.createdAt} className="mt-1 block text-[0.6875rem] text-fg-muted">

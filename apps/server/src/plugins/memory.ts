@@ -1,8 +1,8 @@
 /** Built-in long-term memory tools. Server-provided because they need z's own storage. */
 import { randomUUID } from "node:crypto";
-import { definePlugin, defineTool, type ZPlugin } from "@z/core";
+import { definePlugin, defineTool, say, type ZPlugin } from "@z/core";
 import { z } from "zod";
-import { clip, notify } from "../notify.ts";
+import { clip, notify, type NoticeInput } from "../notify.ts";
 import type { Store } from "../store.ts";
 
 /** Where the owner reviews memories: Settings → Personalization with the memories dialog open. */
@@ -20,25 +20,31 @@ function reviewNotices(store: Store) {
   let timer: NodeJS.Timeout | null = null;
   const send = () => {
     timer = null;
-    const waiting = store.memories.list({ status: "unreviewed" });
-    if (waiting.length === 0) return;
+    const notice = memoryNotice(store);
+    if (!notice) return;
     store.kv.set("memory.noticedAt", new Date().toISOString());
-    const n = waiting.length;
-    notify({
-      kind: "memory",
-      title: `${store.settings.get().handle} wants to remember ${n === 1 ? "1 thing" : `${n} things`}`,
-      body: waiting
-        .slice(0, 5)
-        .map((m) => `• ${clip(m.text, 120)}`)
-        .join("\n"),
-      path: MEMORY_REVIEW_PATH,
-    });
+    notify(notice);
   };
   return () => {
     if (timer) return;
     const last = Date.parse(store.kv.get<string>("memory.noticedAt") ?? "") || 0;
     timer = setTimeout(send, Math.max(NOTICE_DELAY_MS, last + NOTICE_EVERY_MS - Date.now()));
     timer.unref();
+  };
+}
+
+/** The "wants to remember" notice for the memories waiting for review, or null when none wait. */
+export function memoryNotice(store: Store): NoticeInput | null {
+  const waiting = store.memories.list({ status: "unreviewed" });
+  if (waiting.length === 0) return null;
+  return {
+    kind: "memory",
+    title: say("noticeMemory", { handle: store.settings.get().handle, count: waiting.length }),
+    body: waiting
+      .slice(0, 5)
+      .map((m) => `• ${clip(m.text, 120)}`)
+      .join("\n"),
+    path: MEMORY_REVIEW_PATH,
   };
 }
 
