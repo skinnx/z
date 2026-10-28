@@ -1,5 +1,5 @@
 /** Tasks, approvals and the briefing. */
-import { ApprovalDecision, describeError, TaskInput } from "@z/core";
+import { ApprovalDecision, describeError, TaskAnswer, TaskInput } from "@z/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Services } from "../app.ts";
@@ -29,6 +29,11 @@ export function workRoutes({ rt, tasks, briefings }: Services) {
 
   app.post("/tasks/:id/run", (c) => c.json(found(tasks.runNow(c.req.param("id")), "Task")));
   app.post("/tasks/:id/cancel", (c) => c.json(found(tasks.cancel(c.req.param("id")), "Task")));
+  app.post("/tasks/:id/answer", async (c) => {
+    const { text } = await body(c, TaskAnswer);
+    return c.json(found(tasks.answer(c.req.param("id"), text), "Task"));
+  });
+  app.post("/tasks/:id/resolve", (c) => c.json(found(tasks.resolve(c.req.param("id")), "Task")));
 
   app.delete("/tasks/:id", (c) => {
     if (!tasks.delete(c.req.param("id"))) throw notFound("Task");

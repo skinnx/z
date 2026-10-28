@@ -30,7 +30,7 @@ export function notify(input: NoticeInput): Notice {
 }
 
 async function deliver({ rt, push, channels }: NonNullable<typeof hub>, notice: Notice) {
-  const { id, kind, title, body, path, approvalId } = notice;
+  const { id, kind, title, body, path, approvalId, question } = notice;
   const jobs: Promise<unknown>[] = [push.send({ id, kind, title, body: clip(body, 600), path, ...(approvalId ? { approvalId } : {}) })];
 
   const owner = rt.store.settings.get().owner;
@@ -46,7 +46,9 @@ async function deliver({ rt, push, channels }: NonNullable<typeof hub>, notice: 
                 { id: `deny:${approvalId}`, label: "Deny", style: "danger" as const },
               ],
             }
-          : {}),
+          : question
+            ? { actions: question.choices.map((label, i) => ({ id: `answer:${question.taskId}:${i}`, label })) }
+            : {}),
       }),
     );
   }
