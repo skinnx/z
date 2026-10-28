@@ -31,7 +31,8 @@ async function getJson<T>(ctx: ToolContext, url: URL, label: string): Promise<T>
     await sleep(retryAfter * 1000, ctx.signal);
     res = await request();
   }
-  if (res.status === 429) {
+  // Wikimedia answers 503 + Retry-After when it throttles a client, so treat it like a 429.
+  if (res.status === 429 || (res.status === 503 && res.headers.has("retry-after"))) {
     await res.body?.cancel();
     throw new Error(`${label} is rate limiting requests right now; use another source`);
   }
