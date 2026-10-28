@@ -13,7 +13,9 @@ const tables = (db: DatabaseSync) => {
     sql: string;
   }[];
   const virtual = all.filter((t) => /^CREATE VIRTUAL TABLE/i.test(t.sql)).map((t) => t.name);
-  return all.map((t) => t.name).filter((name) => !virtual.some((v) => name === v || name.startsWith(`${v}_`)));
+  return all
+    .map((t) => t.name)
+    .filter((name) => name !== "schema_migrations" && !virtual.some((v) => name === v || name.startsWith(`${v}_`)));
 };
 const columns = (db: DatabaseSync, table: string) => db.prepare(`PRAGMA table_info(${table})`).all() as unknown as Column[];
 
@@ -68,6 +70,26 @@ test("migrations: reopening an up-to-date database is a no-op", () => {
     const db = openDatabase(dir);
     assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, MIGRATION_COUNT);
     assert.ok(tables(db).includes("task_calls"));
+    db.close();
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("migrations: a database from before named migrations (user_version only) adopts them and upgrades", () => {
+  const dir = tempDir();
+  try {
+    const old = new DatabaseSync(join(dir, "z.db"));
+    migrate(old, 5);
+    old.exec("DROP TABLE schema_migrations");
+    old.exec("INSERT INTO kv (key, value) VALUES ('legacy', 'yes')");
+    old.close();
+
+    const db = openDatabase(dir);
+    const ids = (db.prepare("SELECT id FROM schema_migrations").all() as { id: string }[]).length;
+    assert.equal(ids, MIGRATION_COUNT, "every migration is recorded once");
+    assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, MIGRATION_COUNT);
+    assert.equal((db.prepare("SELECT value FROM kv WHERE key = 'legacy'").get() as { value: string }).value, "yes");
     db.close();
   } finally {
     cleanup(dir);
