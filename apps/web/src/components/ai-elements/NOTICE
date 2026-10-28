@@ -1,0 +1,22 @@
+z — AI Elements components
+
+The components in this folder are adapted from AI Elements
+(https://elements.ai-sdk.dev, https://github.com/vercel/ai-elements).
+
+  Copyright 2023 Vercel, Inc.
+  Licensed under the Apache License, Version 2.0 (see ./LICENSE).
+
+Changes made by the z authors (Apache-2.0 §4(b)):
+- Every Radix / shadcn primitive is replaced by z's Base UI wrappers in
+  apps/web/src/ui (Collapsible, Tooltip/IconButton, Button, Badge, Dialog,
+  Autocomplete-based Command, PreviewCard for HoverCard, Select).
+- @radix-ui/react-use-controllable-state is replaced by a local hook.
+- Shimmer uses a CSS animation instead of `motion`; Carousel (embla) is a
+  small local pager; Loader (no longer in the registry) is a local spinner.
+- Streamdown plugins (@streamdown/code, /math, /mermaid) and Shiki are loaded
+  lazily on first use.
+- Strings come from z's i18n (en, vi); styling uses z's design tokens.
+- Parts z does not use (attachments, branches, logos from models.dev, token
+  cost via tokenlens) are left out.
+
+Each adapted file carries a header naming its source and these changes.
