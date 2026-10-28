@@ -1,4 +1,4 @@
-import type { BriefItem, Briefing, Task } from "@z/core";
+import type { BriefItem, Briefing, Task, TaskStatus } from "@z/core";
 import { ArrowUpRight, Brain, Check, CircleAlert, Hand, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
@@ -13,14 +13,15 @@ import { ApprovalCard } from "../components/approval-card.tsx";
 import { Source } from "../components/ai-elements/sources.tsx";
 import { Composer } from "../components/composer.tsx";
 import { TaskQuestion } from "../components/task-question.tsx";
-import { useT } from "../i18n.ts";
+import { locale, useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { parseCron } from "../lib/cron.ts";
 import { longDate, relativeTime } from "../lib/format.ts";
 import { briefKindIcon, StatusIcon } from "../lib/icons.tsx";
 import { Button, buttonClass } from "../ui/button.tsx";
 import { MemoryManager } from "../settings/panels/memories.tsx";
-import { Card, Empty, Section, Spinner } from "../ui/card.tsx";
+import { Card, Empty, Loading, Section, Spinner } from "../ui/card.tsx";
+import { Page } from "../ui/page.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
@@ -28,6 +29,22 @@ import { notify, notifyError } from "../ui/toast.tsx";
 const FIRST_RUN_KEY = "z.first-run-redirected";
 /** BriefItem source of tasks the briefing proposes (core `PROPOSED_SOURCE`). */
 const PROPOSED_SOURCE = "proposed";
+/** BriefItem source of the owner's open tasks; core words their text in English. */
+const TASKS_SOURCE = "tasks";
+const TASK_SUFFIX = /^(.*) \((queued|running|waiting|needs_input|scheduled)\)$/s;
+const TASK_PREFIX: [string, "status_waiting" | "status_needs_input"][] = [
+  ["Waiting for your approval: ", "status_waiting"],
+  ["Waiting for your answer: ", "status_needs_input"],
+];
+
+/** Task items read "Title (scheduled)" or "Waiting for your answer: Title": reword them in the owner's language. */
+function briefText(item: BriefItem, t: Dict): string {
+  if (item.source !== TASKS_SOURCE) return item.text;
+  const suffix = TASK_SUFFIX.exec(item.text);
+  if (suffix) return `${suffix[1]} (${t[`status_${suffix[2] as TaskStatus}`].toLocaleLowerCase(locale.get())})`;
+  for (const [prefix, key] of TASK_PREFIX) if (item.text.startsWith(prefix)) return `${t[key]}: ${item.text.slice(prefix.length)}`;
+  return item.text;
+}
 
 export default function Today() {
   const t = useT();
@@ -52,8 +69,7 @@ export default function Today() {
   const pending = approvals.data ?? [];
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="sr-only">{t.nav_today}</h1>
+    <Page title={t.nav_today}>
 
       {pending.length > 0 && (
         <Section label={`${t.approvals} (${pending.length})`} icon={<ShieldAlert aria-hidden className="text-warn" />}>
@@ -81,8 +97,8 @@ export default function Today() {
       <MemoryReview />
       <NeedsYou />
       <WatchHits />
-      <BriefingSection />
-    </div>
+      <BriefingSection canGenerate={!noProviders} />
+    </Page>
   );
 }
 
@@ -195,32 +211,30 @@ function WatchHits() {
   );
 }
 
-function BriefingSection() {
+/** `canGenerate`: without a provider the only next step is adding one (the card above), so no second CTA here. */
+function BriefingSection({ canGenerate }: { canGenerate: boolean }) {
   const t = useT();
   const briefing = useBriefing();
   const generate = useGenerateBriefing();
   const settings = useSettings();
   const cron = parseCron(settings.data?.briefingCron);
+  // Until settings are in, the time isn't known (parseCron would say 09:00).
+  const at = settings.data && cron.preset !== "custom" ? ` ${t.briefingAt(cron.time)}` : "";
   const run = () => generate.mutate(undefined, { onError: notifyError });
 
-  if (briefing.isPending) {
-    return (
-      <div role="status" className="grid h-32 place-items-center text-fg-muted">
-        <Spinner />
-        <span className="sr-only">{t.loading}</span>
-      </div>
-    );
-  }
+  if (briefing.isPending) return <Loading label={t.loading} className="h-32" />;
 
   const data = briefing.data;
   if (!data) {
     return (
       <Section label={t.briefing} icon={<Sunrise aria-hidden />}>
-        <Empty icon={<Sunrise />} text={cron.preset === "custom" ? t.noBriefing : `${t.noBriefing} ${t.briefingAt(cron.time)}`}>
-          <Button variant="primary" onClick={run} disabled={generate.isPending}>
-            {generate.isPending ? <Spinner /> : <Sparkles aria-hidden />}
-            {t.generateBriefing}
-          </Button>
+        <Empty icon={<Sunrise />} text={`${t.noBriefing}${at}`}>
+          {canGenerate && (
+            <Button variant="primary" onClick={run} disabled={generate.isPending}>
+              {generate.isPending ? <Spinner /> : <Sparkles aria-hidden />}
+              {t.generateBriefing}
+            </Button>
+          )}
         </Empty>
       </Section>
     );
@@ -258,7 +272,7 @@ function BriefingBody({ briefing }: { briefing: Briefing }) {
                 {t.proposedTasks}
               </h3>
             ) : (
-              <h3 className="border-b border-line bg-subtle/60 px-4 py-2 font-mono text-xs font-medium text-fg-muted">{source}</h3>
+              <h3 className="border-b border-line bg-subtle/60 px-4 py-2 text-xs font-medium text-fg-muted">{source === TASKS_SOURCE ? t.group_tasks : source}</h3>
             )}
             <ul className="divide-y divide-line">
               {items.map((item) => (
@@ -299,8 +313,8 @@ function BriefRow({ item }: { item: BriefItem }) {
       <div className="flex min-w-0 flex-1 items-start gap-3">
         <Icon role="img" aria-label={t[`kind_${item.kind}`]} className="mt-0.5 size-4 shrink-0 text-fg-muted" />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <p className="text-sm leading-relaxed break-words">{item.text}</p>
-          {item.url && <Source href={item.url} className="text-xs" aria-label={`${item.text} (${t.openLink})`} />}
+          <p className="text-sm leading-relaxed break-words">{briefText(item, t)}</p>
+          {item.url && <Source href={item.url} className="text-xs" aria-label={`${briefText(item, t)} (${t.openLink})`} />}
         </div>
       </div>
       {item.suggestion && (

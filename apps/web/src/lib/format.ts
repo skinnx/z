@@ -1,3 +1,5 @@
+import type { Settings } from "@z/core";
+import { keys, queryClient } from "../api/query.ts";
 import { locale } from "../i18n.ts";
 
 const units: [Intl.RelativeTimeFormatUnit, number][] = [
@@ -20,12 +22,25 @@ export function relativeTime(iso: string | null | undefined, now = Date.now()): 
   return fmt.format(Math.round(diff / 60), "minute");
 }
 
+/**
+ * Clock times follow the timezone in Settings (the one schedules run in), not the browser's, so
+ * "Weekdays at 08:30" and its next run agree. Falls back to the browser's until settings load.
+ */
+function zoned(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const timeZone = queryClient.getQueryData<Settings>(keys.settings)?.timezone || undefined;
+  try {
+    return new Intl.DateTimeFormat(locale.get(), { ...options, timeZone });
+  } catch {
+    return new Intl.DateTimeFormat(locale.get(), options); // unknown zone name
+  }
+}
+
 export function dateTime(iso: string): string {
-  return new Intl.DateTimeFormat(locale.get(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+  return zoned({ dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
 }
 
 export function time(iso: string): string {
-  return new Intl.DateTimeFormat(locale.get(), { timeStyle: "short" }).format(new Date(iso));
+  return zoned({ timeStyle: "short" }).format(new Date(iso));
 }
 
 export function longDate(ymd: string): string {
@@ -47,6 +62,9 @@ export function compact(n: number): string {
 export function slug(text: string): string {
   return (
     text
+      // "đ" has no decomposition: without this "Định" would slug to "inh".
+      .replace(/đ/g, "d")
+      .replace(/Đ/g, "D")
       .normalize("NFKD")
       .replace(/[̀-ͯ]/g, "")
       .toLowerCase()
