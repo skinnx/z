@@ -4,7 +4,7 @@ import type { Memory, ModelRef, Routing, Settings } from "./contract.ts";
 import { memoryPrompt } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, type ModelResolver } from "./providers.ts";
-import { buildTools, type ActivePlugin } from "./tools.ts";
+import { buildTools, toolNotes, type ActivePlugin } from "./tools.ts";
 
 export type ChatDeps = {
   models: ModelResolver;
@@ -39,6 +39,7 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
           memoryHint(built.tools),
       ),
       memoryPrompt(deps.memories, lastUserText(request.messages)),
+      toolNotes(deps.plugins, built),
     ),
     messages: await convertToModelMessages(request.messages, { tools: built.tools, ignoreIncompleteToolCalls: true }),
     tools: built.tools,

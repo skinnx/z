@@ -4,7 +4,7 @@ import type { Memory, Risk, Routing, Settings, Task, TaskEvent } from "./contrac
 import { memoryPrompt } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, laneConfigured, type ModelResolver } from "./providers.ts";
-import { buildTools, summarizeCall, type ActivePlugin } from "./tools.ts";
+import { buildTools, summarizeCall, toolNotes, type ActivePlugin } from "./tools.ts";
 
 export const MAX_AGENT_STEPS = 12;
 
@@ -71,6 +71,7 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
             memoryHint(built.tools),
         ),
         memoryPrompt(deps.memories, task.instructions),
+        toolNotes(deps.plugins, built),
       ),
       messages,
       tools: built.tools,

@@ -154,6 +154,29 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End proactive ────────────────────────────────────────────────────────
+  // ─── Connectors: MCP servers (url, headers and OAuth state are sealed) ────
+  `
+  CREATE TABLE IF NOT EXISTS connectors (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    url TEXT NOT NULL,         -- sealed
+    url_display TEXT NOT NULL, -- origin + "/…"
+    transport TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    headers TEXT,              -- sealed JSON Record<string, string>
+    header_keys TEXT NOT NULL, -- JSON string[]
+    enabled INTEGER NOT NULL,
+    public INTEGER NOT NULL,
+    risks TEXT NOT NULL,       -- JSON Record<toolName, Risk>
+    oauth TEXT,                -- sealed JSON: tokens, client registration, PKCE verifier, pending state
+    cache TEXT,                -- JSON { server, instructions, tools }: last tools/list
+    status TEXT NOT NULL,
+    status_detail TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  `,
+  // ─── End connectors ───────────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

@@ -9,6 +9,8 @@ export type Env = {
   token: string | null;
   publicUrl: string | null;
   plugins: string[];
+  /** Z_ALLOW_PRIVATE_MCP=1: connectors may reach localhost, the LAN and plain http (self-hosted MCP servers). */
+  allowPrivateMcp: boolean;
 };
 
 export function loadEnv(): Env {
@@ -24,6 +26,7 @@ export function loadEnv(): Env {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    allowPrivateMcp: process.env.Z_ALLOW_PRIVATE_MCP === "1",
   };
 }
 
