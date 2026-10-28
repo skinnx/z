@@ -3,7 +3,7 @@
  * summarize, suggest follow-ups on items and propose a few tasks worth delegating.
  */
 import { z } from "zod";
-import type { BriefItem, Briefing, Memory, Routing, Settings, Task } from "./contract.ts";
+import type { BriefItem, Briefing, CouldNotCheck, Memory, Routing, Settings, Task } from "./contract.ts";
 import { memoryPrompt } from "./memory.ts";
 import { baseInstructions, joinSections, localDate } from "./prompt.ts";
 import { laneConfigured, type ModelResolver } from "./providers.ts";
@@ -27,9 +27,16 @@ export type BriefingDeps = {
 export const PROPOSED_SOURCE = "proposed";
 const MAX_PROPOSALS = 3;
 
-const OPEN: Task["status"][] = ["queued", "running", "waiting", "scheduled"];
+const OPEN: Task["status"][] = ["queued", "running", "waiting", "needs_input", "scheduled"];
 
-export async function collectBriefItems(deps: BriefingDeps): Promise<BriefItem[]> {
+const NEEDS_YOU: Partial<Record<Task["status"], string>> = {
+  waiting: "Waiting for your approval",
+  needs_input: "Waiting for your answer",
+};
+
+/** Items from plugins and tasks, plus the plugin sources that failed (listed, never silently dropped). */
+export async function collectBriefItems(deps: BriefingDeps): Promise<{ items: BriefItem[]; couldNotCheck: CouldNotCheck[] }> {
+  const couldNotCheck: CouldNotCheck[] = [];
   const fromPlugins = await Promise.all(
     deps.plugins
       .filter(({ plugin }) => plugin.briefing)
@@ -39,7 +46,9 @@ export async function collectBriefItems(deps: BriefingDeps): Promise<BriefItem[]
           const items = await plugin.briefing!({ settings, log, fetch, since: deps.since, timezone: deps.settings.timezone });
           return items.map((item) => ({ ...item, id: `${plugin.id}:${item.id}`, source: item.source || plugin.id }));
         } catch (error) {
-          log(`briefing failed: ${error instanceof Error ? error.message : String(error)}`);
+          const reason = (error instanceof Error ? error.message : String(error)).slice(0, 300) || "Unknown error";
+          log(`briefing failed: ${reason}`);
+          couldNotCheck.push({ source: plugin.id, reason });
           return [];
         }
       }),
@@ -50,11 +59,11 @@ export async function collectBriefItems(deps: BriefingDeps): Promise<BriefItem[]
     .map((t) => ({
       id: `tasks:${t.id}`,
       source: "tasks",
-      kind: t.status === "waiting" ? "followup" : "todo",
-      text: t.status === "waiting" ? `Waiting for your approval: ${t.title}` : `${t.title} (${t.status})`,
+      kind: NEEDS_YOU[t.status] ? "followup" : "todo",
+      text: NEEDS_YOU[t.status] ? `${NEEDS_YOU[t.status]}: ${t.title}` : `${t.title} (${t.status})`,
     }));
 
-  return [...fromPlugins.flat(), ...fromTasks];
+  return { items: [...fromPlugins.flat(), ...fromTasks], couldNotCheck };
 }
 
 const Draft = z.object({
@@ -66,13 +75,14 @@ const Draft = z.object({
 
 export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefing, "id" | "createdAt">> {
   const now = new Date();
-  const items = await collectBriefItems(deps);
+  const { items, couldNotCheck } = await collectBriefItems(deps);
+  const failed = couldNotCheck.length ? { couldNotCheck } : {};
   const date = localDate(now, deps.settings.timezone);
   const memories = memoryPrompt(deps.memories, items.map((i) => i.text).join(" "));
 
-  if (items.length === 0 && !memories) return { date, summary: "Nothing new since your last briefing.", items };
+  if (items.length === 0 && !memories) return { date, summary: "Nothing new since your last briefing.", items, ...failed };
   // No model: a plain summary, and plugin-provided suggestions only.
-  if (!laneConfigured(deps.routing, "briefing")) return { date, summary: plainSummary(items), items };
+  if (!laneConfigured(deps.routing, "briefing")) return { date, summary: plainSummary(items), items, ...failed };
 
   const open = deps.tasks.filter((t) => OPEN.includes(t.status)).map((t) => t.title);
   try {
@@ -104,7 +114,7 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(120_000),
     }, deps.log);
-    if (!draft) return { date, summary: plainSummary(items), items };
+    if (!draft) return { date, summary: plainSummary(items), items, ...failed };
 
     const byRef = new Map(draft.suggestions.map((s) => [s.ref, clean(s.suggestion)]));
     const proposed: BriefItem[] = draft.proposals.slice(0, MAX_PROPOSALS).map((p, i) => ({
@@ -124,10 +134,11 @@ export async function generateBriefing(deps: BriefingDeps): Promise<Omit<Briefin
           return suggestion ? { ...item, suggestion } : item;
         }),
       ],
+      ...failed,
     };
   } catch (error) {
     deps.log?.(`briefing summary failed, using plain summary: ${error instanceof Error ? error.message : String(error)}`);
-    return { date, summary: plainSummary(items), items };
+    return { date, summary: plainSummary(items), items, ...failed };
   }
 }
 
