@@ -7,21 +7,19 @@ An open-source, self-hosted AI agent that brings your own keys.
 - **BYOK, properly** — any provider (OpenAI, Anthropic, Google, xAI, OpenRouter, Ollama, any OpenAI-compatible endpoint). Keys are encrypted on your server and never sent back to the browser. Each job (chat, agent, briefing, bot, fast) has its own ordered fallback chain of models, with usage and an optional monthly budget per provider.
 - **Extensible** — tools, briefing sources and channel adapters are plain TypeScript plugins.
 
-## Compared with Claude Duet and the Grok bot
+## What z adds over Claude Duet and the Grok bot
 
-| | Claude Duet | Grok on X | z |
-| --- | --- | --- | --- |
-| Models | Claude only | Grok only | Any provider, per-job fallback chains, local models |
-| Where it lives | Anthropic's app | X | Your server; web app is an installable PWA |
-| Asking before acting | In the Duet app | — | Push notification with Approve/Deny, or buttons in your Telegram/Discord/Slack, per-tool policy |
-| Proactive work | Morning summary, tasks | — | Briefing with suggestions and proposed tasks, scheduled tasks, watches with de-duplication |
-| Memory | Built in | — | Built in, visible and editable, never exposed to channel bots |
-| Browser | In its VM | — | Headless Chromium plugin; clicks/typing need approval; SSRF-guarded proxy |
-| Sensitive data | Refuses card numbers | — | Blocks card numbers, IBANs, private keys and API keys from leaving via write/external tools |
-| "Is this true?" | — | On X, with live search | On X, Telegram, Discord, Slack and webhooks; verdict + validated sources; provider-native search when your key has it |
-| Extending it | — | — | TypeScript plugins: tools, briefing sources, channel adapters |
+Duet and Grok are closed, single-vendor products; the rows below describe z, not a scorecard of theirs.
 
-Measured, not claimed: `pnpm eval:factcheck` reported 75.9% verdict accuracy and a 100% citation rate on its 30 claims with keyless gpt-oss-20b (Pollinations), p50 16 s. Duet and Grok weren't run on the same set.
+- **Any model, your keys:** per-job fallback chains across providers, local models included. Nothing is sent to us; there is no "us".
+- **Asks where you are:** push notifications with Approve/Deny, or buttons in your own Telegram/Discord/Slack — and only when the whole action fits on screen; otherwise "open z to review".
+- **Checks before it acts:** a fixed safety floor for payments and credentials, your per-tool policy, then a reviewer model that fails closed; outgoing card numbers, IBANs and keys are blocked outright.
+- **Proactive without noise:** a briefing that separates what needs you from what can wait, scheduled tasks that report failures once, watches that only speak up when something is new, tasks that stop and ask you a question.
+- **"@z is this true?" anywhere:** X, Telegram, Discord, Slack or a webhook, answering with a verdict and sources it actually read.
+- **Memory you control:** visible, editable, pinnable; what z learns waits for your review; channel bots never see it.
+- **Open and extensible:** MIT, self-hosted, TypeScript plugins, MCP connectors (Composio, Zapier, Pipedream, GitHub, Linear, Notion, your own).
+
+`pnpm eval:factcheck` (30 labelled claims) and `pnpm eval:triage` measure the bot and the briefing on your own model. The one fact-check run recorded so far — keyless gpt-oss-20b via Pollinations — scored 75.9% verdict accuracy with sources on every answer; treat a single run on 30 items as a smoke test, not a benchmark.
 
 ## Run
 
@@ -32,7 +30,7 @@ pnpm dev            # server on :8787, web on :5173
 
 Open the web app, add a provider under **Models**, pick models for each lane, done.
 
-No key yet? Two free, keyless OpenAI-compatible endpoints work out of the box (anonymous rate limits, fine for trying z):
+No key yet? Two free, keyless OpenAI-compatible endpoints work for a first try. They are third-party services with anonymous, per-IP rate limits, and **they see everything you send them** — don't use them for private mail, tasks or memories. For private use, bring a key or run a local model (Ollama, LM Studio).
 
 | Provider | Base URL | Models with tool calling |
 | --- | --- | --- |
@@ -55,7 +53,8 @@ or `docker build -t z . && docker run -p 8787:8787 -v z-data:/data z`.
 | `PORT` | `8787` | |
 | `Z_DATA_DIR` | `./.data` | SQLite database and generated master key |
 | `Z_MASTER_KEY` | generated into `Z_DATA_DIR/master.key` | 32-byte key (hex or base64) encrypting provider keys and channel secrets |
-| `Z_TOKEN` | unset | Require `Authorization: Bearer <token>` on `/api` — set it whenever the server is reachable by others |
+| `Z_HOST` | `127.0.0.1` | Interface to listen on. The Docker image sets `0.0.0.0` |
+| `Z_TOKEN` | unset | Bearer token for `/api`. When `Z_HOST` is not loopback and this is unset, z generates one into `Z_DATA_DIR/access.token` instead of running open |
 | `Z_PUBLIC_URL` | unset | Public base URL, needed for webhook channels (Slack, Telegram webhook mode) and as the OAuth redirect for connectors |
 | `Z_PLUGINS` | unset | Comma-separated module paths of extra plugins |
 | `Z_VAPID_SUBJECT` | `Z_PUBLIC_URL` if https, else `mailto:z@localhost` | Contact push services see for Web Push (`mailto:` or `https:`) |

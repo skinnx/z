@@ -83,8 +83,8 @@ services.briefings.schedule();
 void services.channels.syncAll();
 void connectors.syncAll();
 
-const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
-  console.log(`[z] listening on http://localhost:${info.port}${servingWeb ? " (serving web app)" : ""}`);
+const server = serve({ fetch: app.fetch, port: env.port, hostname: env.host }, (info) => {
+  console.log(`[z] listening on http://${env.host.includes(":") ? `[${env.host}]` : env.host}:${info.port}${servingWeb ? " (serving web app)" : ""}`);
   console.log(`[z] data dir ${env.dataDir}; ${plugins.manifests().length} plugin(s); auth ${env.token ? "on" : "off"}`);
   if (env.allowPrivateMcp) console.log("[z] Z_ALLOW_PRIVATE_MCP=1: connectors may reach private networks and plain http");
   if (process.env.Z_ALLOW_PRIVATE_BROWSER === "1") console.log("[z] Z_ALLOW_PRIVATE_BROWSER=1: the browser may open localhost and private networks");
