@@ -183,11 +183,20 @@ function instructions(deps: BotDeps, maxLength: number): string {
   ].join("\n\n");
 }
 
+/**
+ * Everything here comes from strangers (webhook bodies, chat messages), so it stays data: names
+ * and attributes can't break out of their line or tag, post text can't close its `<post>` fence,
+ * and a remembered message can't fake a `(you)` turn on a new line.
+ */
 function buildPrompt(message: InboundMessage, memory: BotTurn[]): string {
+  const name = (text: string) => text.replace(/[\s"<>]+/g, " ").trim().slice(0, 80) || "unknown";
   const sections: string[] = [];
   if (memory.length) {
     sections.push(
-      "Earlier in this thread:\n" + memory.map((t) => `${t.role === "assistant" ? "(you) " : ""}${t.author}: ${t.text}`).join("\n"),
+      "Earlier in this thread:\n" +
+        memory
+          .map((t) => `${t.role === "assistant" ? "(you) " : ""}${name(t.author)}: ${t.role === "user" ? t.text.replace(/\s+/g, " ") : t.text}`)
+          .join("\n"),
     );
   }
   if (message.context?.length) {
@@ -196,12 +205,13 @@ function buildPrompt(message: InboundMessage, memory: BotTurn[]): string {
         message.context
           .map((c) => {
             const pictures = c.images?.length ? ` images="${c.images.length}"` : "";
-            return `<post author="${c.author}"${c.url ? ` url="${c.url}"` : ""}${pictures}>\n${c.text}\n</post>`;
+            const text = c.text.replace(/<(\/?)post\b/gi, "‹$1post");
+            return `<post author="${name(c.author)}"${c.url ? ` url="${c.url.replace(/["<>\s]/g, encodeURIComponent)}"` : ""}${pictures}>\n${text}\n</post>`;
           })
           .join("\n"),
     );
   }
-  sections.push(`${message.author.name} says to you:\n${message.text}`);
+  sections.push(`${name(message.author.name)} says to you:\n${message.text.replace(/<(\/?)post\b/gi, "‹$1post")}`);
   return sections.join("\n\n");
 }
 

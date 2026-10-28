@@ -177,6 +177,22 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End connectors ───────────────────────────────────────────────────────
+  // ─── Channels: per-channel bot limits, inbound delivery receipts (7 days) ─
+  `
+  ALTER TABLE channels ADD COLUMN limits TEXT;        -- JSON ChannelLimits; NULL = defaults
+  CREATE TABLE IF NOT EXISTS channel_deliveries (
+    channel_id TEXT NOT NULL,
+    delivery_id TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    PRIMARY KEY (channel_id, delivery_id)
+  );
+  CREATE INDEX IF NOT EXISTS channel_deliveries_received ON channel_deliveries(received_at);
+  -- Webhook channels from before signed deliveries keep accepting X-Z-Secret: the store turns on
+  -- their (sealed) legacySecret config once, then deletes this marker.
+  INSERT INTO kv (key, value) SELECT 'migrate.webhookLegacySecret', 'true'
+    WHERE EXISTS (SELECT 1 FROM channels WHERE kind = 'webhook');
+  `,
+  // ─── End channels ─────────────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

@@ -1,6 +1,7 @@
 /** SQLite persistence. Secrets go through the sealer and never leave as plaintext views. */
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
+  ChannelLimits,
   Lane,
   Routing,
   Settings,
@@ -303,6 +304,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     config: sealer.openJson(r.config, {}),
     always: Boolean(r.always),
     lane: r.lane,
+    limits: ChannelLimits.parse(parse(r.limits, {})),
     configured: parse(r.configured, []),
     lastEventAt: r.last_event_at,
     status: r.status,
@@ -319,8 +321,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       const existing = get("SELECT created_at, last_event_at, status, status_detail FROM channels WHERE id = ?", c.id);
       const configured = Object.keys(c.config).filter((k) => c.config[k]);
       run(
-        `INSERT OR REPLACE INTO channels (id, kind, label, enabled, config, configured, always, lane, last_event_at, status, status_detail, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO channels (id, kind, label, enabled, config, configured, always, lane, limits, last_event_at, status, status_detail, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         c.id,
         c.kind,
         c.label,
@@ -329,6 +331,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         json(configured),
         c.always ? 1 : 0,
         c.lane,
+        json(c.limits),
         existing?.last_event_at ?? null,
         existing?.status ?? "idle",
         existing?.status_detail ?? null,
@@ -341,8 +344,34 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     delete: (id: string) => {
       run("DELETE FROM bot_memory WHERE channel_id = ?", id);
       run("DELETE FROM channel_state WHERE channel_id = ?", id);
+      run("DELETE FROM channel_deliveries WHERE channel_id = ?", id);
       return run("DELETE FROM channels WHERE id = ?", id).changes > 0;
     },
+  };
+
+  if (kv.get("migrate.webhookLegacySecret")) {
+    for (const c of channels.list()) {
+      if (c.kind === "webhook") channels.upsert({ ...c, config: { ...c.config, legacySecret: "on" } });
+    }
+    run("DELETE FROM kv WHERE key = 'migrate.webhookLegacySecret'");
+  }
+
+  /** Inbound delivery receipts (ChannelRuntime.deliveries), pruned after 7 days. */
+  const DELIVERY_TTL_MS = 7 * 24 * 3600_000;
+  let prunedAt = 0;
+  const deliveries = {
+    claim: (channelId: string, deliveryId: string): boolean => {
+      if (Date.now() - prunedAt > 3600_000) {
+        prunedAt = Date.now();
+        run("DELETE FROM channel_deliveries WHERE received_at < ?", new Date(Date.now() - DELIVERY_TTL_MS).toISOString());
+      }
+      return (
+        run("INSERT OR IGNORE INTO channel_deliveries (channel_id, delivery_id, received_at) VALUES (?, ?, ?)", channelId, deliveryId, now())
+          .changes > 0
+      );
+    },
+    release: (channelId: string, deliveryId: string) =>
+      run("DELETE FROM channel_deliveries WHERE channel_id = ? AND delivery_id = ?", channelId, deliveryId),
   };
 
   /** Adapter cursors and ids (ChannelRuntime.state). */
@@ -570,5 +599,5 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, memories, plugins, threads, notices, push, connectors, kv };
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, plugins, threads, notices, push, connectors, kv };
 }

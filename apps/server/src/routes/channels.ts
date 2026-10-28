@@ -1,4 +1,7 @@
-/** Bot channels. Config values are write-only: omitted keys keep their value, empty strings clear them. */
+/**
+ * Bot channels. Config values are write-only: omitted keys keep their value, empty strings clear them.
+ * Omitted `limits` keep the stored ones.
+ */
 import { ChannelInput } from "@z/core";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -23,7 +26,8 @@ export function channelRoutes({ rt, channels }: Services) {
       if (value) config[key] = value;
       else delete config[key];
     }
-    store.channels.upsert({ ...input, config });
+    const limits = raw.limits === undefined && existing ? existing.limits : input.limits;
+    store.channels.upsert({ ...input, config, limits });
     await channels.sync(id);
     return c.json(channels.view(store.channels.get(id)!));
   });

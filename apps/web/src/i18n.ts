@@ -166,6 +166,12 @@ const en = {
   deleteChannelConfirm: "Disconnect and remove this channel?",
   connect: "Connect",
   needsPublicUrl: "Set Z_PUBLIC_URL on the server to get a webhook URL.",
+  botLimits: "Limits",
+  botLimitsHint: "Caps what people in this channel can spend from your keys. Over a cap they get one “busy” reply; you are never capped.",
+  limit_running: "Answers at once",
+  limit_waiting: "Waiting in line",
+  limit_authorWaiting: "Per person in flight",
+  limit_authorHourly: "Per person per hour",
 
   // models
   addProvider: "Add provider",
@@ -606,6 +612,12 @@ const vi: Dict = {
   deleteChannelConfirm: "Ngắt kết nối và gỡ kênh này?",
   connect: "Kết nối",
   needsPublicUrl: "Đặt Z_PUBLIC_URL trên máy chủ để có URL webhook.",
+  botLimits: "Giới hạn",
+  botLimitsHint: "Giới hạn mức người trong kênh này dùng khoá của bạn. Vượt mức, họ nhận một câu “đang bận”; bạn không bao giờ bị giới hạn.",
+  limit_running: "Trả lời cùng lúc",
+  limit_waiting: "Chờ trong hàng",
+  limit_authorWaiting: "Mỗi người đang chờ",
+  limit_authorHourly: "Mỗi người mỗi giờ",
 
   addProvider: "Thêm nhà cung cấp",
   editProvider: "Nhà cung cấp",
