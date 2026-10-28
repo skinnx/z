@@ -27,6 +27,7 @@ import { Drawer } from "../ui/drawer.tsx";
 import { TabList, TabPanel, TabsRoot } from "../ui/tabs.tsx";
 import { notifyError } from "../ui/toast.tsx";
 import { serverText } from "../lib/server-text.ts";
+import { whenIdle } from "../lib/idle.ts";
 
 type Tab = "needs" | "active" | "scheduled" | "watch" | "done";
 const TAB_OF: Record<TaskStatus, Tab> = {
@@ -90,8 +91,7 @@ export default function Tasks() {
   useEffect(() => {
     if (!listed) return;
     if (openId) return preloadMarkdown();
-    const id = setTimeout(preloadMarkdown, 2000);
-    return () => clearTimeout(id);
+    return whenIdle(preloadMarkdown);
   }, [listed, openId]);
   useEffect(() => {
     if (open) setTab(tabOf(open));

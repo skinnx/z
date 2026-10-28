@@ -8,6 +8,7 @@ import { backdropClass } from "../ui/dialog.tsx";
 import { Loading } from "../ui/card.tsx";
 import { LoadBoundary } from "../shell/offline.tsx";
 import { settingsOpener, useSettingsRoute } from "./route.ts";
+import { whenIdle } from "../lib/idle.ts";
 
 const SettingsBody = lazy(() => import("./body.tsx"));
 
@@ -23,12 +24,9 @@ export function SettingsHost() {
   const routeRef = useRef(route);
   routeRef.current = route;
 
-  // Fetch the panels while idle so the first open has no spinner.
-  useEffect(() => {
-    // (A failed prefetch is retried when the dialog opens, and reported there.)
-    const id = setTimeout(() => void import("./body.tsx").catch(() => {}), 1500);
-    return () => clearTimeout(id);
-  }, []);
+  // Fetch the panels once the page is idle so the first open has no spinner (skipped on slow networks).
+  // (A failed prefetch is retried when the dialog opens, and reported there.)
+  useEffect(() => whenIdle(() => void import("./body.tsx").catch(() => {})), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
