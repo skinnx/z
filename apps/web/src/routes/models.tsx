@@ -179,7 +179,7 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted">
             <span className="flex items-center gap-1">
               <LockKeyhole aria-hidden className="size-3.5" />
-              {p.hasKey ? <span className="font-mono">••••{p.keyHint}</span> : t.noKey}
+              {p.kind === "codex-cli" ? t.codexViaCli : p.hasKey ? <span className="font-mono">••••{p.keyHint}</span> : t.noKey}
             </span>
             <span>{t.modelCount(p.models.length)}</span>
           </div>
@@ -235,6 +235,11 @@ function TestResult({ result, error, pending }: { result?: ProviderTest; error: 
           {t.testOk(result.latencyMs ?? 0, result.model ?? "")}
         </span>
       ) : null}
+      {!pending && result?.account?.signedIn && (
+        <span className="mt-0.5 block text-fg-muted">
+          {result.account.method === "chatgpt" ? t.codexSignedIn(result.account.plan, result.account.email) : result.account.method === "apiKey" ? t.codexSignedInApiKey : null}
+        </span>
+      )}
     </p>
   );
 }
@@ -249,6 +254,7 @@ function viewToInput(p: ProviderView, patch: Partial<ProviderInput> = {}): Provi
     models: p.models,
     enabled: p.enabled,
     ...(p.monthlyBudgetUsd !== undefined ? { monthlyBudgetUsd: p.monthlyBudgetUsd } : {}),
+    ...(p.command ? { command: p.command } : {}),
     ...patch,
   };
 }
@@ -279,6 +285,7 @@ function ProviderForm({
   const [models, setModels] = useState<string[]>(provider?.models ?? preset.models ?? []);
   const [budget, setBudget] = useState<number | null>(provider?.monthlyBudgetUsd ?? null);
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
+  const [command, setCommand] = useState(provider?.command ?? "");
   const live = useProviderModels(provider?.id ?? null);
 
   const choosePreset = (key: string) => {
@@ -291,6 +298,8 @@ function ProviderForm({
   };
 
   const urlRequired = preset.kind === "openai-compatible";
+  // The Codex CLI owns sign-in: no key, endpoint or budget (it bills the owner's ChatGPT plan).
+  const codex = preset.kind === "codex-cli";
   const idValid = /^[a-z0-9][a-z0-9-]{0,31}$/.test(id);
   const idTaken = !provider && existing.some((p) => p.id === id);
   const suggestions = useMemo(() => (live.data ?? []).filter((m) => !models.includes(m)), [live.data, models]);
@@ -301,8 +310,9 @@ function ProviderForm({
       id,
       kind: preset.kind,
       label: label.trim() || preset.label,
-      ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}),
-      ...(apiKey ? { apiKey } : {}),
+      ...(baseURL.trim() && !codex ? { baseURL: baseURL.trim() } : {}),
+      ...(apiKey && !codex ? { apiKey } : {}),
+      ...(codex && command.trim() ? { command: command.trim() } : {}),
       ...(provider?.headers ? { headers: provider.headers } : {}),
       ...(provider?.contextWindows ? { contextWindows: provider.contextWindows } : {}),
       models,
@@ -336,7 +346,7 @@ function ProviderForm({
           options={PRESETS.map((p) => ({
             value: p.key,
             title: p.label,
-            meta: p.free ? t.freeNoKey : p.needsKey ? undefined : t.noKeyNeeded,
+            meta: p.free ? t.freeNoKey : p.kind === "codex-cli" ? t.codexMeta : p.needsKey ? undefined : t.noKeyNeeded,
             icon: p.free ? <Gift aria-hidden className="size-4 shrink-0 text-accent-text" /> : <Monogram text={p.mark} className="size-8 rounded-lg text-xs normal-case" />,
           }))}
         />
@@ -368,36 +378,47 @@ function ProviderForm({
         </Field>
       </div>
 
-      <Field label={t.apiKey} description={provider?.hasKey ? `${t.keepSecret} ••••${provider.keyHint ?? ""}` : `${preset.needsKey ? `${t.keyNeeded} ` : ""}${t.keyStaysHere}`}>
-        <div className="flex gap-2">
-          <Input
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            onValueChange={setApiKey}
-            placeholder={preset.needsKey ? "sk-…" : t.optional}
-            className="font-mono text-sm"
-          />
-          {preset.docs && (
-            <a href={preset.docs} target="_blank" rel="noreferrer" className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-accent-text hover:bg-accent-soft">
-              {t.getKey}
-              <ExternalLink aria-hidden className="size-3.5" />
-            </a>
-          )}
-        </div>
-      </Field>
+      {codex ? (
+        <>
+          <p className="text-sm text-fg-muted">{t.codexNote}</p>
+          <Field label={t.codexPath} description={t.codexPathHint}>
+            <Input value={command} onValueChange={setCommand} placeholder="codex" spellCheck={false} className="font-mono text-sm" />
+          </Field>
+        </>
+      ) : (
+        <>
+          <Field label={t.apiKey} description={provider?.hasKey ? `${t.keepSecret} ••••${provider.keyHint ?? ""}` : `${preset.needsKey ? `${t.keyNeeded} ` : ""}${t.keyStaysHere}`}>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                autoComplete="off"
+                value={apiKey}
+                onValueChange={setApiKey}
+                placeholder={preset.needsKey ? "sk-…" : t.optional}
+                className="font-mono text-sm"
+              />
+              {preset.docs && (
+                <a href={preset.docs} target="_blank" rel="noreferrer" className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-accent-text hover:bg-accent-soft">
+                  {t.getKey}
+                  <ExternalLink aria-hidden className="size-3.5" />
+                </a>
+              )}
+            </div>
+          </Field>
 
-      <Field label={t.baseURL} description={!urlRequired && preset.baseURL ? `${t.defaultIs} ${preset.baseURL}` : undefined}>
-        <Input
-          type="url"
-          required={urlRequired}
-          value={baseURL}
-          onValueChange={setBaseURL}
-          placeholder={preset.baseURL ?? "https://…/v1"}
-          spellCheck={false}
-          className="font-mono text-sm"
-        />
-      </Field>
+          <Field label={t.baseURL} description={!urlRequired && preset.baseURL ? `${t.defaultIs} ${preset.baseURL}` : undefined}>
+            <Input
+              type="url"
+              required={urlRequired}
+              value={baseURL}
+              onValueChange={setBaseURL}
+              placeholder={preset.baseURL ?? "https://…/v1"}
+              spellCheck={false}
+              className="font-mono text-sm"
+            />
+          </Field>
+        </>
+      )}
 
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-1.5 flex w-full items-center justify-between text-sm font-medium">
@@ -435,18 +456,20 @@ function ProviderForm({
       </fieldset>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={t.budget}>
-          <NumberField
-            value={budget}
-            onChange={setBudget}
-            min={0}
-            step={5}
-            placeholder="—"
-            format={{ style: "currency", currency: "USD", maximumFractionDigits: 2 }}
-            decrementLabel="−5"
-            incrementLabel="+5"
-          />
-        </Field>
+        {!codex && (
+          <Field label={t.budget}>
+            <NumberField
+              value={budget}
+              onChange={setBudget}
+              min={0}
+              step={5}
+              placeholder="—"
+              format={{ style: "currency", currency: "USD", maximumFractionDigits: 2 }}
+              decrementLabel="−5"
+              incrementLabel="+5"
+            />
+          </Field>
+        )}
         <div className="flex items-end">
           <div className="w-full">
             <SwitchRow label={t.enabled} checked={enabled} onCheckedChange={setEnabled} />

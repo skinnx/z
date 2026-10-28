@@ -52,13 +52,16 @@ export function configRoutes({ rt, tasks, briefings, channels, setup }: Services
     const id = c.req.param("id");
     const raw = await body(c, z.record(z.string(), z.unknown()));
     if (raw.id !== undefined && raw.id !== id) throw badRequest("id: must match the URL");
-    const { apiKey, ...input } = validate(ProviderInput, { ...raw, id });
-    if (input.kind === "openai-compatible" && !input.baseURL) throw badRequest("baseURL: required for openai-compatible providers");
+    const parsed = validate(ProviderInput, { ...raw, id });
+    if (parsed.kind === "openai-compatible" && !parsed.baseURL) throw badRequest("baseURL: required for openai-compatible providers");
+    if (parsed.command && parsed.kind !== "codex-cli") throw badRequest("command: only for codex-cli providers");
+    // The Codex CLI owns sign-in: no key, endpoint or headers are stored for it.
+    const { apiKey, ...input } = parsed.kind === "codex-cli" ? { ...parsed, apiKey: "", baseURL: undefined, headers: undefined } : parsed;
     const before = store.providers.get(id);
     store.providers.upsert(input, apiKey);
     // A new key, endpoint or headers make earlier live tests meaningless.
     const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-    if (!before || apiKey !== undefined || before.kind !== input.kind || !same(before.baseURL, input.baseURL) || !same(before.headers, input.headers)) setup.forget(id);
+    if (!before || apiKey !== undefined || before.kind !== input.kind || !same(before.baseURL, input.baseURL) || !same(before.headers, input.headers) || !same(before.command, input.command)) setup.forget(id);
     return c.json(providerView(provider(id)));
   });
 

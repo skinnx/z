@@ -6,7 +6,7 @@
  * (Idea from CopilotKit OpenDuet's setup checks, MIT; re-implemented for z.)
  */
 import { createHash } from "node:crypto";
-import { describeError, laneRefs, parseModelRef, testModel, type Lane, type ModelCheck, type ModelRef, type ProviderConfig, type SetupChecklist, type SetupRow, type SetupState } from "@z/core";
+import { codexAccount, CODEX_NOT_SIGNED_IN, describeError, laneRefs, parseModelRef, testModel, type CodexAccount, type Lane, type ModelCheck, type ModelRef, type ProviderConfig, type SetupChecklist, type SetupRow, type SetupState } from "@z/core";
 import pkg from "../package.json" with { type: "json" };
 import type { Channels } from "./channels.ts";
 import type { Connectors } from "./connectors.ts";
@@ -24,6 +24,10 @@ const MAX_MODEL_CALLS = 6;
 const CHECKS_KEY = "setup.models";
 const CHECKED_AT_KEY = "setup.checkedAt";
 const MASTER_ACK_KEY = "setup.masterKeyBackedUp";
+/** Per codex-cli provider: who the Codex CLI was signed in as when last checked, or why it couldn't say. */
+const CODEX_KEY = "setup.codex";
+
+type CodexCheck = { account?: CodexAccount; error?: string; at: string };
 
 const LANE_NAMES: Record<Exclude<Lane, "chat">, string> = { agent: "Tasks", briefing: "Briefing", fast: "Quick checks", bot: "Channel bot" };
 
@@ -39,6 +43,9 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
 
   const checks = (): Record<ModelRef, ModelCheck> => store.kv.get<Record<ModelRef, ModelCheck>>(CHECKS_KEY) ?? {};
   const saveCheck = (ref: ModelRef, check: ModelCheck) => store.kv.set(CHECKS_KEY, { ...checks(), [ref]: check });
+  const codexChecks = (): Record<string, CodexCheck> => store.kv.get<Record<string, CodexCheck>>(CODEX_KEY) ?? {};
+  const saveCodex = (providerId: string, check: Omit<CodexCheck, "at">) =>
+    store.kv.set(CODEX_KEY, { ...codexChecks(), [providerId]: { ...check, at: new Date().toISOString() } });
 
   /** Why a ref can't be tried at all (no call needed), or null. */
   function unusable(ref: ModelRef, providers: ProviderConfig[]): string | null {
@@ -103,6 +110,20 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
       const chat = laneResult(routing.chat, cache, providers);
       const detail = chat.state === "not_checked" && chat.detail.endsWith("not checked yet") ? `${chat.detail}. Check again to send it a test message.` : chat.detail;
       out.push({ id: "chat_model", label: "A chat model answers", state: chat.state, detail, fix: chat.state === "ready" ? null : models });
+    }
+
+    // ─── Codex CLI signed in (codex-cli providers) ───
+    const codex = codexChecks();
+    for (const p of providers.filter((x) => x.kind === "codex-cli" && x.enabled)) {
+      const row = { id: `codex:${p.id}`, label: `Codex CLI signed in (${p.label})` };
+      const c = codex[p.id];
+      const a = c?.account;
+      if (!c) out.push({ ...row, state: "not_checked", detail: "Check again to start the Codex CLI on this machine and read its sign-in.", fix: null });
+      else if (c.error) out.push({ ...row, state: "needs_setup", detail: c.error, fix: models });
+      else if (!a?.signedIn) out.push({ ...row, state: "needs_setup", detail: `${CODEX_NOT_SIGNED_IN}, as the user z runs as.`, fix: null });
+      else if (a.method === "chatgpt")
+        out.push({ ...row, state: "ready", detail: `Signed in with ChatGPT${a.plan ? ` (${a.plan} plan)` : ""}${a.email ? ` as ${a.email}` : ""}.`, fix: null });
+      else out.push({ ...row, state: "ready", detail: a.method === "apiKey" ? "Signed in with an OpenAI API key, not a ChatGPT plan." : "Signed in to a non-OpenAI model provider.", fix: null });
     }
 
     // ─── Every job has a working model ───
@@ -301,6 +322,24 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
     }
   }
 
+  /** Start each enabled Codex CLI and read its sign-in (no model call). */
+  async function checkCodex() {
+    const bounded = <T,>(p: Promise<T>) =>
+      Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the Codex CLI did not answer in time")), PROBE_TIMEOUT_MS))]);
+    await Promise.all(
+      store.providers
+        .list()
+        .filter((p) => p.kind === "codex-cli" && p.enabled)
+        .map(async (p) => {
+          try {
+            saveCodex(p.id, { account: await bounded(codexAccount(p)) });
+          } catch (error) {
+            saveCodex(p.id, { error: describeError(error) });
+          }
+        }),
+    );
+  }
+
   /** Reconnect what is failing, bounded so one slow server doesn't hold the check. */
   async function retryFailing() {
     const bounded = (p: Promise<unknown>) => Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, PROBE_TIMEOUT_MS))]);
@@ -317,6 +356,8 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
     check(): Promise<SetupChecklist> {
       running ??= (async () => {
         try {
+          // Sign-in first: a signed-out Codex fails its model test with the same message.
+          await checkCodex();
           await Promise.all([checkModels(), probePublicUrl(), retryFailing()]);
           store.kv.set(CHECKED_AT_KEY, new Date().toISOString());
           return checklist();
@@ -335,14 +376,16 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
     },
 
     /** The provider Test button counts as a live check of that model. */
-    record(providerId: string, result: { ok: boolean; model?: string; error?: string; rateLimited?: boolean; timedOut?: boolean; latencyMs?: number }) {
+    record(providerId: string, result: { ok: boolean; model?: string; error?: string; rateLimited?: boolean; timedOut?: boolean; latencyMs?: number; account?: CodexAccount }) {
       if (result.model) saveCheck(`${providerId}:${result.model}`, toCheck(result));
+      if (store.providers.get(providerId)?.kind === "codex-cli") saveCodex(providerId, result.account ? { account: result.account } : { error: result.error ?? "failed" });
     },
 
     /** A provider's config changed (or it was removed): its earlier results no longer say anything. */
     forget(providerId: string) {
       const kept = Object.fromEntries(Object.entries(checks()).filter(([ref]) => parseModelRef(ref).providerId !== providerId));
       store.kv.set(CHECKS_KEY, kept);
+      store.kv.set(CODEX_KEY, Object.fromEntries(Object.entries(codexChecks()).filter(([id]) => id !== providerId)));
     },
 
     modelChecks: checks,
