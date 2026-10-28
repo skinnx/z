@@ -10,7 +10,8 @@ import { Monogram } from "../ui/avatar.tsx";
 import { Button } from "../ui/button.tsx";
 import { Badge, Card, Empty, Loading, LoadError } from "../ui/card.tsx";
 import { Disclosure } from "../ui/collapsible.tsx";
-import { Field, Input } from "../ui/field.tsx";
+import { Field, Input, Textarea } from "../ui/field.tsx";
+import { Page } from "../ui/page.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 
@@ -19,12 +20,11 @@ export default function Plugins() {
   const plugins = usePlugins();
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
-      <h1 className="sr-only">{t.nav_plugins}</h1>
+    <Page title={t.nav_plugins}>
       {plugins.isPending ? (
         <Loading label={t.loading} className="h-64" />
       ) : plugins.error && !plugins.data ? (
-        <LoadError error={plugins.error} onRetry={() => void plugins.refetch()} retryLabel={t.retry} />
+        <LoadError error={plugins.error} onRetry={() => void plugins.refetch()} />
       ) : !plugins.data?.length ? (
         <Empty icon={<Blocks />} text={t.noPlugins} />
       ) : (
@@ -36,7 +36,7 @@ export default function Plugins() {
           ))}
         </ul>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -73,9 +73,11 @@ function PluginCard({ plugin: p }: { plugin: PluginManifest }) {
       {p.tools.length > 0 && (
         <ul aria-label={t.tools} className="flex flex-wrap gap-1.5">
           {p.tools.map((tool) => (
-            <li key={tool.name} title={tool.description} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-line px-2 font-mono text-xs">
-              <RiskIcon risk={tool.risk} t={t} className="size-3.5" />
-              {tool.name}
+            <li key={tool.name} title={tool.description} className="min-w-0">
+              <Badge className="max-w-full font-mono">
+                <RiskIcon risk={tool.risk} t={t} className="size-3.5" />
+                <span className="truncate">{tool.name}</span>
+              </Badge>
             </li>
           ))}
         </ul>
@@ -102,14 +104,28 @@ function PluginCard({ plugin: p }: { plugin: PluginManifest }) {
           >
             {p.settings.map((s) => (
               <Field key={s.key} label={s.label} description={s.secret ? t.blankKeeps : undefined}>
-                <Input
-                  type={s.secret ? "password" : "text"}
-                  autoComplete="off"
-                  value={values[s.key] ?? ""}
-                  placeholder={s.required ? t.required : t.optional}
-                  onValueChange={(v) => setValues((x) => ({ ...x, [s.key]: v }))}
-                  spellCheck={false}
-                />
+                {s.multiline && !s.secret ? (
+                  <Textarea
+                    rows={3}
+                    value={values[s.key] ?? ""}
+                    placeholder={s.required ? t.required : t.optional}
+                    onChange={(e) => {
+                      const v = e.currentTarget.value;
+                      setValues((x) => ({ ...x, [s.key]: v }));
+                    }}
+                    spellCheck={false}
+                    className="font-mono text-sm"
+                  />
+                ) : (
+                  <Input
+                    type={s.secret ? "password" : "text"}
+                    autoComplete="off"
+                    value={values[s.key] ?? ""}
+                    placeholder={s.required ? t.required : t.optional}
+                    onValueChange={(v) => setValues((x) => ({ ...x, [s.key]: v }))}
+                    spellCheck={false}
+                  />
+                )}
               </Field>
             ))}
             <Button type="submit" size="sm" className="self-end" disabled={save.isPending || Object.values(values).every((v) => !v)}>

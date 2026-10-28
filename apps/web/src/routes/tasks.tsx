@@ -3,6 +3,7 @@ import { Ban, Bot, CircleCheck, Cpu, Footprints, ListChecks, Play, Plus, Radar, 
 import { Streamdown } from "streamdown";
 import { useSearchParams } from "react-router";
 import { useEffect, useState } from "react";
+import { useSettings } from "../api/settings.ts";
 import { useDeleteTask, useTaskAction, useTasks } from "../api/tasks.ts";
 import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep } from "../components/ai-elements/chain-of-thought.tsx";
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
@@ -14,8 +15,9 @@ import { compact, dateTime, json, relativeTime, time } from "../lib/format.ts";
 import { parseCron } from "../lib/cron.ts";
 import { StatusIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
-import { Button } from "../ui/button.tsx";
+import { Button, RowButton } from "../ui/button.tsx";
 import { Badge, Card, Empty, Loading, LoadError } from "../ui/card.tsx";
+import { Page } from "../ui/page.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { TabList, TabPanel, TabsRoot } from "../ui/tabs.tsx";
@@ -52,6 +54,7 @@ export function scheduleText(schedule: string | null, t: Dict): string | null {
 export default function Tasks() {
   const t = useT();
   const tasks = useTasks();
+  useSettings(); // run times are shown in the configured timezone (lib/format): re-render once it is known
   const [params, setParams] = useSearchParams();
   const [composeOpen, setComposeOpen] = useState(false);
   const openId = params.get("task");
@@ -93,8 +96,7 @@ export default function Tasks() {
   const empty: Record<Tab, string> = { needs: t.noNeeds, active: t.noActive, scheduled: t.noScheduled, watch: t.noWatches, done: t.noDone };
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-6 md:px-8 md:py-10">
-      <h1 className="sr-only">{t.nav_tasks}</h1>
+    <Page title={t.nav_tasks}>
       {tasks.isPending ? (
         <Loading label={t.loading} />
       ) : tasks.error && !tasks.data ? (
@@ -162,14 +164,16 @@ export default function Tasks() {
           open && (
             <>
               <StatusIcon status={open.status} t={t} />
-              <span className="truncate">{open.title}</span>
+              <span className="truncate" title={open.title}>
+                {open.title}
+              </span>
             </>
           )
         }
       >
         {open && <TaskDetail task={open} onDeleted={() => select(null)} />}
       </Drawer>
-    </div>
+    </Page>
   );
 }
 
@@ -178,10 +182,12 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const sched = scheduleText(task.schedule, t);
   return (
     <li>
-      <button type="button" onClick={onOpen} className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-start hover:bg-subtle/60">
+      <RowButton onClick={onOpen}>
         <StatusIcon status={task.status} t={t} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium">{task.title}</span>
+          <span className="block truncate font-medium" title={task.title}>
+            {task.title}
+          </span>
           <span className="mt-0.5 block truncate text-xs text-fg-muted">
             {task.status === "needs_input" && task.question ? (
               <span className="text-warn">{task.question.question}</span>
@@ -199,7 +205,7 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
             <time dateTime={task.updatedAt}>{relativeTime(task.updatedAt)}</time>
           )}
         </span>
-      </button>
+      </RowButton>
     </li>
   );
 }
@@ -212,14 +218,16 @@ function WatchRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const busy = task.status === "running" || task.status === "queued";
   return (
     <li>
-      <button type="button" onClick={onOpen} className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-start hover:bg-subtle/60">
+      <RowButton onClick={onOpen}>
         {busy || task.status === "cancelled" ? (
           <StatusIcon status={task.status} t={t} />
         ) : (
           <Radar role="img" aria-label={t.sched_watch} className={task.error ? "size-5 shrink-0 text-danger" : "size-5 shrink-0 text-accent-text"} />
         )}
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium">{task.title}</span>
+          <span className="block truncate font-medium" title={task.title}>
+            {task.title}
+          </span>
           <span className="mt-0.5 block truncate text-xs text-fg-muted">
             {task.error ? (
               <span className="text-danger">{task.error}</span>
@@ -241,7 +249,7 @@ function WatchRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
             scheduleText(task.schedule, t)
           )}
         </span>
-      </button>
+      </RowButton>
     </li>
   );
 }
@@ -298,7 +306,7 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
         {sched && (
           <>
             <dt className="text-fg-muted">{t.schedule}</dt>
-            <dd className="text-end font-mono text-xs leading-5">{sched}</dd>
+            <dd className="text-end">{sched}</dd>
           </>
         )}
         {task.nextRunAt && (

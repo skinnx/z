@@ -791,6 +791,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     path: r.path,
     ...(r.approval_id ? { approvalId: r.approval_id } : {}),
     ...(r.question ? { question: parse<NoticeQuestion>(r.question, { taskId: "", text: "", choices: [] }) } : {}),
+    ...(r.status ? { status: r.status } : {}),
     read: Boolean(r.read),
     createdAt: r.created_at,
   });
@@ -799,7 +800,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     list: (limit = 100): Notice[] => all("SELECT * FROM notices ORDER BY created_at DESC LIMIT ?", limit).map(toNotice),
     insert: (n: Notice) =>
       run(
-        "INSERT INTO notices (id, kind, title, body, path, approval_id, question, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notices (id, kind, title, body, path, approval_id, question, status, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         n.id,
         n.kind,
         n.title,
@@ -807,6 +808,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         n.path,
         n.approvalId ?? null,
         n.question ? json(n.question) : null,
+        n.status ?? null,
         n.read ? 1 : 0,
         n.createdAt,
       ),

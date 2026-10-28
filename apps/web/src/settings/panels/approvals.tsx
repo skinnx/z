@@ -8,7 +8,7 @@ import { LivePolicyControl, type Policy } from "../../components/tool-policy.tsx
 import { useT } from "../../i18n.ts";
 import { RiskIcon } from "../../lib/icons.tsx";
 import { Button } from "../../ui/button.tsx";
-import { Empty, Loading } from "../../ui/card.tsx";
+import { Empty, Loading, LoadError } from "../../ui/card.tsx";
 import { Input } from "../../ui/field.tsx";
 import { useSaveSetting, useSettings } from "../../api/settings.ts";
 import { Row, RowGroup } from "../../ui/row.tsx";
@@ -55,6 +55,8 @@ export function ApprovalsPanel() {
   const matched = filtered.reduce((n, g) => n + g.tools.length, 0);
 
   if (plugins.isPending || connectors.isPending) return <Loading label={t.loading} className="h-32" />;
+  const failed = (plugins.error && !plugins.data && plugins) || (connectors.error && !connectors.data && connectors);
+  if (failed) return <LoadError error={failed.error} onRetry={() => void failed.refetch()} />;
   if (total === 0) return <Empty icon={<ShieldCheck />} text={t.noTools} className="mt-4" />;
 
   return (
@@ -125,14 +127,19 @@ function ToolGroup({ group }: { group: Group }) {
         <div key={tool.key} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
           <RiskIcon risk={tool.risk} t={t} />
           <div className="min-w-0 flex-1 basis-32">
-            <p className="truncate font-mono text-sm">{tool.name}</p>
+            <p className="truncate font-mono text-sm" title={tool.name}>
+              {tool.name}
+            </p>
             {tool.description && (
-              <p className="truncate text-xs text-fg-muted" title={tool.description}>
+              <p className="line-clamp-2 text-xs text-fg-muted sm:truncate" title={tool.description}>
                 {tool.description}
               </p>
             )}
           </div>
-          <LivePolicyControl toolKey={tool.key} risk={tool.risk} declared={tool.declared} showSaved className="w-40 sm:w-44" />
+          {/* Phones: the control takes its own line, so the name and description keep the width. */}
+          <div className="max-sm:w-full max-sm:ps-7">
+            <LivePolicyControl toolKey={tool.key} risk={tool.risk} declared={tool.declared} showSaved className="w-full sm:w-44" />
+          </div>
         </div>
       ))}
       {left > 0 && (

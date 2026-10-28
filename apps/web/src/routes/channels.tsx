@@ -6,18 +6,19 @@ import { useSearchParams } from "react-router";
 import { useAdapters, useChannels, useDeleteChannel, useSaveChannel } from "../api/channels.ts";
 import { LANES } from "../api/providers.ts";
 import { useSettings } from "../api/settings.ts";
-import { useT } from "../i18n.ts";
+import { useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime, slug } from "../lib/format.ts";
 import { channelIcon, laneIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Button } from "../ui/button.tsx";
-import { Card, Empty, Section, Spinner, Loading, LoadError } from "../ui/card.tsx";
+import { Badge, Card, Empty, Section, Spinner, Loading, LoadError } from "../ui/card.tsx";
 import { Disclosure } from "../ui/collapsible.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { Field, Input } from "../ui/field.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { NumberField } from "../ui/number-field.tsx";
+import { Page } from "../ui/page.tsx";
 import { RadioCards } from "../ui/radio-cards.tsx";
 import { Select } from "../ui/select.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
@@ -41,25 +42,26 @@ export default function Channels() {
 
   if (channels.isPending || adapters.isPending) {
     return (
-      <Loading label={t.loading} className="h-64" />
+      <Page title={t.nav_channels}>
+        <Loading label={t.loading} className="h-64" />
+      </Page>
     );
   }
   const failed = (channels.error && !channels.data && channels) || (adapters.error && !adapters.data && adapters);
   if (failed && failed.error) {
     return (
-      <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
-        <LoadError error={failed.error} onRetry={() => void failed.refetch()} retryLabel={t.retry} />
-      </div>
+      <Page title={t.nav_channels}>
+        <LoadError error={failed.error} onRetry={() => void failed.refetch()} />
+      </Page>
     );
   }
   const list = channels.data ?? [];
   const kinds = adapters.data ?? [];
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="sr-only">{t.nav_channels}</h1>
+    <Page title={t.nav_channels}>
       {list.length === 0 ? (
-        <Section label={t.addChannel} icon={<RadioTower aria-hidden />}>
+        <Section label={t.addChannel} hideLabel>
           <Empty icon={<RadioTower />} text={t.channelsEmpty}>
             {kinds.map((a) => {
               const Icon = channelIcon[a.kind];
@@ -75,9 +77,9 @@ export default function Channels() {
       ) : (
         <Section
           label={t.nav_channels}
-          icon={<RadioTower aria-hidden />}
+          hideLabel
           actions={
-            <Button variant="primary" size="sm" onClick={() => setEditing({ channel: null, kind: null })}>
+            <Button variant="primary" onClick={() => setEditing({ channel: null, kind: null })}>
               <Plus aria-hidden />
               {t.addChannel}
             </Button>
@@ -106,7 +108,7 @@ export default function Channels() {
           )}
         </Dialog.Content>
       </Dialog.Root>
-    </div>
+    </Page>
   );
 }
 
@@ -116,6 +118,7 @@ function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () 
   const t = useT();
   const save = useSaveChannel();
   const Icon = channelIcon[c.kind];
+  const LaneIcon = laneIcon[c.lane];
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     if (!c.webhookUrl) return;
@@ -133,10 +136,12 @@ function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () 
       <div className="flex items-start gap-3">
         <span className="relative grid size-10 shrink-0 place-items-center rounded-xl bg-subtle">
           <Icon aria-hidden className="size-5" />
-          <span className={cn("absolute -end-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-surface", statusDot[c.status], c.status === "ok" && "motion-safe:animate-pulse-dot")} />
+          <span className={cn("absolute -end-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-surface", statusDot[c.status])} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate font-semibold">{c.label}</p>
+          <p className="truncate font-semibold" title={c.label}>
+            {c.label}
+          </p>
           <p className="flex flex-wrap items-center gap-x-2 text-xs text-fg-muted">
             <span className={cn(c.status === "error" && "text-danger")}>{t[`st_${c.status}`]}</span>
             <span aria-hidden>·</span>
@@ -151,7 +156,7 @@ function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () 
           }
         />
       </div>
-      {c.statusDetail && <p className={cn("text-xs break-words", c.status === "error" ? "text-danger" : "text-fg-muted")}>{c.statusDetail}</p>}
+      {c.statusDetail && <p className={cn("text-xs break-words", c.status === "error" ? "text-danger" : "text-fg-muted")}>{channelDetail(c.statusDetail, t)}</p>}
       {c.webhookUrl && (
         <div className="flex items-center gap-1 rounded-lg border border-line bg-subtle ps-3">
           <code className="min-w-0 flex-1 truncate font-mono text-xs" title={c.webhookUrl}>
@@ -162,19 +167,15 @@ function ChannelCard({ channel: c, onEdit }: { channel: ChannelView; onEdit: () 
           </IconButton>
         </div>
       )}
-      <div className="mt-auto flex items-center gap-2 text-xs text-fg-muted">
-        <span className="inline-flex items-center gap-1 rounded-full bg-subtle px-2 py-1">
-          {(() => {
-            const L = laneIcon[c.lane];
-            return <L aria-hidden className="size-3.5" />;
-          })()}
+      <div className="mt-auto flex flex-wrap items-center gap-2">
+        <Badge>
+          <LaneIcon aria-hidden />
           {t[`lane_${c.lane}`]}
-        </span>
-        {c.always && <span className="rounded-full bg-subtle px-2 py-1">{t.alwaysAnswer}</span>}
-        <Button size="sm" variant="ghost" className="ms-auto" onClick={onEdit}>
+        </Badge>
+        {c.always && <Badge>{t.alwaysAnswer}</Badge>}
+        <IconButton label={`${t.edit}: ${c.label}`} size="icon-sm" className="ms-auto" onClick={onEdit}>
           <Pencil aria-hidden />
-          {t.edit}
-        </Button>
+        </IconButton>
       </div>
     </Card>
   );
@@ -286,7 +287,7 @@ function ChannelForm({
                   autoComplete="off"
                   required={f.required && !stored}
                   value={config[f.key] ?? ""}
-                  placeholder={stored ? "••••••••" : f.required ? t.required : t.optional}
+                  placeholder={stored ? (f.secret ? "••••••••" : t.blankKeeps) : f.required ? t.required : t.optional}
                   onValueChange={(v) => setConfig((c) => ({ ...c, [f.key]: v }))}
                   spellCheck={false}
                   className={cn(f.secret && "font-mono text-sm")}
@@ -349,7 +350,7 @@ function ChannelForm({
             trigger={
               <Button variant="danger">
                 <Trash2 aria-hidden />
-                {t.remove}
+                {t.delete}
               </Button>
             }
             title={t.deleteChannelConfirm}
@@ -370,6 +371,27 @@ function ChannelForm({
 const DEFAULT_LIMITS: ChannelLimits = { running: 4, waiting: 20, authorWaiting: 2, authorHourly: 10 };
 const LIMIT_MIN: ChannelLimits = { running: 1, waiting: 0, authorWaiting: 1, authorHourly: 1 };
 const LIMIT_KEYS = ["running", "waiting", "authorWaiting", "authorHourly"] as const;
+
+/**
+ * The server words channel status in English. Its fixed phrases are reworded here; the platform's own
+ * error text after "Could not connect:" / "Bot failed:" stays as the platform wrote it.
+ */
+function channelDetail(detail: string, t: Dict): string {
+  const fixed: Record<string, string> = {
+    Disabled: t.chd_disabled,
+    Connected: t.st_ok,
+    "Waiting for the first webhook": t.chd_waitingWebhook,
+    "Set Z_PUBLIC_URL so the platform can reach /hooks": t.needsPublicUrl,
+  };
+  if (fixed[detail]) return fixed[detail];
+  for (const [prefix, key] of [
+    ["Could not connect: ", "chd_couldNotConnect"],
+    ["Bot failed: ", "chd_botFailed"],
+  ] as const) {
+    if (detail.startsWith(prefix)) return `${t[key]}: ${detail.slice(prefix.length)}`;
+  }
+  return detail;
+}
 
 function uniqueId(base: string, existing: ChannelView[]): string {
   if (!existing.some((c) => c.id === base)) return base;

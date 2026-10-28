@@ -9,6 +9,7 @@ import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { Button } from "../ui/button.tsx";
 import { ScrollArea } from "../ui/scroll-area.tsx";
+import { tabFocusClass } from "../ui/tabs.tsx";
 import { ApprovalsPanel } from "./panels/approvals.tsx";
 import { DataPanel } from "./panels/data.tsx";
 import { GeneralPanel } from "./panels/general.tsx";
@@ -113,7 +114,8 @@ export default function SettingsBody({ phone, titleId }: { phone: boolean; title
                   // Tapping the already-selected tab on a phone still drills in.
                   onClick={() => phone && pick(id)}
                   className={cn(
-                    "flex w-full items-center gap-3 text-start text-sm font-medium outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
+                    "flex w-full items-center gap-3 text-start text-sm font-medium [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
+                    tabFocusClass,
                     phone
                       ? "h-14 border-b border-line px-5 text-[0.9375rem] last:border-b-0 active:bg-subtle"
                       : "h-9 rounded-lg px-2.5 text-fg-muted hover:bg-subtle hover:text-fg data-active:bg-surface data-active:text-fg data-active:shadow-sm data-active:ring-1 data-active:ring-line",
@@ -130,7 +132,7 @@ export default function SettingsBody({ phone, titleId }: { phone: boolean; title
       </div>
 
       <div hidden={!drilled} className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex h-14 shrink-0 items-center gap-1 border-b border-line ps-5 pe-2 max-sm:ps-1">
+        <div className={cn("flex h-14 shrink-0 items-center gap-1 border-b border-line pe-2", phone ? "ps-1" : "ps-5")}>
           {phone && (
             <Button variant="ghost" size="icon" aria-label={t.allSettings} data-settings-back onClick={() => {
                 setSelected(null);
@@ -151,7 +153,7 @@ export default function SettingsBody({ phone, titleId }: { phone: boolean; title
               <Tabs.Panel
                 key={id}
                 value={id}
-                className={cn("px-5 pt-2 pb-8 outline-none", phone && "motion-safe:animate-[settings-in_200ms_ease-out]")}
+                className={cn("px-5 pt-2 pb-8", tabFocusClass, phone && "motion-safe:animate-[settings-in_200ms_ease-out]")}
               >
                 <Panel />
               </Tabs.Panel>

@@ -23,12 +23,13 @@ import { slug } from "../lib/format.ts";
 import { riskIcon, RiskIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Monogram } from "../ui/avatar.tsx";
-import { Button, Tile } from "../ui/button.tsx";
+import { Button, ExternalLinkButton, Tile } from "../ui/button.tsx";
 import { Badge, Card, Loading, LoadError, Section, Spinner } from "../ui/card.tsx";
 import { Collapsible } from "../ui/collapsible.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { Field, Input } from "../ui/field.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
+import { Page } from "../ui/page.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 import { Segmented } from "../ui/toggle-group.tsx";
@@ -70,16 +71,14 @@ export default function Connect() {
   const live = editing?.connector ? (list.find((c) => c.id === editing.connector?.id) ?? editing.connector) : null;
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="sr-only">{t.nav_connect}</h1>
+    <Page title={t.nav_connect}>
       {presets.isPending || connectors.isPending ? (
         <Loading label={t.loading} className="h-64" />
       ) : connectors.error && !connectors.data ? (
-        <LoadError error={connectors.error} onRetry={() => void connectors.refetch()} retryLabel={t.retry} />
+        <LoadError error={connectors.error} onRetry={() => void connectors.refetch()} />
       ) : (
         <>
-          {presets.error && !presets.data && <LoadError error={presets.error} onRetry={() => void presets.refetch()} retryLabel={t.retry} />}
-          <Gallery presets={presets.data ?? []} connectors={list} onPick={(preset) => setEditing({ preset, connector: null })} />
+          {/* Your own connectors first; the catalog to add more follows. */}
           {list.length > 0 && (
             <Section label={t.connectedSources} icon={<Cable aria-hidden />}>
               <ul className="flex flex-col gap-3">
@@ -96,6 +95,13 @@ export default function Connect() {
               </ul>
             </Section>
           )}
+          {presets.error && !presets.data && <LoadError error={presets.error} onRetry={() => void presets.refetch()} />}
+          <Gallery
+            presets={presets.data ?? []}
+            connectors={list}
+            onPick={(preset) => setEditing({ preset, connector: null })}
+            onOpen={(c) => setEditing({ preset: presetOf(c, presets.data ?? []) ?? null, connector: c })}
+          />
         </>
       )}
 
@@ -122,14 +128,25 @@ export default function Connect() {
           )}
         </Dialog.Content>
       </Dialog.Root>
-    </div>
+    </Page>
   );
 }
 
 /** The catalog as tappable tiles, by category, ending with "any MCP server". */
-function Gallery({ presets, connectors, onPick }: { presets: ConnectorPreset[]; connectors: ConnectorView[]; onPick: (p: ConnectorPreset | null) => void }) {
+function Gallery({
+  presets,
+  connectors,
+  onPick,
+  onOpen,
+}: {
+  presets: ConnectorPreset[];
+  connectors: ConnectorView[];
+  onPick: (p: ConnectorPreset | null) => void;
+  /** A preset that is already connected opens that connector instead of adding a duplicate. */
+  onOpen: (c: ConnectorView) => void;
+}) {
   const t = useT();
-  const hosts = useMemo(() => new Set(connectors.map((c) => urlHost(c.urlDisplay))), [connectors]);
+  const byHost = useMemo(() => new Map(connectors.map((c) => [urlHost(c.urlDisplay), c])), [connectors]);
   // The catalog's URL-less entry is "any MCP server": it gets its own tile at the end.
   const custom = presets.find((p) => !p.url) ?? null;
   const groups = CATEGORIES.map((cat) => ({ cat, items: presets.filter((p) => p.category === cat && p.url) })).filter((g) => g.items.length > 0);
@@ -140,19 +157,23 @@ function Gallery({ presets, connectors, onPick }: { presets: ConnectorPreset[]; 
         const Icon = categoryIcon[cat];
         return (
           <Section key={cat} label={t[`cat_${cat}`]} icon={<Icon aria-hidden />}>
-            <ul className="grid grid-cols-2 gap-2 md:grid-cols-3">
-              {items.map((p) => (
-                <li key={p.id} className="min-w-0">
-                  <PresetTile preset={p} connected={hosts.has(urlHost(p.url))} onClick={() => onPick(p)} />
-                </li>
-              ))}
+            <ul className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+              {items.map((p) => {
+                // Templated URLs ({owner}/{repo}) can be connected many times over; fixed ones once.
+                const existing = placeholders(p.url).length === 0 ? byHost.get(urlHost(p.url)) : undefined;
+                return (
+                  <li key={p.id} className="min-w-0">
+                    <PresetTile preset={p} connected={byHost.has(urlHost(p.url))} onClick={() => (existing ? onOpen(existing) : onPick(p))} />
+                  </li>
+                );
+              })}
             </ul>
           </Section>
         );
       })}
       <Section label={t.cat_custom} icon={<Plus aria-hidden />}>
-        <ul className="grid grid-cols-2 gap-2 md:grid-cols-3">
-          <li className="col-span-2 min-w-0 md:col-span-1">
+        <ul className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+          <li className="min-w-0 sm:col-span-2 md:col-span-1">
             <Tile onClick={() => onPick(custom)} className="border-dashed border-line-strong">
               <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-soft text-accent-text">
                 <Plus className="size-4" />
@@ -174,12 +195,12 @@ function PresetTile({ preset: p, connected, onClick }: { preset: ConnectorPreset
   const Auth = authIcon[p.auth];
   return (
     <Tile onClick={onClick}>
-      <span className="hidden shrink-0 sm:contents">
-        <Monogram text={p.label} className="size-9 rounded-lg text-xs normal-case" />
-      </span>
+      <Monogram text={p.label} className="size-9 rounded-lg text-xs normal-case" />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium">{p.label}</span>
+          <span className="truncate text-sm font-medium" title={p.label}>
+            {p.label}
+          </span>
           {connected && (
             <>
               <Check aria-hidden className="size-3.5 shrink-0 text-ok" />
@@ -187,7 +208,9 @@ function PresetTile({ preset: p, connected, onClick }: { preset: ConnectorPreset
             </>
           )}
         </span>
-        <span className="block truncate font-mono text-xs text-fg-muted">{urlHost(p.url)}</span>
+        <span className="block truncate font-mono text-xs text-fg-muted" title={urlHost(p.url)}>
+          {urlHost(p.url)}
+        </span>
       </span>
       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-subtle text-fg-muted" title={t[`auth_${p.auth}`]}>
         <Auth aria-hidden className="size-3.5" />
@@ -289,7 +312,9 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
           </span>
           <div className="min-w-0 flex-1">
             <h3 id={headingId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="truncate font-semibold">{c.label}</span>
+              <span className="truncate font-semibold" title={c.label}>
+                {c.label}
+              </span>
               {c.public && (
                 <Badge tone="warn">
                   <Users aria-hidden />
@@ -341,13 +366,13 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
             </IconButton>
             <Confirm
               trigger={
-                <IconButton label={`${t.remove}: ${c.label}`} size="icon-sm">
+                <IconButton label={`${t.delete}: ${c.label}`} size="icon-sm">
                   <Trash2 aria-hidden />
                 </IconButton>
               }
               title={t.deleteConnectorConfirm(c.label)}
               description={t.deleteConnectorHint}
-              confirmLabel={t.remove}
+              confirmLabel={t.delete}
               onConfirm={() => remove.mutateAsync(c.id).catch(notifyError)}
             />
           </div>
@@ -445,12 +470,15 @@ function ToolRow({ connector, tool, denied }: { connector: ConnectorView; tool: 
   const name = tool.title || tool.name;
   return (
     <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
-      <div className={cn("min-w-0 flex-1", denied && "opacity-60")}>
+      {/* Denied reads as struck through plus a badge, never dimmed: dimming fails text contrast. */}
+      <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <RiskIcon risk={tool.risk} t={t} />
-          <span className="min-w-0 truncate text-sm font-medium">{name}</span>
+          <span className={cn("min-w-0 truncate text-sm font-medium", denied && "line-through decoration-danger decoration-2")} title={name}>
+            {name}
+          </span>
           {tool.title && <code className="min-w-0 truncate font-mono text-xs text-fg-muted">{tool.name}</code>}
-          <Badge tone={tool.riskSource === "user" ? "accent" : tool.riskSource === "default" ? "warn" : "neutral"} className="h-5">
+          <Badge tone={tool.riskSource === "user" ? "accent" : "neutral"} className="h-5">
             {t[`rsrc_${tool.riskSource}`]}
           </Badge>
           {denied && (
@@ -698,13 +726,7 @@ function ConnectorForm({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
-        {preset?.docsUrl && (
-          <a href={preset.docsUrl} target="_blank" rel="noreferrer" className="inline-flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-accent-text hover:bg-accent-soft">
-            {t.docs}
-            <ExternalLink aria-hidden className="size-3.5" />
-            <span className="sr-only">({t.opensNewTab})</span>
-          </a>
-        )}
+        {preset?.docsUrl && <ExternalLinkButton href={preset.docsUrl}>{t.docs}</ExternalLinkButton>}
         <Button type="submit" variant="primary" className="ms-auto" disabled={save.isPending || !idValid || idTaken || !urlOk || !label.trim()}>
           {save.isPending ? <Spinner /> : editing ? <Check aria-hidden /> : <Cable aria-hidden />}
           {save.isPending ? t.connecting : editing ? t.save : t.saveAndConnect}

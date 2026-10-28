@@ -6,11 +6,13 @@ import { lazy, Suspense, useEffect, useId, useRef } from "react";
 import { useT } from "../i18n.ts";
 import { backdropClass } from "../ui/dialog.tsx";
 import { Loading } from "../ui/card.tsx";
+import { LoadBoundary } from "../shell/offline.tsx";
 import { settingsOpener, useSettingsRoute } from "./route.ts";
 
 const SettingsBody = lazy(() => import("./body.tsx"));
 
-const PHONE_QUERY = "(max-width: 639px)";
+/** Below this the side-by-side layout gets cramped (tablets, 200% zoom): drill in like on a phone. */
+const PHONE_QUERY = "(max-width: 899px)";
 
 export function SettingsHost() {
   const t = useT();
@@ -23,7 +25,8 @@ export function SettingsHost() {
 
   // Fetch the panels while idle so the first open has no spinner.
   useEffect(() => {
-    const id = setTimeout(() => void import("./body.tsx"), 1500);
+    // (A failed prefetch is retried when the dialog opens, and reported there.)
+    const id = setTimeout(() => void import("./body.tsx").catch(() => {}), 1500);
     return () => clearTimeout(id);
   }, []);
 
@@ -49,9 +52,11 @@ export function SettingsHost() {
   const finalFocus = () => settingsOpener() ?? true;
 
   const body = (
-    <Suspense fallback={<Loading label={t.loading} className="h-full" />}>
-      <SettingsBody phone={phone} titleId={titleId} />
-    </Suspense>
+    <LoadBoundary>
+      <Suspense fallback={<Loading label={t.loading} className="h-full" />}>
+        <SettingsBody phone={phone} titleId={titleId} />
+      </Suspense>
+    </LoadBoundary>
   );
 
   if (phone) {
@@ -85,7 +90,7 @@ export function SettingsHost() {
             aria-labelledby={titleId}
             initialFocus={initialFocus}
             finalFocus={finalFocus}
-            className="flex h-[40rem] max-h-[90vh] w-[55rem] max-w-full overflow-hidden rounded-2xl border border-line bg-surface text-fg shadow-2xl outline-none transition-[scale,opacity] duration-150 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0"
+            className="flex h-[40rem] max-h-[90vh] w-full max-w-[55rem] overflow-hidden rounded-2xl border border-line bg-surface text-fg shadow-2xl outline-none transition-[scale,opacity] duration-150 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0"
           >
             {body}
           </Dialog.Popup>
