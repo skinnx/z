@@ -13,6 +13,7 @@ import { Menu, MenuItem, MenuLinkItem, MenuSeparator } from "../ui/menu.tsx";
 import { CommandMenu, commandMenuOpen } from "./command-menu.tsx";
 import { NoticeBell, NoticeTab } from "./notices.tsx";
 import { NAV } from "./nav.ts";
+import { OfflineBar } from "./offline.tsx";
 import { TokenDialog } from "./token-dialog.tsx";
 import { SettingsHost } from "../settings/host.tsx";
 import { useSettingsRoute } from "../settings/route.ts";
@@ -102,12 +103,13 @@ export function Shell() {
           <Button variant="ghost" className="w-full justify-start px-3 text-fg-muted" onClick={() => commandMenuOpen.set(true)}>
             <Command aria-hidden />
             <span className="min-w-0 flex-1 truncate text-start">{t.commandMenu}</span>
-            <Kbd>⌘K</Kbd>
+            <Kbd>{isMac ? "⌘K" : "Ctrl K"}</Kbd>
           </Button>
         </div>
       </aside>
 
       <main id="main" tabIndex={-1} className={cn("min-w-0 flex-1 outline-none", !isChat && "pb-24 md:pb-0")}>
+        <OfflineBar />
         <Suspense
           fallback={
             <div className="grid h-64 place-items-center text-fg-muted" role="status">

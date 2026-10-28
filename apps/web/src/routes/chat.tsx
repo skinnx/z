@@ -63,6 +63,7 @@ import { Empty, Spinner } from "../ui/card.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { ScrollArea } from "../ui/scroll-area.tsx";
+import { Tooltip } from "../ui/tooltip.tsx";
 import { notifyError } from "../ui/toast.tsx";
 
 const newId = () => crypto.randomUUID();
@@ -244,9 +245,11 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
         <IconButton label={t.openThreads} onClick={onOpenThreads}>
           <ListCollapse aria-hidden />
         </IconButton>
-        <Link to="/chat" aria-label={t.newChat} title={t.newChat} className={buttonClass("ghost", "icon", "ms-auto")}>
-          <MessageSquarePlus aria-hidden />
-        </Link>
+        <Tooltip label={t.newChat}>
+          <Link to="/chat" aria-label={t.newChat} className={buttonClass("ghost", "icon", "ms-auto")}>
+            <MessageSquarePlus aria-hidden />
+          </Link>
+        </Tooltip>
       </div>
 
       <Conversation role="log" aria-live="off" aria-label={t.nav_chat} aria-busy={busy}>
@@ -617,7 +620,7 @@ function ModelPicker({ value, onChange }: { value: string | null; onChange: (val
       trigger={
         <PromptInputButton aria-label={`${t.model}: ${current}`} className="max-w-56 text-fg-muted">
           <Cpu aria-hidden />
-          <span className="truncate font-mono text-xs">{current}</span>
+          <span className="truncate text-xs">{current}</span>
           <ChevronsUpDown aria-hidden />
         </PromptInputButton>
       }
@@ -633,7 +636,7 @@ function ModelPicker({ value, onChange }: { value: string | null; onChange: (val
                   key={item.value || "default"}
                   item={item}
                   selected={(value ?? "") === item.value}
-                  className="font-mono text-[0.8125rem]"
+                  className="text-[0.8125rem]"
                   onSelect={(v) => {
                     onChange(v || null);
                     setOpen(false);

@@ -36,9 +36,10 @@ export function RadioCards<V extends string>({
           )}
         >
           {o.icon}
+          {/* Titles wrap rather than truncate: "OpenAI-compatible" and Vietnamese labels must stay readable. */}
           <span className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-medium">{o.title}</span>
-            {o.meta && <span className="truncate text-xs text-fg-muted">{o.meta}</span>}
+            <span className="text-sm leading-snug font-medium [overflow-wrap:anywhere]">{o.title}</span>
+            {o.meta && <span className="text-xs leading-snug text-fg-muted [overflow-wrap:anywhere]">{o.meta}</span>}
           </span>
         </Radio.Root>
       ))}

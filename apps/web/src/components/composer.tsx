@@ -1,5 +1,5 @@
 import { ArrowUp, CalendarClock, CalendarDays, Radar, Repeat, Terminal, Timer, Zap } from "lucide-react";
-import { useId, useRef, useState, type RefObject } from "react";
+import { useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useNavigate } from "react-router";
 import { useCreateTask } from "../api/tasks.ts";
 import type { Skill } from "@z/core";
@@ -43,6 +43,13 @@ export function Composer({
   const needsTime = watch ? every === "daily" : mode === "daily" || mode === "weekdays";
   const cronError = needsCron && cron.trim() !== "" && !isValidCron(cron) ? t.cronInvalid : undefined;
   const canSubmit = (text.trim().length > 0 || skill !== null) && !cronError && !(needsCron && !cron.trim()) && !create.isPending;
+  const modes: { value: Mode; label: string; icon: ReactNode }[] = [
+    { value: "once", label: t.sched_once, icon: <Zap aria-hidden /> },
+    { value: "daily", label: t.sched_daily, icon: <Repeat aria-hidden /> },
+    { value: "weekdays", label: t.sched_weekdays, icon: <CalendarDays aria-hidden /> },
+    { value: "custom", label: t.sched_custom, icon: <Terminal aria-hidden /> },
+    { value: "watch", label: t.sched_watch, icon: <Radar aria-hidden /> },
+  ];
 
   function submit() {
     if (!canSubmit) return;
@@ -90,20 +97,9 @@ export function Composer({
         {t.newlineHint}
       </span>
       <PromptInputFooter className="flex-wrap border-t border-line px-3 py-2">
-        <Segmented<Mode>
-          label={t.schedule}
-          value={mode}
-          onChange={setMode}
-          size="sm"
-          className="max-sm:w-full"
-          options={[
-            { value: "once", label: t.sched_once, icon: <Zap aria-hidden className="max-sm:hidden" /> },
-            { value: "daily", label: t.sched_daily, icon: <Repeat aria-hidden className="max-sm:hidden" /> },
-            { value: "weekdays", label: t.sched_weekdays, icon: <CalendarDays aria-hidden className="max-sm:hidden" /> },
-            { value: "custom", label: t.sched_custom, icon: <Terminal aria-hidden className="max-sm:hidden" /> },
-            { value: "watch", label: t.sched_watch, icon: <Radar aria-hidden className="max-sm:hidden" /> },
-          ]}
-        />
+        {/* Five segments don't fit a phone (least of all in Vietnamese): a select there instead. */}
+        <Segmented<Mode> label={t.schedule} value={mode} onChange={setMode} size="sm" className="max-sm:hidden" options={modes} />
+        <Select<Mode> aria-label={t.schedule} value={mode} onChange={setMode} className="h-8 w-auto min-w-36 flex-1 text-sm sm:hidden" options={modes} />
         {watch && (
           <Select<WatchEvery>
             aria-label={t.watchEvery}

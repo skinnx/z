@@ -29,7 +29,8 @@ export function Segmented<V extends string>({
         const next = v[0];
         if (next !== undefined) onChange(next as V);
       }}
-      className={cn("inline-flex max-w-full gap-0.5 rounded-lg border border-line bg-subtle p-0.5", className)}
+      // Segments never shrink under their label (they used to overlap); short of room, they wrap.
+      className={cn("inline-flex max-w-full flex-wrap gap-0.5 rounded-lg border border-line bg-subtle p-0.5", className)}
     >
       {options.map((o) => (
         <Toggle
@@ -37,7 +38,7 @@ export function Segmented<V extends string>({
           value={o.value}
           aria-label={o.ariaLabel}
           className={cn(
-            "inline-flex min-w-0 flex-1 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 font-medium text-fg-muted transition-colors [&_svg]:size-4 [&_svg]:shrink-0",
+            "inline-flex flex-1 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 font-medium text-fg-muted transition-colors [&_svg]:size-4 [&_svg]:shrink-0",
             size === "sm" ? "h-7 text-xs" : "h-8 text-sm",
             "hover:text-fg data-pressed:bg-surface data-pressed:text-fg data-pressed:shadow-sm data-pressed:ring-1 data-pressed:ring-line",
           )}

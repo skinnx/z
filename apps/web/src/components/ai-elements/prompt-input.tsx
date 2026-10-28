@@ -27,7 +27,7 @@ export type PromptInputProps = Omit<ComponentProps<"form">, "onSubmit"> & {
 export const PromptInput = ({ className, onSubmit, children, ...props }: PromptInputProps) => (
   <form
     className={cn(
-      "w-full overflow-hidden rounded-2xl border border-line bg-surface shadow-sm transition-colors focus-within:border-line-strong",
+      "w-full overflow-hidden rounded-2xl border border-line bg-surface shadow-sm transition-colors has-[textarea:focus-visible]:border-accent has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:-outline-offset-1 has-[textarea:focus-visible]:outline-accent",
       className,
     )}
     onSubmit={(event) => {

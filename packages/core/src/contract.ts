@@ -399,7 +399,7 @@ export type PluginManifest = {
   description: string;
   tools: { name: string; description: string; risk: Risk; defaultPolicy?: "ask" | "allow" }[];
   /** Settings keys the plugin reads, shown as a form in the UI. */
-  settings: { key: string; label: string; secret: boolean; required: boolean }[];
+  settings: { key: string; label: string; secret: boolean; required: boolean; multiline?: boolean }[];
   briefing: boolean;
   enabled: boolean;
 };
@@ -450,6 +450,11 @@ export type Notice = {
   approvalId?: string;
   /** Present for `question`: simple choices become buttons on push and channels. */
   question?: NoticeQuestion;
+  /**
+   * Present for `task` notices: how the run ended (`done`, `failed`, `review`, `paused`, `interrupted`),
+   * so the app can show the right icon and word the title in the owner's language.
+   */
+  status?: TaskStatus;
   read: boolean;
   createdAt: string;
 };

@@ -3,7 +3,11 @@ import { ApiError } from "./client.ts";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
+    // Always ask the server: when it (or the network) is down the request fails as "offline" and the
+    // screen says so, instead of pausing in a spinner until the browser reports it is back online.
+    mutations: { networkMode: "always" },
     queries: {
+      networkMode: "always",
       staleTime: 15_000,
       retry: (count, error) => !(error instanceof ApiError && error.status >= 400 && error.status < 500) && count < 2,
     },

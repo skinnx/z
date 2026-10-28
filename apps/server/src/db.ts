@@ -352,6 +352,13 @@ const MIGRATIONS: Migration[] = [
   `,
   },
   // ─── End delivery & missed runs ───────────────────────────────────────────
+  // ─── Task notices carry how the run ended (Notice.status) ─────────────────
+  {
+    id: "0015-notice-status",
+    sql: `
+  ALTER TABLE notices ADD COLUMN status TEXT;       -- TaskStatus, task notices only
+  `,
+  },
   // ─── Codex CLI provider: optional path to the `codex` binary ──────────────
   {
     id: "0016-codex-cli",

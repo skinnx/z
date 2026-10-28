@@ -203,7 +203,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
         const repeated = hash === store.tasks.resultHash(task.id);
         store.tasks.setResultHash(task.id, hash);
         if (repeated && !recovered) return step(task.id, "Same result as the last run: no notice.");
-        notify({ kind: "task", title: `Done · ${titleOf(task)}`, body: clip(patch.result, 300), path });
+        notify({ kind: "task", status: "done", title: `Done · ${titleOf(task)}`, body: clip(patch.result, 300), path });
         return;
       }
       const failures = (store.tasks.get(task.id)?.failures ?? 0) + 1;
@@ -212,6 +212,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
         step(task.id, `Paused after ${failures} failed runs in a row.`);
         notify({
           kind: "task",
+          status: "paused",
           title: `Paused · ${titleOf(task)}`,
           body: clip(`Failed ${failures} runs in a row, so z stopped running it. Last error: ${patch.error ?? "unknown"}. Run it again once fixed.`, 400),
           path,
@@ -219,13 +220,14 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
         return;
       }
       update(task.id, { ...patch, status: "scheduled", failures, nextRunAt: nextRun(task.schedule) });
-      if (failures === 1) notify({ kind: "task", title: `Failing · ${titleOf(task)}`, body: clip(patch.error || "", 300), path });
+      if (failures === 1) notify({ kind: "task", status: "failed", title: `Failing · ${titleOf(task)}`, body: clip(patch.error || "", 300), path });
       return;
     }
     update(task.id, { ...patch, status: status === "done" ? "review" : "failed", nextRunAt: null });
     if (quiet && status === "done") return;
     notify({
       kind: "task",
+      status: status === "done" ? "review" : "failed",
       title: `${status === "done" ? "Ready for review" : "Failed"} · ${titleOf(task)}`,
       body: clip((status === "done" ? patch.result : patch.error) || "", 300),
       path,
@@ -325,7 +327,7 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
     step(task.id, error);
     update(task.id, { status: "interrupted", error, nextRunAt: null });
     console.log(`[z:tasks] ${task.id.slice(0, 8)} interrupted mid-action (${plan.calls.map((c) => c.tool).join(", ")}): not re-run`);
-    notify({ kind: "task", title: `Interrupted · ${titleOf(task)}`, body: clip(error, 400), path: `/tasks?task=${task.id}` });
+    notify({ kind: "task", status: "interrupted", title: `Interrupted · ${titleOf(task)}`, body: clip(error, 400), path: `/tasks?task=${task.id}` });
   }
 
   return {
