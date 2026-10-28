@@ -18,6 +18,10 @@ type Common = {
   /** Allow choosing the typed text when it isn't in the list. */
   allowCustom?: boolean;
   disabled?: boolean;
+  /** How an item reads in the list and the field (default: the item itself). */
+  label?: (item: string) => string;
+  /** Own matching (default: Base UI's, on the label). */
+  filter?: (item: string, query: string) => boolean;
 };
 
 /** Filterable single choice over plain strings. */
@@ -60,6 +64,8 @@ function ComboboxImpl({
   allowCustom,
   disabled,
   leading,
+  label,
+  filter,
 }: Common & { value: string | null; onChange: (value: string | null) => void; leading?: React.ReactNode }) {
   const [query, setQuery] = useState("");
   const custom = allowCustom && query.trim() && !items.includes(query.trim()) ? query.trim() : null;
@@ -71,6 +77,8 @@ function ComboboxImpl({
       onValueChange={(v) => onChange(v)}
       onInputValueChange={setQuery}
       limit={200}
+      {...(label ? { itemToStringLabel: label } : {})}
+      {...(filter ? { filter: (item: string, q: string) => item === custom || filter(item, q) } : {})}
       disabled={disabled}
       autoHighlight
     >
@@ -97,7 +105,7 @@ function ComboboxImpl({
               {(item: string) => (
                 <BaseCombobox.Item key={item} value={item} className={cn(itemClass, mono && "font-mono text-[0.8125rem]")}>
                   {item === custom ? <Plus aria-hidden className="text-fg-muted" /> : null}
-                  <span className="min-w-0 flex-1 truncate">{item}</span>
+                  <span className="min-w-0 flex-1 truncate">{label && item !== custom ? label(item) : item}</span>
                   <BaseCombobox.ItemIndicator>
                     <Check aria-hidden />
                   </BaseCombobox.ItemIndicator>

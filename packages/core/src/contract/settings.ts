@@ -7,6 +7,16 @@ export const Settings = z.object({
   /** Name the bot answers to in channels, e.g. `z` for "@z is this true?". */
   handle: z.string().min(1).max(32).default("z"),
   timezone: z.string().default("UTC"),
+  /**
+   * Whether `timezone` was ever chosen (by the owner, or once from the first browser that opened z).
+   * The server sets it on any PUT that names `timezone`; while false the web app fills in the browser's.
+   */
+  timezoneSet: z.boolean().default(false),
+  /**
+   * The owner's language, for text z writes away from the web app. Null until the web app reports the
+   * first browser's; a browser that has its own choice keeps it, one without takes this.
+   */
+  language: z.enum(["en", "vi"]).nullable().default(null),
   /** Cron for the daily briefing in `timezone`. */
   briefingCron: z.string().default("0 7 * * *"),
   persona: z.string().max(4000).default(""),

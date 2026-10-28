@@ -7,6 +7,9 @@ import { PromptInput, PromptInputFooter, PromptInputSubmit } from "./ai-elements
 import { SkillTextarea, withSkill } from "./skill-menu.tsx";
 import { useT } from "../i18n.ts";
 import { isValidCron, toCron, watchCron, type Preset, type WatchEvery } from "../lib/cron.ts";
+import { dateTime } from "../lib/format.ts";
+import { withZone, zoneHint } from "../lib/timezones.ts";
+import { useSettings } from "../api/settings.ts";
 import { Field, Input } from "../ui/field.tsx";
 import { Select } from "../ui/select.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
@@ -37,7 +40,10 @@ export function Composer({
   const [time, setTime] = useState("08:00");
   const [cron, setCron] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
+  useSettings(); // the zone named next to the time comes from settings: re-render once they load
+  const zone = zoneHint(true);
   const hintId = useId();
+  const zoneId = useId();
   const watch = mode === "watch";
   const needsCron = watch ? every === "custom" : mode === "custom";
   const needsTime = watch ? every === "daily" : mode === "daily" || mode === "weekdays";
@@ -60,7 +66,8 @@ export function Composer({
         onSuccess: (task) => {
           setText("");
           setSkill(null);
-          notify("success", watch ? t.watchStarted : schedule ? t.taskScheduled : t.taskQueued, task.title, {
+          const when = schedule && task.nextRunAt ? ` · ${t.nextRunAt(withZone(dateTime(task.nextRunAt)))}` : "";
+          notify("success", watch ? t.watchStarted : schedule ? t.taskScheduled : t.taskQueued, `${task.title}${when}`, {
             label: t.showDetails,
             onClick: () => navigate(`/tasks?task=${encodeURIComponent(task.id)}`),
           });
@@ -118,7 +125,12 @@ export function Composer({
           <label className="flex items-center gap-1.5 text-sm text-fg-muted">
             <CalendarClock aria-hidden className="size-4" />
             <span className="sr-only">{t.timeOfDay}</span>
-            <Input type="time" value={time} onValueChange={setTime} className="h-8 w-28 text-sm" />
+            <Input type="time" value={time} onValueChange={setTime} aria-describedby={zone ? zoneId : undefined} className="h-8 w-28 text-sm" />
+            {zone && (
+              <span id={zoneId} className="text-xs">
+                {t.inZone(zone)}
+              </span>
+            )}
           </label>
         )}
         {needsCron && (

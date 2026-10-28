@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import type { Diagnostics, SetupChecklist, SetupRow } from "@z/core";
+import type { Diagnostics, ProviderSaveResult, SetupChecklist, SetupRow } from "@z/core";
 import { Hono } from "hono";
 import type { Services } from "../src/app.ts";
 import { createBriefings } from "../src/briefings.ts";
@@ -27,7 +27,9 @@ import { cleanup, tempDir } from "./harness.ts";
 
 const dirs: string[] = [];
 const servers: Server[] = [];
+const stops: (() => void)[] = [];
 afterEach(() => {
+  for (const stop of stops.splice(0)) stop();
   for (const s of servers.splice(0)) s.close();
   for (const d of dirs.splice(0)) cleanup(d);
   for (const name of ["Z_TOKEN", "Z_HOST", "Z_PUBLIC_URL"]) delete process.env[name];
@@ -50,7 +52,9 @@ function boot(envVars: Record<string, string> = {}) {
   const push = createPush(rt);
   const channels = createChannels(rt, tasks, pairing);
   const setup = createSetup(rt, channels, connectors, push);
-  const services: Services = { rt, tasks, briefings: createBriefings(rt), channels, push, pairing, connectors, setup };
+  const briefings = createBriefings(rt);
+  stops.push(() => briefings.stop()); // a timezone change arms the briefing's cron
+  const services: Services = { rt, tasks, briefings, channels, push, pairing, connectors, setup };
   const app = new Hono();
   app.route("/api", configRoutes(services));
   app.route("/api", setupRoutes(services));
@@ -65,14 +69,14 @@ function boot(envVars: Record<string, string> = {}) {
 }
 
 /** A local OpenAI-compatible endpoint answering with `reply(authorization)`. */
-async function fakeProvider(reply: (key: string) => { status: number; body: unknown; headers?: Record<string, string> }) {
+async function fakeProvider(reply: (key: string, path: string) => { status: number; body: unknown; headers?: Record<string, string> }) {
   let calls = 0;
   const server = createServer((req, res) => {
     calls++;
     const key = (req.headers.authorization ?? "").replace(/^Bearer /, "");
     req.resume();
     req.on("end", () => {
-      const r = reply(key);
+      const r = reply(key, req.url ?? "");
       res.writeHead(r.status, { "content-type": "application/json", ...r.headers });
       res.end(JSON.stringify(r.body));
     });
@@ -243,4 +247,51 @@ test("diagnostics: no secret or URL path of anything configured", async () => {
     assert.ok(!(await z.call("GET", "/setup")).text.includes(secret), `setup leaked ${secret}`);
     assert.ok(!(await z.call("GET", "/providers")).text.includes(secret), `providers leaked ${secret}`);
   }
+});
+
+test("providers: saving with ?check=1 tests the key and fills every empty lane, fast with the quickest model", async () => {
+  const z = boot();
+  const fake = await fakeProvider((key, path) =>
+    key !== "good" ? badKey(key) : path.endsWith("/models") ? { status: 200, body: { data: [{ id: "big-4" }, { id: "big-4-mini" }, { id: "text-embedding-3" }] } } : pong(),
+  );
+  await z.call("PUT", "/routing", { briefing: ["elsewhere:m"] });
+
+  // A rejected key saves, says why, and fills nothing.
+  const bad = JSON.parse((await z.call("PUT", "/providers/p1?check=1", { kind: "openai-compatible", label: "P1", baseURL: fake.baseURL, apiKey: "nope-REJECTEDKEY", models: ["m"] })).text) as ProviderSaveResult;
+  assert.equal(bad.check?.ok, false);
+  assert.match(bad.check?.error ?? "", /401/);
+  assert.ok(!(bad.check?.error ?? "").includes("REJECTEDKEY"));
+  assert.deepEqual(bad.filledLanes, []);
+  assert.deepEqual(JSON.parse((await z.call("GET", "/routing")).text).chat, []);
+
+  // No models listed: the live list gives a main and a quick one; the owner's briefing lane is kept.
+  const res = await z.call("PUT", "/providers/p1?check=1", { kind: "openai-compatible", label: "P1", baseURL: fake.baseURL, apiKey: "good", models: [] });
+  const ok = JSON.parse(res.text) as ProviderSaveResult;
+  assert.equal(ok.check?.ok, true, res.text);
+  assert.deepEqual(ok.models, ["big-4", "big-4-mini"]);
+  assert.deepEqual(ok.filledLanes, ["chat", "agent", "bot", "fast"]);
+  const routing = JSON.parse((await z.call("GET", "/routing")).text);
+  assert.deepEqual(routing.chat, ["p1:big-4", "p1:big-4-mini"]);
+  assert.deepEqual(routing.fast, ["p1:big-4-mini", "p1:big-4"]);
+  assert.deepEqual(routing.briefing, ["elsewhere:m"]);
+  const list = JSON.parse((await z.call("GET", "/setup")).text) as SetupChecklist;
+  assert.equal(row(list, "chat_model").state, "ready");
+});
+
+test("providers: a rate limited check still fills the lanes (it says nothing against the key)", async () => {
+  const z = boot();
+  const fake = await fakeProvider(() => ({ status: 429, body: { error: { message: "slow down" } }, headers: { "retry-after": "30" } }));
+  const res = JSON.parse((await z.call("PUT", "/providers/free?check=1", { kind: "openai-compatible", label: "Free", baseURL: fake.baseURL, models: ["openai-fast"] })).text) as ProviderSaveResult;
+  assert.equal(res.check?.rateLimited, true);
+  assert.deepEqual(res.filledLanes, ["chat", "agent", "briefing", "bot", "fast"]);
+  assert.equal(fake.calls(), 1);
+});
+
+test("settings: naming a timezone marks it chosen", async () => {
+  const z = boot();
+  assert.equal(JSON.parse((await z.call("GET", "/settings")).text).timezoneSet, false);
+  assert.equal(JSON.parse((await z.call("PUT", "/settings", { handle: "zed" })).text).timezoneSet, false);
+  const next = JSON.parse((await z.call("PUT", "/settings", { timezone: "Asia/Ho_Chi_Minh" })).text);
+  assert.equal(next.timezone, "Asia/Ho_Chi_Minh");
+  assert.equal(next.timezoneSet, true);
 });

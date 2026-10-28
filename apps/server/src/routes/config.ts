@@ -1,11 +1,29 @@
 /** Settings, providers, routing, plugins and adapters. */
-import { listModels, describeError, ProviderInput, Routing, Settings, testProvider, type AdapterManifest, type ProviderConfig, type ProviderView } from "@z/core";
+import {
+  describeError,
+  fillEmptyLanes,
+  listModels,
+  pickDefaultModels,
+  ProviderInput,
+  Routing,
+  Settings,
+  testProvider,
+  type AdapterManifest,
+  type Lane,
+  type ProviderConfig,
+  type ProviderSaveResult,
+  type ProviderTestResult,
+  type ProviderView,
+} from "@z/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Services } from "../app.ts";
 import { badRequest, body, notFound, validate } from "../http.ts";
 import { redactJson } from "../secrets.ts";
 import { isValidCron, isValidTimezone } from "../schedule.ts";
+
+/** The check on save is a key check, not a benchmark: a slow free tier is "not checked", not broken. */
+const SAVE_CHECK_TIMEOUT_MS = 12_000;
 
 const PluginUpdate = z.object({
   enabled: z.boolean(),
@@ -36,7 +54,8 @@ export function configRoutes({ rt, tasks, briefings, channels, setup }: Services
     const current = store.settings.get();
     // The owner is set by pairing only (POST /api/owner/link, DELETE /api/owner).
     const { owner: _readOnly, ...patch } = await body(c, z.record(z.string(), z.unknown()));
-    const next = validate(Settings, { ...current, ...patch });
+    // Naming a timezone is choosing one: the web app stops filling in the browser's.
+    const next = validate(Settings, { ...current, ...patch, ...("timezone" in patch ? { timezoneSet: true } : {}) });
     if (!isValidTimezone(next.timezone)) throw badRequest(`timezone: unknown time zone "${next.timezone}"`);
     if (!isValidCron(next.briefingCron, next.timezone)) throw badRequest(`briefingCron: invalid cron expression`);
     store.settings.set(next);
@@ -62,7 +81,34 @@ export function configRoutes({ rt, tasks, briefings, channels, setup }: Services
     // A new key, endpoint or headers make earlier live tests meaningless.
     const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
     if (!before || apiKey !== undefined || before.kind !== input.kind || !same(before.baseURL, input.baseURL) || !same(before.headers, input.headers) || !same(before.command, input.command)) setup.forget(id);
-    return c.json(providerView(provider(id)));
+    if (c.req.query("check") === undefined || !input.enabled) return c.json(providerView(provider(id)));
+
+    // ─── Check on save: models, a live answer, then the empty lanes ───
+    if (!input.models.length && input.kind !== "codex-cli") {
+      let listed: string[] = [];
+      try {
+        listed = await listModels(provider(id));
+      } catch {} // the test below says why
+      const picks = pickDefaultModels(listed, false);
+      if (picks) store.providers.upsert({ ...input, models: [...new Set([picks.main, picks.fast])] }, undefined);
+    }
+    const saved = provider(id);
+    const check: ProviderTestResult = await testProvider(saved, fetch, SAVE_CHECK_TIMEOUT_MS);
+    setup.record(id, check);
+    let filledLanes: Lane[] = [];
+    // A rejected key or unknown model fills nothing; a rate limit or a slow answer says nothing against it.
+    if (check.ok || check.rateLimited || check.timedOut) {
+      // The owner's order wins; the model that answered stands in when none is listed (Codex's default).
+      const picks = pickDefaultModels(saved.models.length ? saved.models : check.model ? [check.model] : [], true);
+      if (picks) {
+        const filled = fillEmptyLanes(store.routing.get(), id, picks);
+        if (filled.filled.length) store.routing.set(filled.routing);
+        filledLanes = filled.filled;
+      }
+    }
+    // Some providers quote the key back in their error message.
+    const result: ProviderSaveResult = { ...providerView(provider(id)), check: redactJson(check), filledLanes };
+    return c.json(result);
   });
 
   app.delete("/providers/:id", (c) => {

@@ -1,25 +1,29 @@
-import type { Lane, ModelRef, ProviderInput, ProviderView, Routing } from "@z/core";
-import { ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, Gift, LockKeyhole, Pencil, Plus, Route, Trash2, X, Zap } from "lucide-react";
+import type { Lane, ModelRef, ProviderInput, ProviderSaveResult, ProviderView, Routing } from "@z/core";
+import { ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, CircleDashed, Gift, LockKeyhole, Pencil, Plus, Route, Trash2, X, Zap } from "lucide-react";
 import { Form } from "@base-ui/react/form";
 import { useEffect, useId, useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import {
+  checkFailed,
   LANES,
   useDeleteProvider,
   useModelRefs,
+  useProviderCheck,
   useProviderModels,
   useProviders,
   useRouting,
+  useSaveCheckedProvider,
   useSaveProvider,
   useSaveRouting,
   useTestProvider,
   type ProviderTest,
 } from "../api/providers.ts";
+import { useSetup } from "../api/setup.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { compact, slug, usd } from "../lib/format.ts";
 import { laneIcon } from "../lib/icons.tsx";
-import { LLM7_ROUTING, PRESETS, presetFor, splitRef, type ProviderPreset } from "../lib/models.ts";
+import { PRESETS, presetFor, splitRef, type ProviderPreset } from "../lib/models.ts";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Monogram } from "../ui/avatar.tsx";
 import { Button, ExternalLinkButton, Tile } from "../ui/button.tsx";
@@ -68,7 +72,7 @@ export default function Models() {
   return (
     <Page title={t.nav_models}>
       {list.length === 0 ? (
-        <FirstRun />
+        <FirstRun onNeedsFix={setEditing} />
       ) : (
         <>
           <Section
@@ -107,49 +111,78 @@ export default function Models() {
   );
 }
 
-/** No providers yet: one tap to a working setup, or bring your own key right here. */
-function FirstRun() {
+/**
+ * After a checked save: a provider that answered while setup was blocking sends the owner to Today;
+ * otherwise they stay with the result shown inline. Returns whether the check failed outright.
+ */
+function useAfterCheck() {
   const t = useT();
-  const save = useSaveProvider();
-  const routing = useSaveRouting();
-  const llm7 = PRESETS.find((p) => p.key === "llm7")!;
+  const navigate = useNavigate();
+  const setup = useSetup();
+  const blocking = setup.data?.rows.find((r) => r.id === "chat_model")?.state !== "ready";
+  return (p: ProviderSaveResult, wasBlocking = blocking): boolean => {
+    const c = p.check;
+    if (c?.ok && wasBlocking && p.filledLanes?.length) {
+      notify("success", t.providerReady(p.label), t.testOk(c.latencyMs ?? 0, c.model ?? ""));
+      void navigate("/");
+    } else if (c?.ok) notify("success", t.saved, t.testOk(c.latencyMs ?? 0, c.model ?? ""));
+    else if (c?.rateLimited || c?.timedOut) notify("success", t.saved, c.rateLimited ? t.checkRateLimited(p.label) : t.checkTimedOut(p.label));
+    else if (!c) notify("success", t.saved, p.label);
+    return checkFailed(c);
+  };
+}
 
-  const startFree = () =>
+/** No providers yet: one tap to a free provider that works, or bring your own key right here. */
+function FirstRun({ onNeedsFix }: { onNeedsFix: (p: ProviderView) => void }) {
+  const t = useT();
+  const save = useSaveCheckedProvider();
+  const after = useAfterCheck();
+  const free = PRESETS.filter((p) => p.free);
+  const [picked, setPicked] = useState<string | null>(null);
+
+  const start = (preset: ProviderPreset) => {
+    setPicked(preset.key);
     save.mutate(
-      { id: llm7.id, kind: llm7.kind, label: llm7.label, baseURL: llm7.baseURL, models: llm7.models ?? [], enabled: true },
-      {
-        onSuccess: () =>
-          routing.mutate(LLM7_ROUTING, {
-            onSuccess: () => notify("success", t.saved, "LLM7"),
-            onError: notifyError,
-          }),
-        onError: notifyError,
-      },
+      { id: preset.id, kind: preset.kind, label: preset.label, baseURL: preset.baseURL, models: preset.models ?? [], enabled: true },
+      { onSuccess: (p) => after(p, true) && onNeedsFix(p), onError: notifyError },
     );
+  };
 
   return (
     <div className="flex flex-col gap-6">
-      <Tile
-        onClick={startFree}
-        disabled={save.isPending || routing.isPending}
-        className="gap-4! rounded-(--radius-card)! border-accent/50! bg-accent-soft! p-5! hover:border-accent!"
-      >
-        <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-accent text-accent-fg">
-          {save.isPending || routing.isPending ? <Spinner /> : <Zap aria-hidden className="size-6" />}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-base font-semibold">{t.startFree}</span>
-          <span className="block text-sm text-fg-muted">{t.startFreeMeta}</span>
-        </span>
-        <ArrowUp aria-hidden className="size-5 shrink-0 rotate-45 text-accent-text rtl:-rotate-45" />
-      </Tile>
+      <section aria-labelledby="start-free" className="flex flex-col gap-3 rounded-(--radius-card) border border-accent/50 bg-accent-soft p-4 sm:p-5">
+        <div>
+          <h2 id="start-free" className="flex items-center gap-2 text-base font-semibold">
+            <Zap aria-hidden className="size-5 text-accent-text" />
+            {t.startFree}
+          </h2>
+          <p className="mt-1 text-sm text-fg-muted">{t.startFreeMeta}</p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {free.map((preset) => {
+            const busy = save.isPending && picked === preset.key;
+            return (
+              <Tile key={preset.key} onClick={() => start(preset)} disabled={save.isPending} aria-busy={busy || undefined} className="bg-surface!">
+                <span aria-hidden className="contents">
+                  <Monogram text={preset.mark} className="normal-case" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold">{preset.label}</span>
+                  <span className="block text-xs text-fg-muted">{busy ? t.checkingProvider : t[`freeMeta_${preset.key as "llm7" | "pollinations"}`]}</span>
+                </span>
+                {busy ? <Spinner /> : <ArrowUp aria-hidden className="size-5 shrink-0 rotate-45 text-accent-text rtl:-rotate-45" />}
+              </Tile>
+            );
+          })}
+        </div>
+      </section>
       <div className="flex items-center gap-3 text-xs text-fg-muted">
         <span className="h-px flex-1 bg-line" />
         {t.orBringKey}
         <span className="h-px flex-1 bg-line" />
       </div>
       <Card className="p-5">
-        <ProviderForm provider={null} defaultPreset="openai" onSaved={() => {}} onDeleted={() => {}} />
+        <ProviderForm provider={null} defaultPreset="openai" presets={PRESETS.filter((p) => !p.free)} firstRun onSaved={onNeedsFix} onDeleted={() => {}} />
       </Card>
     </div>
   );
@@ -159,6 +192,7 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
   const t = useT();
   const test = useTestProvider();
   const save = useSaveProvider();
+  const check = useProviderCheck(p.id);
   const preset = presetFor(p.kind, p.baseURL);
   const budget = p.monthlyBudgetUsd;
 
@@ -178,6 +212,12 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
                 {t.free}
               </Badge>
             )}
+            {checkFailed(check) && (
+              <Badge tone="danger">
+                <CircleAlert aria-hidden />
+                {/^\s*40[13]\b/.test(check?.error ?? "") ? t.keyRejected : t.notAnswering}
+              </Badge>
+            )}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted">
             <span className="flex items-center gap-1">
@@ -195,12 +235,11 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
         ) : (
           <p className="flex justify-between text-xs text-fg-muted">
             <span>{t.thisMonth}</span>
-            <span className="text-fg tabular-nums">
-              {usd(p.usage.monthUsd)} · {t.tokens(compact(p.usage.monthTokens))}
-            </span>
+            {/* Free providers bill nothing: the rough per-token estimate would only confuse. */}
+            <span className="text-fg tabular-nums">{preset.free ? t.tokens(compact(p.usage.monthTokens)) : `${usd(p.usage.monthUsd)} · ${t.tokens(compact(p.usage.monthTokens))}`}</span>
           </p>
         )}
-        <TestResult result={test.data} error={test.error} pending={test.isPending} />
+        <TestResult result={check} label={p.label} error={test.error} pending={test.isPending} />
       </div>
 
       <div className="flex items-center gap-1 @xl:ms-2">
@@ -222,15 +261,21 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
   );
 }
 
-function TestResult({ result, error, pending }: { result?: ProviderTest; error: Error | null; pending: boolean }) {
+function TestResult({ result, label, error, pending }: { result?: ProviderTest; label: string; error: Error | null; pending: boolean }) {
   const t = useT();
-  const msg = error?.message ?? (result && !result.ok ? result.error : null);
+  const inconclusive = result && !result.ok && (result.rateLimited || result.timedOut);
+  const msg = error?.message ?? (result && !result.ok && !inconclusive ? result.error : null);
   return (
     <p aria-live="polite" className="min-h-4 text-xs">
       {pending ? null : msg ? (
         <span className="flex items-start gap-1 text-danger">
           <CircleAlert aria-hidden className="mt-px size-3.5 shrink-0" />
           <span className="line-clamp-3 break-words">{msg}</span>
+        </span>
+      ) : inconclusive ? (
+        <span className="flex items-start gap-1 text-fg-muted">
+          <CircleDashed aria-hidden className="mt-px size-3.5 shrink-0" />
+          <span className="break-words">{result.rateLimited ? t.checkRateLimited(label) : t.checkTimedOut(label)}</span>
         </span>
       ) : result?.ok ? (
         <span className="flex items-center gap-1 text-ok">
@@ -267,19 +312,27 @@ function ProviderForm({
   onSaved,
   onDeleted,
   defaultPreset = "llm7",
+  presets = PRESETS,
+  firstRun = false,
 }: {
   defaultPreset?: string;
+  presets?: ProviderPreset[];
+  /** Setup is blocking: a provider that answers sends the owner to Today. */
+  firstRun?: boolean;
   provider: ProviderView | null;
   onSaved: (p: ProviderView) => void;
   onDeleted: () => void;
 }) {
   const t = useT();
   const formId = useId();
-  const save = useSaveProvider();
+  const save = useSaveCheckedProvider();
+  const plainSave = useSaveProvider();
+  const after = useAfterCheck();
   const remove = useDeleteProvider();
   const test = useTestProvider();
+  const check = useProviderCheck(provider?.id ?? null);
   const existing = useProviders().data ?? [];
-  const [preset, setPreset] = useState<ProviderPreset>(() => (provider ? presetFor(provider.kind, provider.baseURL) : PRESETS.find((p) => p.key === defaultPreset) ?? PRESETS[0]!));
+  const [preset, setPreset] = useState<ProviderPreset>(() => (provider ? presetFor(provider.kind, provider.baseURL) : presets.find((p) => p.key === defaultPreset) ?? presets[0]!));
   const [label, setLabel] = useState(provider?.label ?? preset.label);
   const [id, setId] = useState(provider?.id ?? uniqueId(preset.id, existing));
   const [idTouched, setIdTouched] = useState(false);
@@ -292,7 +345,7 @@ function ProviderForm({
   const live = useProviderModels(provider?.id ?? null);
 
   const choosePreset = (key: string) => {
-    const next = PRESETS.find((p) => p.key === key)!;
+    const next = presets.find((p) => p.key === key)!;
     setPreset(next);
     setLabel(next.label);
     if (!idTouched) setId(uniqueId(next.id, existing));
@@ -322,15 +375,29 @@ function ProviderForm({
       enabled,
       ...(budget !== null ? { monthlyBudgetUsd: budget } : {}),
     };
+    // Check live when it is new or how z reaches it changed; other edits (label, budget) save as is.
+    const reach = !provider || !!apiKey || (baseURL.trim() || undefined) !== provider.baseURL || models.length === 0 || (!provider.enabled && enabled);
+    if (!reach) {
+      plainSave.mutate(input, {
+        onSuccess: (p) => {
+          notify("success", t.saved, p.label);
+          onSaved(p);
+        },
+        onError: notifyError,
+      });
+      return;
+    }
     save.mutate(input, {
       onSuccess: (p) => {
         setApiKey("");
-        notify("success", t.saved, p.label);
-        onSaved(p);
+        const failed = after(p, firstRun || undefined);
+        // First run: only a failed check needs the form again (the dialog opens on it); otherwise the page moves on.
+        if (!firstRun || failed) onSaved(p);
       },
       onError: notifyError,
     });
   };
+  const saving = save.isPending || plainSave.isPending;
 
   return (
     <Form
@@ -346,7 +413,7 @@ function ProviderForm({
           label={t.providerKind}
           value={preset.key}
           onChange={choosePreset}
-          options={PRESETS.map((p) => ({
+          options={presets.map((p) => ({
             value: p.key,
             title: p.label,
             meta: p.free ? t.freeNoKey : p.kind === "codex-cli" ? t.codexMeta : p.needsKey ? undefined : t.noKeyNeeded,
@@ -447,8 +514,9 @@ function ProviderForm({
           emptyText={t.typeModelId}
           onAdd={(m) => setModels((list) => (list.includes(m) ? list : [...list, m]))}
         />
-        {!provider && <p className="text-xs text-fg-muted">{t.saveToLoadModels}</p>}
-        {provider && live.error && <p className="text-xs break-words text-fg-muted">{live.error.message}</p>}
+        {!provider && models.length === 0 && <p className="text-xs text-fg-muted">{t.saveToLoadModels}</p>}
+        {/* A failed check below already says why the list did not load. */}
+        {provider && live.error && !checkFailed(check) && <p className="text-xs break-words text-fg-muted">{live.error.message}</p>}
       </fieldset>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -473,7 +541,7 @@ function ProviderForm({
         </div>
       </div>
 
-      {provider && <TestResult result={test.data} error={test.error} pending={test.isPending} />}
+      {provider && <TestResult result={check} label={provider.label} error={test.error} pending={test.isPending || save.isPending} />}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
         {provider && (
@@ -496,9 +564,9 @@ function ProviderForm({
               {t.test}
             </Button>
           )}
-          <Button type="submit" variant="primary" disabled={save.isPending || !idValid || idTaken}>
-            {save.isPending ? <Spinner /> : provider ? <Check aria-hidden /> : <Plus aria-hidden />}
-            {provider ? t.save : t.addProvider}
+          <Button type="submit" variant="primary" disabled={saving || !idValid || idTaken} aria-busy={saving || undefined}>
+            {saving ? <Spinner /> : provider ? <Check aria-hidden /> : <Plus aria-hidden />}
+            {save.isPending ? t.checkingProvider : provider ? t.save : t.addProvider}
           </Button>
         </div>
       </div>
@@ -544,7 +612,14 @@ function RoutingEditor() {
                   {t[`lane_${lane}`]}
                 </h3>
                 {chain.length === 0 ? (
-                  <p className="px-1 pb-2 text-xs text-fg-muted">{t.laneEmpty}</p>
+                  lane === "fast" && current.agent?.length ? (
+                    <p className="px-1 pb-2 text-xs text-fg-muted">{t.laneUsesTasks}</p>
+                  ) : (
+                    <p className="flex items-start gap-1 px-1 pb-2 text-xs text-warn">
+                      <CircleAlert aria-hidden className="mt-px size-3.5 shrink-0" />
+                      {t.laneEmpty}
+                    </p>
+                  )
                 ) : (
                   <ol aria-label={t[`lane_${lane}`]} className="mb-2 flex flex-col gap-1">
                     {chain.map((ref, i) => {

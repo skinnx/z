@@ -5,6 +5,7 @@
 import type { SetupChecklist, SetupRow, SetupState } from "@z/core";
 import { ArrowUpRight, Check, CircleAlert, CircleCheck, CircleDashed, CircleMinus, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
+import { useProviders } from "../api/providers.ts";
 import { useAckSetup, useCheckSetup, useSetup } from "../api/setup.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
@@ -35,6 +36,8 @@ export function SetupChecklistView({ autoCheck = false, className }: { autoCheck
   const t = useT();
   const setup = useSetup();
   const check = useCheckSetup();
+  // With no provider there is nothing to check yet: the row's own fix ("Add a provider") leads instead.
+  const nothingToCheck = useProviders().data?.length === 0;
   const chat = setup.data?.rows.find((r) => r.id === "chat_model");
   const untested = chat?.state === "not_checked" && chat.detail.endsWith("send it a test message.");
 
@@ -55,10 +58,12 @@ export function SetupChecklistView({ autoCheck = false, className }: { autoCheck
   return (
     <div className={cn("flex flex-col", className)}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5">
-        <Button variant="primary" size="sm" onClick={() => check.mutate(undefined, { onError: notifyError })} disabled={busy} aria-busy={busy || undefined}>
-          {busy ? <Spinner /> : <RefreshCw aria-hidden />}
-          {busy ? t.checking : t.checkAgain}
-        </Button>
+        {!nothingToCheck && (
+          <Button variant="primary" size="sm" onClick={() => check.mutate(undefined, { onError: notifyError })} disabled={busy} aria-busy={busy || undefined}>
+            {busy ? <Spinner /> : <RefreshCw aria-hidden />}
+            {busy ? t.checking : t.checkAgain}
+          </Button>
+        )}
         <p aria-live="polite" className="min-w-0 text-sm text-fg-muted">
           <span className="font-medium text-fg">{t.setupSummary(ready, total)}</span>
           {" · "}
@@ -68,7 +73,7 @@ export function SetupChecklistView({ autoCheck = false, className }: { autoCheck
       <ul className="divide-y divide-line border-t border-line">
         {list.rows.map((row) => (
           <li key={row.id}>
-            <SetupItem row={row} />
+            <SetupItem row={row} lead={nothingToCheck && row.id === "chat_model"} />
           </li>
         ))}
       </ul>
@@ -76,7 +81,8 @@ export function SetupChecklistView({ autoCheck = false, className }: { autoCheck
   );
 }
 
-function SetupItem({ row }: { row: SetupRow }) {
+/** `lead`: this row's fix is the screen's primary action. */
+function SetupItem({ row, lead = false }: { row: SetupRow; lead?: boolean }) {
   const t = useT();
   const route = useSettingsRoute();
   const ack = useAckSetup();
@@ -108,7 +114,7 @@ function SetupItem({ row }: { row: SetupRow }) {
                 </Button>
               )}
               {row.fix && (
-                <Button size="sm" variant={row.state === "needs_setup" ? "secondary" : "ghost"} aria-describedby={labelId} onClick={() => go(row.fix!.path)}>
+                <Button size="sm" variant={lead ? "primary" : row.state === "needs_setup" ? "secondary" : "ghost"} aria-describedby={labelId} onClick={() => go(row.fix!.path)}>
                   {row.fix.label}
                   <ArrowUpRight aria-hidden className="rtl:-scale-x-100" />
                 </Button>

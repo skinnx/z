@@ -15,6 +15,15 @@ export function createStored<T extends string>(key: string, fallback: () => T, v
 
   const store = {
     get: () => value,
+    /** Whether this browser holds its own choice (rather than the fallback). */
+    chosen(): boolean {
+      try {
+        const v = localStorage.getItem(key);
+        return v !== null && valid(v);
+      } catch {
+        return false;
+      }
+    },
     set(next: T | null) {
       value = next ?? fallback();
       try {

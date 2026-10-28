@@ -13,6 +13,7 @@ import { TaskQuestion } from "../components/task-question.tsx";
 import { useT, type Dict } from "../i18n.ts";
 import { compact, dateTime, json, relativeTime, time } from "../lib/format.ts";
 import { parseCron } from "../lib/cron.ts";
+import { withZone } from "../lib/timezones.ts";
 import { StatusIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Button, RowButton } from "../ui/button.tsx";
@@ -44,11 +45,12 @@ const tabOf = (task: Task): Tab => (TAB_OF[task.status] === "needs" ? "needs" : 
 export function scheduleText(schedule: string | null, t: Dict): string | null {
   if (!schedule) return null;
   const c = parseCron(schedule);
-  if (c.preset === "daily") return `${t.sched_daily} ${t.at} ${c.time}`;
-  if (c.preset === "weekdays") return `${t.sched_weekdays} ${t.at} ${c.time}`;
+  // Clock times run on the Settings zone: name it when this device is on another one.
+  if (c.preset === "daily") return withZone(`${t.sched_daily} ${t.at} ${c.time}`);
+  if (c.preset === "weekdays") return withZone(`${t.sched_weekdays} ${t.at} ${c.time}`);
   if (schedule.trim() === "0 * * * *") return t.every_hourly;
   if (schedule.trim() === "0 */4 * * *") return t.every_4h;
-  return schedule;
+  return withZone(schedule);
 }
 
 export default function Tasks() {
@@ -313,7 +315,7 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
           <>
             <dt className="text-fg-muted">{t.nextRun("").trim()}</dt>
             <dd className="text-end">
-              <time dateTime={task.nextRunAt}>{dateTime(task.nextRunAt)}</time>
+              <time dateTime={task.nextRunAt}>{withZone(dateTime(task.nextRunAt))}</time>
             </dd>
           </>
         )}
