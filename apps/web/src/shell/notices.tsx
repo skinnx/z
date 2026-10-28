@@ -6,8 +6,9 @@ import { useMarkRead, useNotices } from "../api/notices.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
-import { noticeKindIcon } from "../lib/icons.tsx";
+import { NoticeIcon, noticeTitle } from "../lib/icons.tsx";
 import { Button } from "../ui/button.tsx";
+import { IconButton } from "../ui/icon-button.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { Popover } from "../ui/popover.tsx";
 
@@ -47,13 +48,16 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
       ) : (
         <ul className="min-h-0 flex-1 divide-y divide-line overflow-y-auto overscroll-contain">
           {notices.map((n) => {
-            const Icon = noticeKindIcon[n.kind];
             return (
               <li key={n.id}>
-                <button type="button" onClick={() => open(n)} className="flex w-full items-start gap-3 px-3 py-3 text-start hover:bg-subtle/70 focus-visible:bg-subtle focus-visible:outline-none">
-                  <Icon role="img" aria-label={t[`notice_${n.kind}`]} className={cn("mt-0.5 size-4 shrink-0", n.read ? "text-fg-muted" : "text-accent-text")} />
+                <button
+                  type="button"
+                  onClick={() => open(n)}
+                  className="flex w-full items-start gap-3 px-3 py-3 text-start hover:bg-subtle/70 focus-visible:bg-subtle focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+                >
+                  <NoticeIcon notice={n} t={t} className="mt-0.5 size-4" />
                   <span className="min-w-0 flex-1">
-                    <span className={cn("block text-sm leading-snug break-words", !n.read && "font-semibold")}>{n.title}</span>
+                    <span className={cn("block text-sm leading-snug break-words", !n.read && "font-semibold")}>{noticeTitle(n, t)}</span>
                     {n.body && <span className="mt-0.5 line-clamp-2 text-xs leading-relaxed break-words text-fg-muted">{n.body}</span>}
                     <time dateTime={n.createdAt} className="mt-1 block text-[0.6875rem] text-fg-muted">
                       {relativeTime(n.createdAt)}
@@ -96,10 +100,10 @@ export function NoticeBell() {
       side="bottom"
       align="start"
       trigger={
-        <Button variant="ghost" size="icon" aria-label={count ? `${t.notices}: ${t.unreadCount(count)}` : t.notices} className="relative text-fg-muted">
+        <IconButton label={count ? `${t.notices}: ${t.unreadCount(count)}` : t.notices} className="relative text-fg-muted">
           <Bell aria-hidden />
           <CountBadge count={count} className="absolute end-1 top-1" />
-        </Button>
+        </IconButton>
       }
     >
       <NoticeList onDone={() => setOpen(false)} />

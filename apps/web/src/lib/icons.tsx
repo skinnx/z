@@ -57,7 +57,8 @@ export const laneIcon: Record<Lane, LucideIcon> = {
 export const noticeKindIcon: Record<Notice["kind"], LucideIcon> = {
   approval: ShieldAlert,
   watch: Radar,
-  task: CircleCheck,
+  // Neutral: how a run ended comes from `Notice.status` (see NoticeIcon).
+  task: ListTodo,
   briefing: Sunrise,
   memory: Brain,
   question: MessageCircleQuestion,
@@ -83,6 +84,20 @@ const statusIcons: Record<TaskStatus, [LucideIcon, string]> = {
   interrupted: [OctagonAlert, "text-danger"],
   paused: [PauseCircle, "text-warn"],
 };
+
+/** A notice's icon: a task notice shows how its run ended (a failure is never a check mark); others show their kind. */
+export function NoticeIcon({ notice: n, t, className }: { notice: Notice; t: Dict; className?: string }) {
+  if (n.kind === "task" && n.status) return <StatusIcon status={n.status} t={t} className={className} />;
+  const Icon = noticeKindIcon[n.kind];
+  return <Icon role="img" aria-label={t[`notice_${n.kind}`]} className={cn("size-4 shrink-0", n.read ? "text-fg-muted" : "text-accent-text", className)} />;
+}
+
+/** The server words task-notice titles in English ("Failed · <task>"); say the outcome in the owner's language. */
+export function noticeTitle(n: Notice, t: Dict): string {
+  if (n.kind !== "task" || !n.status) return n.title;
+  const sep = n.title.indexOf(" · ");
+  return `${t[`status_${n.status}`]} · ${sep === -1 ? n.title : n.title.slice(sep + 3)}`;
+}
 
 export function StatusIcon({ status, t, className }: { status: TaskStatus; t: Dict; className?: string }) {
   const [Icon, tone] = statusIcons[status];

@@ -141,7 +141,9 @@ export function CommandMenu() {
                   placeholder={t.searchCommands}
                   className="h-14 w-full bg-transparent text-base outline-none placeholder:text-fg-muted"
                 />
-                <Kbd>Esc</Kbd>
+                <span className="pointer-coarse:hidden">
+                  <Kbd>Esc</Kbd>
+                </span>
               </div>
               <Dialog.Close className="sr-only">{t.close}</Dialog.Close>
               <ScrollArea className="flex-1">
@@ -173,7 +175,8 @@ export function CommandMenu() {
                   )}
                 </Autocomplete.List>
               </ScrollArea>
-              <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-2 text-xs text-fg-muted">
+              {/* Keyboard hints; touch screens have no keys to press. */}
+              <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-2 text-xs text-fg-muted pointer-coarse:hidden">
                 <Kbd>↑↓</Kbd>
                 <Kbd>Enter</Kbd>
                 <span>{t.enterToRun}</span>

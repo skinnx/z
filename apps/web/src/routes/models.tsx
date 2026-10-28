@@ -1,5 +1,5 @@
 import type { Lane, ModelRef, ProviderInput, ProviderView, Routing } from "@z/core";
-import { ArrowDown, ArrowUp, CircleAlert, CircleCheck, ExternalLink, Gift, KeyRound, LockKeyhole, Pencil, Plus, Route, Sparkles, Trash2, X, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, Gift, LockKeyhole, Pencil, Plus, Route, Trash2, X, Zap } from "lucide-react";
 import { Form } from "@base-ui/react/form";
 import { useEffect, useId, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
@@ -22,7 +22,7 @@ import { laneIcon } from "../lib/icons.tsx";
 import { LLM7_ROUTING, PRESETS, presetFor, splitRef, type ProviderPreset } from "../lib/models.ts";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Monogram } from "../ui/avatar.tsx";
-import { Button } from "../ui/button.tsx";
+import { Button, ExternalLinkButton, Tile } from "../ui/button.tsx";
 import { Badge, Card, Section, Spinner, Loading, LoadError } from "../ui/card.tsx";
 import { ComboboxAdd } from "../ui/combobox.tsx";
 import { Dialog } from "../ui/dialog.tsx";
@@ -30,6 +30,7 @@ import { Field, Input } from "../ui/field.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { Meter } from "../ui/meter.tsx";
 import { NumberField } from "../ui/number-field.tsx";
+import { Page } from "../ui/page.tsx";
 import { RadioCards } from "../ui/radio-cards.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
@@ -49,31 +50,32 @@ export default function Models() {
 
   if (providers.isPending) {
     return (
-      <Loading label={t.loading} className="h-64" />
+      <Page title={t.nav_models}>
+        <Loading label={t.loading} className="h-64" />
+      </Page>
     );
   }
 
   if (providers.error && !providers.data) {
     return (
-      <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
-        <LoadError error={providers.error} onRetry={() => void providers.refetch()} retryLabel={t.retry} />
-      </div>
+      <Page title={t.nav_models}>
+        <LoadError error={providers.error} onRetry={() => void providers.refetch()} />
+      </Page>
     );
   }
   const list = providers.data ?? [];
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="sr-only">{t.nav_models}</h1>
+    <Page title={t.nav_models}>
       {list.length === 0 ? (
         <FirstRun />
       ) : (
         <>
           <Section
             label={t.nav_models}
-            icon={<KeyRound aria-hidden />}
+            hideLabel
             actions={
-              <Button variant="primary" size="sm" onClick={() => setEditing("new")}>
+              <Button variant="primary" onClick={() => setEditing("new")}>
                 <Plus aria-hidden />
                 {t.addProvider}
               </Button>
@@ -101,7 +103,7 @@ export default function Models() {
           )}
         </Dialog.Content>
       </Dialog.Root>
-    </div>
+    </Page>
   );
 }
 
@@ -127,11 +129,10 @@ function FirstRun() {
 
   return (
     <div className="flex flex-col gap-6">
-      <button
-        type="button"
+      <Tile
         onClick={startFree}
         disabled={save.isPending || routing.isPending}
-        className="group flex items-center gap-4 rounded-(--radius-card) border border-accent/50 bg-accent-soft p-5 text-start transition-colors hover:border-accent disabled:opacity-60"
+        className="gap-4! rounded-(--radius-card)! border-accent/50! bg-accent-soft! p-5! hover:border-accent!"
       >
         <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-accent text-accent-fg">
           {save.isPending || routing.isPending ? <Spinner /> : <Zap aria-hidden className="size-6" />}
@@ -140,8 +141,8 @@ function FirstRun() {
           <span className="block text-base font-semibold">{t.startFree}</span>
           <span className="block text-sm text-fg-muted">{t.startFreeMeta}</span>
         </span>
-        <ArrowUp aria-hidden className="size-5 rotate-45 text-accent-text rtl:-rotate-45" />
-      </button>
+        <ArrowUp aria-hidden className="size-5 shrink-0 rotate-45 text-accent-text rtl:-rotate-45" />
+      </Tile>
       <div className="flex items-center gap-3 text-xs text-fg-muted">
         <span className="h-px flex-1 bg-line" />
         {t.orBringKey}
@@ -167,7 +168,9 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
         <Monogram text={preset.label === p.label ? preset.mark : p.label} className="normal-case" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate font-semibold">{p.label}</span>
+            <span className="truncate font-semibold" title={p.label}>
+              {p.label}
+            </span>
             <code className="font-mono text-xs text-fg-muted">{p.id}</code>
             {preset.free && (
               <Badge tone="accent">
@@ -205,7 +208,7 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
           {test.isPending ? <Spinner /> : <Zap aria-hidden />}
           {test.isPending ? t.testing : t.test}
         </Button>
-        <IconButton label={`${t.edit} ${p.label}`} size="icon-sm" onClick={onEdit}>
+        <IconButton label={`${t.edit}: ${p.label}`} size="icon-sm" onClick={onEdit}>
           <Pencil aria-hidden />
         </IconButton>
         <Switch
@@ -378,12 +381,7 @@ function ProviderForm({
             placeholder={preset.needsKey ? "sk-…" : t.optional}
             className="font-mono text-sm"
           />
-          {preset.docs && (
-            <a href={preset.docs} target="_blank" rel="noreferrer" className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-accent-text hover:bg-accent-soft">
-              {t.getKey}
-              <ExternalLink aria-hidden className="size-3.5" />
-            </a>
-          )}
+          {preset.docs && <ExternalLinkButton href={preset.docs}>{t.getKey}</ExternalLinkButton>}
         </div>
       </Field>
 
@@ -407,16 +405,13 @@ function ProviderForm({
         {models.length > 0 && (
           <ul className="flex flex-wrap gap-1.5">
             {models.map((m) => (
-              <li key={m} className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-subtle ps-2.5 font-mono text-xs">
-                {m}
-                <button
-                  type="button"
-                  aria-label={`${t.remove} ${m}`}
-                  onClick={() => setModels(models.filter((x) => x !== m))}
-                  className="grid size-7 place-items-center rounded-md text-fg-muted hover:bg-surface hover:text-fg"
-                >
-                  <X aria-hidden className="size-3.5" />
-                </button>
+              <li key={m} className="inline-flex min-h-8 max-w-full min-w-0 items-center gap-1 rounded-lg border border-line bg-subtle ps-2.5 font-mono text-xs">
+                <span className="min-w-0 truncate" title={m}>
+                  {m}
+                </span>
+                <IconButton label={`${t.remove}: ${m}`} size="icon-sm" className="text-fg-muted hover:bg-surface hover:text-fg" onClick={() => setModels(models.filter((x) => x !== m))}>
+                  <X aria-hidden className="size-3.5!" />
+                </IconButton>
               </li>
             ))}
           </ul>
@@ -462,7 +457,7 @@ function ProviderForm({
             trigger={
               <Button variant="danger">
                 <Trash2 aria-hidden />
-                {t.remove}
+                {t.delete}
               </Button>
             }
             title={t.deleteProviderConfirm}
@@ -478,7 +473,7 @@ function ProviderForm({
             </Button>
           )}
           <Button type="submit" variant="primary" disabled={save.isPending || !idValid || idTaken}>
-            {save.isPending ? <Spinner /> : <Sparkles aria-hidden />}
+            {save.isPending ? <Spinner /> : provider ? <Check aria-hidden /> : <Plus aria-hidden />}
             {provider ? t.save : t.addProvider}
           </Button>
         </div>
@@ -509,10 +504,10 @@ function RoutingEditor() {
 
   return (
     <Section label={t.routing} icon={<Route aria-hidden />}>
-      {!current ? (
-        <div role="status" className="grid h-24 place-items-center text-fg-muted">
-          <Spinner />
-        </div>
+      {routing.error && !current ? (
+        <LoadError error={routing.error} onRetry={() => void routing.refetch()} />
+      ) : !current ? (
+        <Loading label={t.loading} className="h-24" />
       ) : (
         <div className="@container grid gap-3 md:grid-cols-2">
           {LANES.map((lane) => {
@@ -544,8 +539,13 @@ function RoutingEditor() {
                             <span aria-hidden>{i + 1}</span>
                             <span className="sr-only">{i === 0 ? t.primary : t.fallback(i)}</span>
                           </span>
-                          <span className="min-w-0 flex-1 truncate font-mono text-xs" title={ref}>
-                            <span className="text-fg-muted">{p?.label ?? provider}</span> {model}
+                          <span className="flex min-w-0 flex-1 flex-col py-1 leading-tight">
+                            <span className="truncate text-xs text-fg-muted" title={p?.label ?? provider}>
+                              {p?.label ?? provider}
+                            </span>
+                            <span className="truncate font-mono text-xs" title={model}>
+                              {model}
+                            </span>
                           </span>
                           {broken && <CircleAlert role="img" aria-label={t.providerMissing} className="size-4 shrink-0 text-danger" />}
                           <div className="flex shrink-0">
