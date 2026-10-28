@@ -8,6 +8,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@ai-sdk/mcp": "^2.0.86",
     "@hono/node-server": "^2.1.5",
     "@z/core": "workspace:*",
     "@z/plugins": "workspace:*",
