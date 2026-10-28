@@ -3,6 +3,7 @@ import { Bell, CheckCheck } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useMarkRead, useNotices } from "../api/notices.ts";
+import { useAnswerTask } from "../api/tasks.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
@@ -10,6 +11,7 @@ import { noticeKindIcon } from "../lib/icons.tsx";
 import { Button } from "../ui/button.tsx";
 import { Drawer } from "../ui/drawer.tsx";
 import { Popover } from "../ui/popover.tsx";
+import { notifyError } from "../ui/toast.tsx";
 
 export function useUnreadCount(): number {
   return useNotices().data?.filter((n) => !n.read).length ?? 0;
@@ -65,11 +67,39 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
                     </span>
                   )}
                 </button>
+                <NoticeChoices notice={n} />
               </li>
             );
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** A question notice's choices, until it is answered here, on push or on the owner channel. */
+function NoticeChoices({ notice }: { notice: Notice }) {
+  const answer = useAnswerTask();
+  const markRead = useMarkRead();
+  const q = notice.question;
+  if (!q || q.answer !== undefined || q.choices.length === 0) return null;
+  return (
+    <div role="group" aria-label={q.text} className="flex flex-wrap gap-2 px-3 pb-3 ps-10">
+      {q.choices.map((choice) => (
+        <Button
+          key={choice}
+          size="sm"
+          disabled={answer.isPending}
+          onClick={() =>
+            answer.mutate(
+              { id: q.taskId, text: choice },
+              { onSuccess: () => !notice.read && markRead.mutate([notice.id]), onError: notifyError },
+            )
+          }
+        >
+          {choice}
+        </Button>
+      ))}
     </div>
   );
 }
