@@ -36,6 +36,18 @@ export type ToolContext = {
   signal: AbortSignal;
   log: (text: string) => void;
   fetch: typeof fetch;
+  /**
+   * Saved sign-ins (Settings → Security). The server hands this to the built-in browser plugin only,
+   * so no other plugin can read logins; the browser fills them into the page itself.
+   */
+  vault?: LoginVault;
+};
+
+export type LoginVault = {
+  /** The login saved for exactly `origin`, or null (the owner is then asked to save one). */
+  login: (origin: string) => Promise<{ username: string; password: string; totp?: string } | null>;
+  /** Just the username saved for `origin`, for approval cards. */
+  username: (origin: string) => string | null;
 };
 
 export type ZTool<I = any, O = unknown> = {
