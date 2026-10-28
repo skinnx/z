@@ -128,7 +128,7 @@ export default definePlugin({
   id: "rss",
   name: "RSS",
   description: "Headlines from RSS and Atom feeds in your briefing.",
-  settings: [{ key: "feeds", label: "Feed URLs (one per line or comma separated)", required: true }],
+  settings: [{ key: "feeds", label: "Feed URLs (one per line or comma separated)", required: true, multiline: true }],
   tools: { read_feed: readFeed },
   briefing: async (ctx) => {
     const since = ctx.since.getTime();
