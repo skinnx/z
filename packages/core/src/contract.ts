@@ -553,6 +553,37 @@ export type CouldNotCheck = { source: string; reason: string };
 
 // ─── End task engine ────────────────────────────────────────────────────────
 
+// ─── Skills: reusable instructions the owner invokes with /name ─────────────
+// Adapted from CopilotKit/OpenDuet (MIT), `openbot/examples/openduet/skills.yaml`: a skill adds no
+// capability. Its `tools` only narrow what a run is offered; the approval policy still decides.
+
+/** The slug typed after `/`. */
+export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export const MAX_SKILL_INSTRUCTIONS = 8000;
+
+export const SkillInput = z.object({
+  name: z.string().regex(SKILL_NAME, "lowercase letters, digits and dashes"),
+  description: z.string().trim().min(1).max(200),
+  instructions: z.string().trim().min(1).max(MAX_SKILL_INSTRUCTIONS),
+  /**
+   * Tool names (`web_search`) or globs (`mcp_<connector>_*`, `web_*`). Empty: the run's usual tools.
+   * Naming a tool grants nothing: it is intersected with what the approval policy exposes.
+   */
+  tools: z.array(z.string().regex(/^[A-Za-z0-9_*-]{1,80}$/)).max(64).default([]),
+});
+export type SkillInput = z.input<typeof SkillInput>;
+
+export type Skill = z.output<typeof SkillInput> & { id: string; createdAt: string; updatedAt: string };
+
+// Routes (also listed under HTTP API):
+// GET    /api/skills                       → Skill[]   (by name)
+// POST   /api/skills        SkillInput     → Skill     (409 when the name is taken)
+// PUT    /api/skills/:id    SkillInput     → Skill
+// DELETE /api/skills/:id                   → { ok: true }
+// A chat message or task whose text starts with `/<name>` runs with that skill.
+
+// ─── End skills ─────────────────────────────────────────────────────────────
+
 // ─── HTTP API ───────────────────────────────────────────────────────────────
 // All JSON. Errors: `{ error: string }` with a 4xx/5xx status.
 //
@@ -612,13 +643,17 @@ export type CouldNotCheck = { source: string; reason: string };
 // GET    /oauth/callback?code&state        → redirects to `/connect?connector=<id>` (no /api prefix; no bearer needed, state-verified)
 // GET    /api/export                       → JSON attachment `z-export-<date>.json`: everything except secrets
 //                                            (settings, routing, provider/channel/connector views, tasks, approvals,
-//                                            briefings, memories, threads, notices)
+//                                            briefings, memories, skills, threads, notices)
 // DELETE /api/threads                      → { deleted: number }   (all chat threads)
 // DELETE /api/memories                     → { deleted: number }   (all memories)
 // GET    /api/logins                       → LoginView[]      (saved sign-ins; passwords and TOTP secrets never leave)
 // POST   /api/logins        LoginInput     → LoginView        (409 when the origin already has one)
 // PUT    /api/logins/:id    LoginUpdate    → LoginView
 // DELETE /api/logins/:id                   → { ok: true }
+// GET    /api/skills                       → Skill[]          (see "Skills")
+// POST   /api/skills        SkillInput     → Skill
+// PUT    /api/skills/:id    SkillInput     → Skill
+// DELETE /api/skills/:id                   → { ok: true }
 // GET    /api/events                       → text/event-stream of LiveEvent
 // POST   /hooks/:channelId                 → adapter defined (inbound platform webhooks)
 //   webhook kind: X-Z-Timestamp (unix s), X-Z-Delivery (unique id), X-Z-Signature `v1=<hex HMAC-SHA256(secret,

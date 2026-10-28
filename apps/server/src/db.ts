@@ -263,6 +263,23 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End saved sign-ins ───────────────────────────────────────────────────
+  // ─── Skills: reusable instructions invoked with /name ─────────────────────
+  // A fresh install (nothing configured yet) gets the starter skills: the store seeds them once and
+  // deletes this marker, so a deleted starter skill never comes back and upgrades get none.
+  `
+  CREATE TABLE IF NOT EXISTS skills (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    tools TEXT NOT NULL,       -- JSON string[]: tool names or globs
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO kv (key, value) SELECT 'migrate.seedSkills', 'true'
+    WHERE NOT EXISTS (SELECT 1 FROM providers) AND NOT EXISTS (SELECT 1 FROM tasks) AND NOT EXISTS (SELECT 1 FROM threads);
+  `,
+  // ─── End skills ───────────────────────────────────────────────────────────
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */
