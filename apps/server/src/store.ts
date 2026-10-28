@@ -1,4 +1,5 @@
 /** SQLite persistence. Secrets go through the sealer and never leave as plaintext views. */
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   ChannelLimits,
@@ -7,6 +8,7 @@ import {
   memoryTerms,
   Routing,
   Settings,
+  STARTER_SKILLS,
   type Approval,
   type ApprovalStatus,
   type BotTurn,
@@ -22,6 +24,7 @@ import {
   type MemoryStatus,
   type Notice,
   type ProviderConfig,
+  type Skill,
   type Task,
   type TaskEvent,
   type TaskQuestion,
@@ -660,6 +663,54 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     clear: () => Number(run("DELETE FROM memories").changes),
   };
 
+  // ─── Skills ───────────────────────────────────────────────────────────────
+
+  const toSkill = (r: Row): Skill => ({
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    instructions: r.instructions,
+    tools: parse(r.tools, []),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  });
+
+  const skills = {
+    list: (): Skill[] => all("SELECT * FROM skills ORDER BY name").map(toSkill),
+    get: (id: string): Skill | null => {
+      const r = get("SELECT * FROM skills WHERE id = ?", id);
+      return r ? toSkill(r) : null;
+    },
+    byName: (name: string): Skill | null => {
+      const r = get("SELECT * FROM skills WHERE name = ?", name);
+      return r ? toSkill(r) : null;
+    },
+    /** Insert, or replace `id`. The caller checks that the name is free. */
+    save: (id: string, input: Omit<Skill, "id" | "createdAt" | "updatedAt">): Skill => {
+      const existing = get("SELECT created_at FROM skills WHERE id = ?", id);
+      run(
+        `INSERT INTO skills (id, name, description, instructions, tools, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, instructions = excluded.instructions,
+           tools = excluded.tools, updated_at = excluded.updated_at`,
+        id,
+        input.name,
+        input.description,
+        input.instructions,
+        json(input.tools),
+        existing?.created_at ?? now(),
+        now(),
+      );
+      return skills.get(id)!;
+    },
+    delete: (id: string) => run("DELETE FROM skills WHERE id = ?", id).changes > 0,
+  };
+
+  // Fresh install only (see the skills migration): the starter skills, once.
+  if (kv.get("migrate.seedSkills")) {
+    for (const skill of STARTER_SKILLS) if (!skills.byName(skill.name)) skills.save(randomUUID(), skill);
+    run("DELETE FROM kv WHERE key = 'migrate.seedSkills'");
+  }
+
   // ─── Plugins ──────────────────────────────────────────────────────────────
 
   const plugins = {
@@ -842,5 +893,5 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     push.vapid.get();
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, plugins, threads, notices, push, connectors, logins, kv, schemaVersion, taskCounts, openAllSecrets };
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, skills, plugins, threads, notices, push, connectors, logins, kv, schemaVersion, taskCounts, openAllSecrets };
 }

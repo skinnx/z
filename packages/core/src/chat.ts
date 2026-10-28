@@ -4,17 +4,20 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   generateId,
+  getToolName,
+  isToolUIPart,
   stepCountIs,
   streamText,
   type UIMessage,
 } from "ai";
 import { reviewModel } from "./approvals.ts";
 import { fitEachStep, fitToContext, modelSummarizer, type ContextSummary } from "./context.ts";
-import type { ContextReport, Memory, ModelRef, Routing, Settings } from "./contract.ts";
+import type { ContextReport, ModelRef, Routing, Settings, Skill } from "./contract.ts";
 import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, laneConfigured, laneRefs, type ModelResolver } from "./providers.ts";
-import { buildTools, toolNotes, type ActivePlugin } from "./tools.ts";
+import { describeOffer, invokedSkill, narrowing, offerTools, pluginLabels, skillOnly, skillPrompt } from "./skills.ts";
+import { buildTools, listTools, toolNotes, type ActivePlugin } from "./tools.ts";
 
 export type ChatDeps = {
   models: ModelResolver;
@@ -23,6 +26,8 @@ export type ChatDeps = {
   plugins: ActivePlugin[];
   /** The owner's long-term memories; the most relevant to the latest message go into the prompt. */
   memories?: MemoryRecall;
+  /** The owner's skills; a message starting with `/<name>` runs with that skill's instructions and tools. */
+  skills?: Skill[];
   log?: (text: string) => void;
 };
 
@@ -43,11 +48,23 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
   const refs = request.model ? [request.model] : laneRefs(deps.routing, "chat");
   const model = deps.models.chain(refs);
   const window = deps.models.contextWindow(refs);
+  const latest = lastUserText(request.messages);
+  const invoked = invokedSkill(latest, deps.skills);
   const built = buildTools(deps.plugins, {
     policy: deps.settings.approvals,
+    only: skillOnly(invoked?.skill, deps.plugins),
     reviewer: { mode: deps.settings.reviewer, model: reviewModel(deps.models, deps.routing) },
     log: deps.log,
   });
+  const offer = offerTools(built, {
+    request: recentUserText(request.messages),
+    skill: invoked?.skill,
+    used: usedTools(request.messages),
+    labels: pluginLabels(deps.plugins),
+    enabled: listTools(deps.plugins).length,
+  });
+  deps.log?.(describeOffer(offer));
+  const narrow = narrowing(offer, { log: deps.log });
   const instructions = joinSections(
     baseInstructions(
       deps.settings,
@@ -55,7 +72,8 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
       "You are chatting with the user directly. Use tools when they help; tools that change things wait for the user's approval in the UI." +
         memoryHint(built.tools),
     ),
-    memoryPrompt(deps.memories, lastUserText(request.messages)),
+    memoryPrompt(deps.memories, invoked?.rest || latest),
+    invoked && skillPrompt(invoked.skill),
     toolNotes(deps.plugins, built),
   );
   // Summaries come from the fast lane (or its `agent` fallback); without one, only old tool results shrink.
@@ -76,6 +94,7 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
       );
       if (fit.summary) request.onSummary?.(fit.summary);
       if (fit.report) report(fit.report);
+      const fitStep = fitEachStep({ window, summarize, log: deps.log, onReport: report });
 
       const result = streamText({
         model,
@@ -84,7 +103,9 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
         tools: built.tools,
         toolApproval: built.approval,
         stopWhen: stepCountIs(8),
-        prepareStep: fitEachStep({ window, summarize, log: deps.log, onReport: report }),
+        // Each step: compact the context if needed, and offer the narrowed tools (or, after a miss, all of them).
+        prepareStep: async (step) => ({ ...(await fitStep(step)), activeTools: narrow.activeTools() }),
+        repairToolCall: narrow.repairToolCall,
         abortSignal: request.signal,
       });
       // Providers with built-in search (OpenAI/xAI web search, Perplexity…) cite sources; the UI shows them.
@@ -95,7 +116,23 @@ export async function streamChat(request: ChatRequest, deps: ChatDeps): Promise<
   return createUIMessageStreamResponse({ stream });
 }
 
+const textOf = (m: UIMessage) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join(" ");
+
 function lastUserText(messages: UIMessage[]): string {
   const last = messages.findLast((m) => m.role === "user");
-  return last?.parts.map((p) => (p.type === "text" ? p.text : "")).join(" ") ?? "";
+  return last ? textOf(last) : "";
+}
+
+/** The last two user messages: a follow-up ("and in Linear?") keeps what it refers to. */
+function recentUserText(messages: UIMessage[]): string {
+  return messages
+    .filter((m) => m.role === "user")
+    .slice(-2)
+    .map(textOf)
+    .join("\n");
+}
+
+/** Tools this conversation already called stay offered. */
+function usedTools(messages: UIMessage[]): string[] {
+  return [...new Set(messages.flatMap((m) => m.parts.filter(isToolUIPart).map((p) => getToolName(p))))];
 }
