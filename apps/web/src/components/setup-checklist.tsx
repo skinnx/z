@@ -9,6 +9,7 @@ import { useAckSetup, useCheckSetup, useSetup } from "../api/setup.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
+import { useServerText } from "../lib/server-text.ts";
 import { isSection, useSettingsRoute } from "../settings/route.ts";
 import { Button } from "../ui/button.tsx";
 import { LoadError, Loading, Spinner } from "../ui/card.tsx";
@@ -78,6 +79,7 @@ export function SetupChecklistView({ autoCheck = false, className }: { autoCheck
 
 function SetupItem({ row }: { row: SetupRow }) {
   const t = useT();
+  const st = useServerText();
   const route = useSettingsRoute();
   const ack = useAckSetup();
   const { icon: Icon, className } = stateIcon[row.state];
@@ -93,10 +95,10 @@ function SetupItem({ row }: { row: SetupRow }) {
       label={
         <span className="flex items-center gap-2">
           <Icon role="img" aria-label={t[`setup_${row.state}`]} className={cn("size-4 shrink-0", className)} />
-          {row.label}
+          {st(row.label, row.labelMsg)}
         </span>
       }
-      hint={<span className="block ps-6 break-words [overflow-wrap:anywhere]">{row.detail}</span>}
+      hint={<span className="block ps-6 break-words [overflow-wrap:anywhere]">{st(row.detail, row.detailMsg)}</span>}
     >
       {row.ack || row.fix
         ? ({ labelId }) => (
@@ -104,12 +106,12 @@ function SetupItem({ row }: { row: SetupRow }) {
               {row.ack && (
                 <Button size="sm" aria-describedby={labelId} disabled={ack.isPending} onClick={() => ack.mutate(row.id, { onError: notifyError })}>
                   {ack.isPending ? <Spinner /> : <Check aria-hidden />}
-                  {row.ack}
+                  {st(row.ack, row.ackMsg)}
                 </Button>
               )}
               {row.fix && (
                 <Button size="sm" variant={row.state === "needs_setup" ? "secondary" : "ghost"} aria-describedby={labelId} onClick={() => go(row.fix!.path)}>
-                  {row.fix.label}
+                  {st(row.fix.label, row.fix.labelMsg)}
                   <ArrowUpRight aria-hidden className="rtl:-scale-x-100" />
                 </Button>
               )}

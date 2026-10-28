@@ -2,6 +2,7 @@ import type { Routing } from "./common.ts";
 import type { ProviderKind } from "./providers.ts";
 import type { ChannelKind } from "./channels.ts";
 import type { ConnectorAuth } from "./connectors.ts";
+import type { ServerText } from "./messages.ts";
 
 // ─── Setup checklist & diagnostics ──────────────────────────────────────────
 // Ready means it was seen working (a model answered, a channel connected), never just "configured".
@@ -22,9 +23,13 @@ export type SetupRow = {
   state: SetupState;
   detail: string;
   /** Where to fix it in the app; null when the fix is outside z (an environment variable). */
-  fix: { label: string; path: string } | null;
+  fix: { label: string; path: string; labelMsg?: ServerText } | null;
   /** The owner confirms this one themselves (backing up the master key): button label for POST /api/setup/:id/ack. */
   ack?: string;
+  /** `label`, `detail` and `ack` as message keys the app words in the owner's language (the English stays for API clients). */
+  labelMsg?: ServerText;
+  detailMsg?: ServerText;
+  ackMsg?: ServerText;
 };
 
 export type SetupChecklist = {

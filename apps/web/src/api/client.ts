@@ -1,4 +1,5 @@
 import { createSignal, createStored } from "../lib/store.ts";
+import { isServerText, type ServerText } from "@z/core/messages";
 
 /** Optional bearer token for servers started with Z_TOKEN. */
 export const token = createStored<string>("z.token", () => "", (v): v is string => v.length > 0);
@@ -19,6 +20,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The server's `errorMsg`: the same error as a message key, worded by `errorText`. */
+    readonly msg?: ServerText,
   ) {
     super(message);
   }
@@ -56,7 +59,8 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
       data && typeof data === "object" && "error" in data && typeof data.error === "string"
         ? data.error
         : `${res.status} ${res.statusText}`;
-    throw new ApiError(res.status, message);
+    const msg = data && typeof data === "object" && "errorMsg" in data && isServerText(data.errorMsg) ? data.errorMsg : undefined;
+    throw new ApiError(res.status, message, msg);
   }
   return data as T;
 }

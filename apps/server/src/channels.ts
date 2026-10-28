@@ -2,6 +2,8 @@
 import {
   answerMessage,
   describeError,
+  english,
+  say,
   linkCode,
   previewFits,
   type ChannelAdapter,
@@ -10,6 +12,7 @@ import {
   type ChannelView,
   type InboundMessage,
   type OutboundReply,
+  type ServerText,
 } from "@z/core";
 import { approvalBody } from "./notify.ts";
 import type { Pairing } from "./owner.ts";
@@ -49,8 +52,9 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     if (record) bus.emit({ type: "channel", channel: view(record) });
   }
 
-  function setStatus(id: string, status: ChannelRecord["status"], detail: string | null) {
-    store.channels.setStatus(id, status, detail);
+  /** `detail` as `say(…)` when z words it itself, so the app can translate it; adapters pass plain text. */
+  function setStatus(id: string, status: ChannelRecord["status"], detail: string | ServerText | null) {
+    store.channels.setStatus(id, status, detail === null ? null : english(detail), detail === null || typeof detail === "string" ? null : detail);
     emit(id);
   }
 
@@ -128,7 +132,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   async function answer(record: ChannelRecord, message: InboundMessage): Promise<OutboundReply | null> {
     const channelId = record.id;
     try {
-      const { config: _secret, configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, ...channel } = record;
+      const { config: _secret, configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, statusDetailMsg: _m, ...channel } = record;
       const answer = await answerMessage(
         { ...message, channelId },
         { ...rt.deps(`bot:${channelId}`), channel, memory: store.memory.get(channelId, message.threadId) },
@@ -138,7 +142,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       if (record.status === "error") setStatus(channelId, "ok", null);
       return answer.reply;
     } catch (error) {
-      setStatus(channelId, "error", `Bot failed: ${describeError(error)}`);
+      setStatus(channelId, "error", say("chBotFailed", { error: describeError(error) }));
       throw error;
     }
   }
@@ -197,7 +201,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
   }
 
   function runtimeFor(record: ChannelRecord): ChannelRuntime {
-    const { configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, ...channel } = record;
+    const { configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, statusDetailMsg: _m, ...channel } = record;
     return {
       channel,
       handle: store.settings.get().handle,
@@ -233,22 +237,22 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     await stopConnection(id);
     const record = store.channels.get(id);
     if (!record) return;
-    if (!record.enabled) return setStatus(id, "idle", "Disabled");
+    if (!record.enabled) return setStatus(id, "idle", say("chDisabled"));
 
     const adapter = adapterFor(record.kind);
-    if (!adapter) return setStatus(id, "error", `No enabled plugin provides a "${record.kind}" adapter`);
+    if (!adapter) return setStatus(id, "error", say("chNoAdapter", { kind: record.kind }));
     if (!adapter.start) {
-      if (!webhookUrl(record)) return setStatus(id, "idle", "Set Z_PUBLIC_URL so the platform can reach /hooks");
-      if (record.status !== "ok") setStatus(id, "idle", "Waiting for the first webhook");
+      if (!webhookUrl(record)) return setStatus(id, "idle", say("chNeedsPublicUrl"));
+      if (record.status !== "ok") setStatus(id, "idle", say("chWaitingWebhook"));
       return;
     }
 
     try {
       const stop = await adapter.start(runtimeFor(record));
       connections.set(id, { stop });
-      if (store.channels.get(id)?.status !== "error") setStatus(id, "ok", "Connected");
+      if (store.channels.get(id)?.status !== "error") setStatus(id, "ok", say("chConnected"));
     } catch (error) {
-      setStatus(id, "error", `Could not connect: ${describeError(error)}`);
+      setStatus(id, "error", say("chCouldNotConnect", { error: describeError(error) }));
     }
   }
 
@@ -295,7 +299,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
         if (record.status === "error") setStatus(id, "ok", null);
         return adapter.edit && sent ? sent.ref : null;
       } catch (error) {
-        setStatus(id, "error", `Could not reach the owner: ${describeError(error)}`);
+        setStatus(id, "error", say("chOwnerUnreachable", { error: describeError(error) }));
         throw error;
       }
     },
@@ -317,7 +321,7 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       try {
         return await adapter.webhook(request, runtimeFor(record));
       } catch (error) {
-        setStatus(id, "error", `Webhook failed: ${describeError(error)}`);
+        setStatus(id, "error", say("chWebhookFailed", { error: describeError(error) }));
         return Response.json({ error: "Webhook handler failed" }, { status: 500 });
       }
     },

@@ -8,6 +8,7 @@ import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
 import { NoticeIcon, noticeTitle } from "../lib/icons.tsx";
+import { useServerText } from "../lib/server-text.ts";
 import { Button } from "../ui/button.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { Drawer } from "../ui/drawer.tsx";
@@ -31,6 +32,7 @@ function useOpenNotice(onDone: () => void) {
 
 function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }) {
   const t = useT();
+  const st = useServerText();
   const notices = useNotices().data ?? [];
   const markRead = useMarkRead();
   const open = useOpenNotice(onDone);
@@ -60,7 +62,7 @@ function NoticeList({ onDone, titled }: { onDone: () => void; titled?: boolean }
                   <NoticeIcon notice={n} t={t} className="mt-0.5 size-4" />
                   <span className="min-w-0 flex-1">
                     <span className={cn("block text-sm leading-snug break-words", !n.read && "font-semibold")}>{noticeTitle(n, t)}</span>
-                    {n.body && <span className="mt-0.5 line-clamp-2 text-xs leading-relaxed break-words text-fg-muted">{n.body}</span>}
+                    {n.body && <span className="mt-0.5 line-clamp-2 text-xs leading-relaxed break-words text-fg-muted">{st(n.body, n.bodyMsg)}</span>}
                     <time dateTime={n.createdAt} className="mt-1 block text-[0.6875rem] text-fg-muted">
                       {relativeTime(n.createdAt)}
                     </time>

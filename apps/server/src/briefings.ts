@@ -1,7 +1,7 @@
 /** Daily briefing: generation, storage and the cron that triggers it. */
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
-import { generateBriefing, PROPOSED_SOURCE, type Briefing } from "@z/core";
+import { generateBriefing, PROPOSED_SOURCE, say, type Briefing } from "@z/core";
 import { clip, notify } from "./notify.ts";
 import type { Runtime } from "./runtime.ts";
 
@@ -20,14 +20,10 @@ export function createBriefings(rt: Runtime) {
     rt.bus.emit({ type: "briefing", briefing });
     const proposals = briefing.items.filter((i) => i.source === PROPOSED_SOURCE).length;
     const needsYou = briefing.items.filter((i) => i.priority === "needs_you").length;
-    const parts = [
-      needsYou ? `${needsYou} need${needsYou === 1 ? "s" : ""} you` : "",
-      proposals ? `${proposals} task${proposals === 1 ? "" : "s"} worth delegating` : "",
-    ].filter(Boolean);
     notify({
       kind: "briefing",
-      title: ["Your briefing", ...parts].join(" · "),
-      body: clip(briefing.summary, 300),
+      title: say("noticeBriefing", { needsYou, proposals }),
+      body: briefing.summaryMsg ?? clip(briefing.summary, 300),
       path: "/",
     });
     return briefing;

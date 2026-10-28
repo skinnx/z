@@ -28,6 +28,7 @@ import { Page } from "../ui/page.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
+import { serverText } from "../lib/server-text.ts";
 
 /** Set when the owner chose to continue past the first-run checklist, for this tab session. */
 const FIRST_RUN_KEY = "z.first-run-skipped";
@@ -43,6 +44,7 @@ const TASK_PREFIX: [string, "status_waiting" | "status_needs_input"][] = [
 
 /** Task items read "Title (scheduled)" or "Waiting for your answer: Title": reword them in the owner's language. */
 function briefText(item: BriefItem, t: Dict): string {
+  if (item.textMsg) return serverText(item.text, item.textMsg);
   if (item.source !== TASKS_SOURCE) return item.text;
   const suffix = TASK_SUFFIX.exec(item.text);
   if (suffix) return `${suffix[1]} (${t[`status_${suffix[2] as TaskStatus}`].toLocaleLowerCase(locale.get())})`;
@@ -165,7 +167,7 @@ function NeedsYou() {
                 <span className="min-w-0 flex-1">
                   <span className="block font-medium leading-snug break-words">{task.title}</span>
                   <span className={cn("mt-0.5 block text-xs", task.status === "interrupted" ? "text-danger" : "text-fg-muted")}>
-                    {task.status === "interrupted" && task.error ? task.error : t[`status_${task.status}`]}
+                    {task.status === "interrupted" && task.error ? serverText(task.error, task.errorMsg) : t[`status_${task.status}`]}
                   </span>
                 </span>
               </Link>
@@ -206,8 +208,8 @@ function WatchHits() {
               <div className="flex items-start gap-3">
                 <Radar aria-hidden className="mt-0.5 size-4 shrink-0 text-accent-text" />
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium leading-snug break-words">{n.title}</p>
-                  {n.body && <p className="mt-1 line-clamp-4 text-sm leading-relaxed break-words text-fg-muted">{n.body}</p>}
+                  <p className="font-medium leading-snug break-words">{serverText(n.title, n.titleMsg)}</p>
+                  {n.body && <p className="mt-1 line-clamp-4 text-sm leading-relaxed break-words text-fg-muted">{serverText(n.body, n.bodyMsg)}</p>}
                   <time dateTime={n.createdAt} className="mt-1 block text-xs text-fg-muted">
                     {relativeTime(n.createdAt)}
                   </time>
@@ -290,7 +292,7 @@ function BriefingBody({ briefing }: { briefing: Briefing }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {briefing.summary && <p className="text-[1.0625rem] leading-relaxed text-pretty">{briefing.summary}</p>}
+      {briefing.summary && <p className="text-[1.0625rem] leading-relaxed text-pretty">{serverText(briefing.summary, briefing.summaryMsg)}</p>}
       <div className="@container grid gap-3">
         {needs.length > 0 ? (
           <Card className="overflow-hidden border-warn/40">
@@ -363,7 +365,7 @@ function BriefRow({ item, proposed }: { item: BriefItem; proposed?: boolean }) {
   const t = useT();
   const create = useCreateTask();
   const Icon = briefKindIcon[item.kind];
-  const reason = item.reason === NOT_CHECKED ? t.notChecked : item.reason;
+  const reason = item.reasonMsg ? serverText(item.reason, item.reasonMsg) : item.reason === NOT_CHECKED ? t.notChecked : item.reason;
   return (
     <li className="flex flex-col gap-2 px-4 py-3 @lg:flex-row @lg:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">

@@ -6,7 +6,24 @@
  * (Idea from CopilotKit OpenDuet's setup checks, MIT; re-implemented for z.)
  */
 import { createHash } from "node:crypto";
-import { codexAccount, CODEX_NOT_SIGNED_IN, describeError, laneRefs, parseModelRef, testModel, type CodexAccount, type Lane, type ModelCheck, type ModelRef, type ProviderConfig, type SetupChecklist, type SetupRow, type SetupState } from "@z/core";
+import {
+  codexAccount,
+  describeError,
+  english,
+  laneRefs,
+  parseModelRef,
+  say,
+  testModel,
+  type CodexAccount,
+  type Lane,
+  type ModelCheck,
+  type ModelRef,
+  type ProviderConfig,
+  type ServerText,
+  type SetupChecklist,
+  type SetupRow,
+  type SetupState,
+} from "@z/core";
 import pkg from "../package.json" with { type: "json" };
 import type { Channels } from "./channels.ts";
 import type { Connectors } from "./connectors.ts";
@@ -29,10 +46,40 @@ const CODEX_KEY = "setup.codex";
 
 type CodexCheck = { account?: CodexAccount; error?: string; at: string };
 
-const LANE_NAMES: Record<Exclude<Lane, "chat">, string> = { agent: "Tasks", briefing: "Briefing", fast: "Quick checks", bot: "Channel bot" };
+const LANE_NAMES = { agent: "laneAgent", briefing: "laneBriefing", fast: "laneFast", bot: "laneBot" } as const satisfies Record<Exclude<Lane, "chat">, string>;
 
-type Probe = { ok: boolean; detail: string; at: string };
-type LaneResult = { state: SetupState; detail: string };
+type Probe = { ok: boolean; detail: ServerText; at: string };
+type LaneResult = { state: SetupState; detail: ServerText };
+
+/** Server-worded text (a key the app translates) or text z did not write (a provider's error). */
+type Text = string | ServerText;
+/** A row as built: label, detail and buttons as keys where z words them; `toRow` adds the English. */
+type RowDraft = Omit<SetupRow, "label" | "detail" | "fix" | "ack" | "labelMsg" | "detailMsg" | "ackMsg"> & {
+  label: Text;
+  detail: Text;
+  fix: { label: Text; path: string } | null;
+  ack?: Text;
+};
+
+const msgOf = (text: Text) => (typeof text === "string" ? undefined : text);
+
+/** English for API clients, plus the keys for the app (`labelMsg`, `detailMsg`, `fix.labelMsg`, `ackMsg`). */
+function toRow({ label, detail, fix, ack, ...rest }: RowDraft): SetupRow {
+  const labelMsg = msgOf(label);
+  const detailMsg = msgOf(detail);
+  const ackMsg = ack === undefined ? undefined : msgOf(ack);
+  const fixMsg = fix ? msgOf(fix.label) : undefined;
+  return {
+    ...rest,
+    label: english(label),
+    detail: english(detail),
+    fix: fix ? { label: english(fix.label), path: fix.path, ...(fixMsg ? { labelMsg: fixMsg } : {}) } : null,
+    ...(ack === undefined ? {} : { ack: english(ack) }),
+    ...(labelMsg ? { labelMsg } : {}),
+    ...(detailMsg ? { detailMsg } : {}),
+    ...(ackMsg ? { ackMsg } : {}),
+  };
+}
 
 export type Setup = ReturnType<typeof createSetup>;
 
@@ -48,10 +95,10 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
     store.kv.set(CODEX_KEY, { ...codexChecks(), [providerId]: { ...check, at: new Date().toISOString() } });
 
   /** Why a ref can't be tried at all (no call needed), or null. */
-  function unusable(ref: ModelRef, providers: ProviderConfig[]): string | null {
+  function unusable(ref: ModelRef, providers: ProviderConfig[]): ServerText | null {
     const p = providers.find((x) => x.id === parseModelRef(ref).providerId);
-    if (!p) return `provider "${parseModelRef(ref).providerId}" was removed`;
-    if (!p.enabled) return `provider "${p.label}" is turned off`;
+    if (!p) return say("providerRemoved", { provider: parseModelRef(ref).providerId });
+    if (!p.enabled) return say("providerOff", { provider: p.label });
     return null;
   }
 
@@ -65,30 +112,33 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
 
   /** One lane's chain against the cached tests: any answering model makes it ready. */
   function laneResult(refs: ModelRef[], cache: Record<ModelRef, ModelCheck>, providers: ProviderConfig[]): LaneResult & { model?: ModelRef } {
-    if (!refs.length) return { state: "needs_setup", detail: "no model chosen" };
-    const failed: string[] = [];
-    let inconclusive: string | null = null;
+    if (!refs.length) return { state: "needs_setup", detail: say("laneNoModel") };
+    const failed: ServerText[] = [];
+    let inconclusive: ServerText | null = null;
     for (const ref of refs) {
       const blocked = unusable(ref, providers);
       if (blocked) {
-        failed.push(`${ref}: ${blocked}`);
+        failed.push(say("refIssue", { ref, issue: blocked }));
         continue;
       }
       const c = cache[ref];
       if (!c) {
-        inconclusive ??= `${ref} not checked yet`;
+        inconclusive ??= say("refNotChecked", { ref });
         continue;
       }
       if (c.ok) {
-        const latency = c.latencyMs !== undefined ? ` in ${(c.latencyMs / 1000).toFixed(1)} s` : "";
-        const fell = failed.length ? ` (${failed.join("; ")}; falls back)` : "";
-        return { state: "ready", detail: `${ref} answered${latency}${fell}`, model: ref };
+        const detail = say("refAnswered", {
+          ref,
+          ...(c.latencyMs !== undefined ? { seconds: c.latencyMs / 1000 } : {}),
+          ...(failed.length ? { skipped: failed } : {}),
+        });
+        return { state: "ready", detail, model: ref };
       }
-      if (c.rateLimited || c.timedOut) inconclusive ??= `${ref}: ${c.rateLimited ? "rate limited" : "no answer"}, so it could not be checked (${c.error ?? "try again"})`;
-      else failed.push(`${ref}: ${(c.error ?? "failed").replace(/\.\s*$/, "")}`);
+      if (c.rateLimited || c.timedOut) inconclusive ??= say(c.rateLimited ? "refRateLimited" : "refNoAnswer", { ref, ...(c.error ? { error: c.error } : {}) });
+      else failed.push(say("refIssue", { ref, issue: c.error ? c.error.replace(/\.\s*$/, "") : say("failed") }));
     }
-    if (inconclusive) return { state: "not_checked", detail: [inconclusive, ...failed].join("; ") };
-    return { state: "needs_setup", detail: failed.join("; ") };
+    if (inconclusive) return { state: "not_checked", detail: failed.length ? say("list", { items: [inconclusive, ...failed] }) : inconclusive };
+    return { state: "needs_setup", detail: failed.length === 1 ? failed[0]! : say("list", { items: failed }) };
   }
 
   function rows(): SetupRow[] {
@@ -98,32 +148,33 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
     const cache = checks();
     const enabledChannels = store.channels.list().filter((c) => c.enabled);
     const enabledConnectors = connectors.list().filter((c) => c.enabled);
-    const out: SetupRow[] = [];
+    const out: RowDraft[] = [];
 
     // ─── A chat model answers ───
-    const models = { label: "Open models", path: "/models" };
+    const models = { label: say("fixOpenModels"), path: "/models" };
+    const chatLabel = say("rowChatModel");
     if (!providers.length) {
-      out.push({ id: "chat_model", label: "A chat model answers", state: "needs_setup", detail: "No model provider yet. Free ones (Pollinations, LLM7) need no key.", fix: { label: "Add a provider", path: "/models" } });
+      out.push({ id: "chat_model", label: chatLabel, state: "needs_setup", detail: say("setupNoProvider"), fix: { label: say("fixAddProvider"), path: "/models" } });
     } else if (!routing.chat?.length) {
-      out.push({ id: "chat_model", label: "A chat model answers", state: "needs_setup", detail: "No model is chosen for chat.", fix: { label: "Choose a chat model", path: "/models" } });
+      out.push({ id: "chat_model", label: chatLabel, state: "needs_setup", detail: say("setupNoChatModel"), fix: { label: say("fixChooseChatModel"), path: "/models" } });
     } else {
       const chat = laneResult(routing.chat, cache, providers);
-      const detail = chat.state === "not_checked" && chat.detail.endsWith("not checked yet") ? `${chat.detail}. Check again to send it a test message.` : chat.detail;
-      out.push({ id: "chat_model", label: "A chat model answers", state: chat.state, detail, fix: chat.state === "ready" ? null : models });
+      const detail = chat.state === "not_checked" && english(chat.detail).endsWith("not checked yet") ? say("setupCheckChat", { detail: chat.detail }) : chat.detail;
+      out.push({ id: "chat_model", label: chatLabel, state: chat.state, detail, fix: chat.state === "ready" ? null : models });
     }
 
     // ─── Codex CLI signed in (codex-cli providers) ───
     const codex = codexChecks();
     for (const p of providers.filter((x) => x.kind === "codex-cli" && x.enabled)) {
-      const row = { id: `codex:${p.id}`, label: `Codex CLI signed in (${p.label})` };
+      const row = { id: `codex:${p.id}`, label: say("rowCodex", { provider: p.label }) };
       const c = codex[p.id];
       const a = c?.account;
-      if (!c) out.push({ ...row, state: "not_checked", detail: "Check again to start the Codex CLI on this machine and read its sign-in.", fix: null });
+      if (!c) out.push({ ...row, state: "not_checked", detail: say("codexNotChecked"), fix: null });
       else if (c.error) out.push({ ...row, state: "needs_setup", detail: c.error, fix: models });
-      else if (!a?.signedIn) out.push({ ...row, state: "needs_setup", detail: `${CODEX_NOT_SIGNED_IN}, as the user z runs as.`, fix: null });
+      else if (!a?.signedIn) out.push({ ...row, state: "needs_setup", detail: say("codexSignedOut"), fix: null });
       else if (a.method === "chatgpt")
-        out.push({ ...row, state: "ready", detail: `Signed in with ChatGPT${a.plan ? ` (${a.plan} plan)` : ""}${a.email ? ` as ${a.email}` : ""}.`, fix: null });
-      else out.push({ ...row, state: "ready", detail: a.method === "apiKey" ? "Signed in with an OpenAI API key, not a ChatGPT plan." : "Signed in to a non-OpenAI model provider.", fix: null });
+        out.push({ ...row, state: "ready", detail: say("codexChatgpt", { ...(a.plan ? { plan: a.plan } : {}), ...(a.email ? { email: a.email } : {}) }), fix: null });
+      else out.push({ ...row, state: "ready", detail: say(a.method === "apiKey" ? "codexApiKey" : "codexOther"), fix: null });
     }
 
     // ─── Every job has a working model ───
@@ -132,44 +183,32 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
     const worst: SetupState = results.some((r) => r.state === "needs_setup") ? "needs_setup" : results.some((r) => r.state === "not_checked") ? "not_checked" : "ready";
     out.push({
       id: "lanes",
-      label: "Every job has a working model",
+      label: say("rowLanes"),
       state: providers.length ? worst : "needs_setup",
       detail:
         worst === "ready"
-          ? `${results.map((r) => LANE_NAMES[r.lane]).join(", ")}: ${[...new Set(results.map((r) => r.model))].join(", ")}`
-          : results.filter((r) => r.state !== "ready").map((r) => `${LANE_NAMES[r.lane]}: ${r.detail}`).join(" · "),
+          ? say("lanesReady", { lanes: results.map((r) => say(LANE_NAMES[r.lane])), models: [...new Set(results.map((r) => r.model!))] })
+          : say("listDot", { items: results.filter((r) => r.state !== "ready").map((r) => say("laneIssue", { lane: say(LANE_NAMES[r.lane]), detail: r.detail })) }),
       fix: worst === "ready" ? null : models,
     });
 
     // ─── Access token when reachable beyond this computer ───
-    const security = { label: "Open security", path: "/?settings=security" };
+    const security = { label: say("fixOpenSecurity"), path: "/?settings=security" };
     const where = `${env.host}:${env.port}`;
-    const label = "Access token";
+    const label = say("rowToken");
     if (env.tokenSource === "env" && env.token) {
       out.push(
         env.token.length < 16
-          ? { id: "token", label, state: "needs_setup", detail: `Z_TOKEN is only ${env.token.length} characters. Use 32 or more random ones (openssl rand -hex 32).`, fix: null }
-          : { id: "token", label, state: "ready", detail: `Z_TOKEN is set: every API request to ${where} must carry it.`, fix: null },
+          ? { id: "token", label, state: "needs_setup", detail: say("tokenShort", { length: env.token.length }), fix: null }
+          : { id: "token", label, state: "ready", detail: say("tokenEnv", { where }), fix: null },
       );
     } else if (env.tokenSource === "generated") {
-      out.push({
-        id: "token",
-        label,
-        state: "ready",
-        detail: `z listens on ${where}, beyond this computer, so it generated a token in ${accessTokenFile(env.dataDir)}. Enter it in the web app, or set Z_TOKEN to choose your own.`,
-        fix: security,
-      });
+      out.push({ id: "token", label, state: "ready", detail: say("tokenGenerated", { where, file: accessTokenFile(env.dataDir) }), fix: security });
     } else if (!publicRemote()) {
-      out.push({ id: "token", label, state: "ready", detail: `Only this computer can reach z (Z_HOST=${env.host}), so no token is needed.`, fix: null });
+      out.push({ id: "token", label, state: "ready", detail: say("tokenLocalOnly", { host: env.host }), fix: null });
     } else {
       // Loopback behind a tunnel or reverse proxy: the public address reaches z with no token at all.
-      out.push({
-        id: "token",
-        label,
-        state: "needs_setup",
-        detail: `z listens on ${where} only, but ${origin(env.publicUrl!)} forwards to it without a token: anyone can spend your provider keys. Set Z_TOKEN (openssl rand -hex 32).`,
-        fix: security,
-      });
+      out.push({ id: "token", label, state: "needs_setup", detail: say("tokenExposed", { where, origin: origin(env.publicUrl!) }), fix: security });
     }
 
     // ─── Public URL for webhook channels and OAuth ───
@@ -177,100 +216,94 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
       ...enabledChannels.filter((c) => channels.needsPublicUrl(c.kind)).map((c) => c.label),
       ...enabledConnectors.filter((c) => c.auth === "oauth").map((c) => c.label),
     ];
+    const publicLabel = say("rowPublicUrl");
     if (env.publicUrl) {
       const host = safeHost(env.publicUrl);
       const at = origin(env.publicUrl);
       if (!host || (!env.publicUrl.startsWith("https://") && !isLoopback(host.replace(/^\[|\]$/g, "")))) {
-        out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "needs_setup", detail: `${at} is not https; platforms and OAuth providers only call https addresses.`, fix: null });
+        out.push({ id: "public_url", label: publicLabel, state: "needs_setup", detail: say("publicNotHttps", { origin: at }), fix: null });
       } else if (!probe) {
-        out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "not_checked", detail: `${at}. Check again to test that it reaches this server.`, fix: null });
+        out.push({ id: "public_url", label: publicLabel, state: "not_checked", detail: say("publicNotChecked", { origin: at }), fix: null });
       } else {
-        out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: probe.ok ? "ready" : "needs_setup", detail: probe.detail, fix: null });
+        out.push({ id: "public_url", label: publicLabel, state: probe.ok ? "ready" : "needs_setup", detail: probe.detail, fix: null });
       }
     } else if (needers.length) {
-      out.push({
-        id: "public_url",
-        label: "Public URL (Z_PUBLIC_URL)",
-        state: "needs_setup",
-        detail: `${needers.join(", ")} must call z back. Set Z_PUBLIC_URL to the https address z is reachable at.`,
-        fix: null,
-      });
+      out.push({ id: "public_url", label: publicLabel, state: "needs_setup", detail: say("publicNeeded", { names: needers }), fix: null });
     } else {
-      out.push({ id: "public_url", label: "Public URL (Z_PUBLIC_URL)", state: "optional", detail: "Only needed for webhook channels and OAuth sign-ins.", fix: null });
+      out.push({ id: "public_url", label: publicLabel, state: "optional", detail: say("publicOptional"), fix: null });
     }
 
     // ─── Master key backed up ───
+    const masterLabel = say("rowMasterKey");
     if (env.masterKeySource === "env") {
-      out.push({ id: "master_key", label: "Master key backed up", state: "ready", detail: "Set by Z_MASTER_KEY. Keep that value in your password manager.", fix: null });
+      out.push({ id: "master_key", label: masterLabel, state: "ready", detail: say("masterEnv"), fix: null });
     } else {
       const ack = store.kv.get<{ fingerprint: string; at: string }>(MASTER_ACK_KEY);
       out.push(
         ack?.fingerprint === masterFingerprint()
-          ? { id: "master_key", label: "Master key backed up", state: "ready", detail: `You marked master.key as backed up on ${ack.at.slice(0, 10)}.`, fix: null }
-          : {
-              id: "master_key",
-              label: "Master key backed up",
-              state: "needs_setup",
-              detail: "z generated master.key in its data directory. Copy it somewhere safe: without it, stored keys and tokens can't be decrypted.",
-              fix: null,
-              ack: "I backed it up",
-            },
+          ? { id: "master_key", label: masterLabel, state: "ready", detail: say("masterAcked", { date: ack.at.slice(0, 10) }), fix: null }
+          : { id: "master_key", label: masterLabel, state: "needs_setup", detail: say("masterGenerated"), fix: null, ack: say("ackBackedUp") },
       );
     }
 
     // ─── Notifications on a device ───
     const devices = store.push.list().length;
-    const notifications = { label: "Turn on notifications", path: "/?settings=notifications" };
+    const notifications = { label: say("fixTurnOnNotifications"), path: "/?settings=notifications" };
+    const pushLabel = say("rowPush");
     const last = push.lastSend();
     if (devices) {
       const failed = last && last.devices > 0 && last.sent === 0;
       out.push({
         id: "push",
-        label: "Notifications on a device",
+        label: pushLabel,
         state: failed ? "needs_setup" : "ready",
         detail: failed
-          ? `The last notification reached none of your ${last.devices} device${last.devices === 1 ? "" : "s"}. Send a test from Notifications.`
-          : `${devices} device${devices === 1 ? "" : "s"}${last ? `; the last notification reached ${last.sent} of ${last.devices}` : ""}.`,
+          ? say("pushNoneReached", { devices: last.devices })
+          : say("pushDevices", { devices, ...(last ? { sent: last.sent, total: last.devices } : {}) }),
         fix: failed ? notifications : null,
       });
     } else if (settings.owner) {
-      out.push({ id: "push", label: "Notifications on a device", state: "optional", detail: `z reaches you in ${settings.owner.label}; a device adds approvals on your lock screen.`, fix: notifications });
+      out.push({ id: "push", label: pushLabel, state: "optional", detail: say("pushViaOwner", { channel: settings.owner.label }), fix: notifications });
     } else {
-      out.push({ id: "push", label: "Notifications on a device", state: "needs_setup", detail: "Nothing reaches you while the app is closed: approvals and watch hits wait unseen.", fix: notifications });
+      out.push({ id: "push", label: pushLabel, state: "needs_setup", detail: say("pushNone"), fix: notifications });
     }
 
     // ─── Owner paired ───
-    const reach = { label: "Pair", path: "/?settings=reach" };
+    const reach = { label: say("fixPair"), path: "/?settings=reach" };
+    const ownerLabel = say("rowOwner");
     if (settings.owner) {
       const channel = store.channels.get(settings.owner.channelId);
       out.push(
         channel?.enabled
-          ? { id: "owner", label: "Owner paired", state: "ready", detail: `z reaches you as ${settings.owner.label} in ${channel.label}.`, fix: null }
-          : { id: "owner", label: "Owner paired", state: "needs_setup", detail: `The paired channel (${settings.owner.channelId}) is gone or turned off.`, fix: reach },
+          ? { id: "owner", label: ownerLabel, state: "ready", detail: say("ownerReady", { name: settings.owner.label, channel: channel.label }), fix: null }
+          : { id: "owner", label: ownerLabel, state: "needs_setup", detail: say("ownerGone", { channel: settings.owner.channelId }), fix: reach },
       );
     } else if (enabledChannels.length) {
-      out.push({ id: "owner", label: "Owner paired", state: "needs_setup", detail: `Pair yourself so approvals and briefings reach you in ${enabledChannels[0]!.label}.`, fix: reach });
+      out.push({ id: "owner", label: ownerLabel, state: "needs_setup", detail: say("ownerPair", { channel: enabledChannels[0]!.label }), fix: reach });
     } else {
-      out.push({ id: "owner", label: "Owner paired", state: "optional", detail: "Connect a channel (Telegram, Discord, Slack…) to be reached away from the app.", fix: { label: "Add a channel", path: "/channels" } });
+      out.push({ id: "owner", label: ownerLabel, state: "optional", detail: say("ownerOptional"), fix: { label: say("fixAddChannel"), path: "/channels" } });
     }
 
     // ─── Each enabled channel and connector ───
+    // Their own status text when z wrote it (a key), else what the adapter or server said, else a fallback.
+    const status = (c: { statusDetail: string | null; statusDetailMsg?: ServerText | null }, fallback: ServerText): Text =>
+      c.statusDetailMsg ?? c.statusDetail ?? fallback;
     for (const c of enabledChannels) {
-      const fix = { label: "Open channels", path: "/channels" };
+      const fix = { label: say("fixOpenChannels"), path: "/channels" };
       const row = { id: `channel:${c.id}`, label: `${c.label} (${c.kind})` };
-      if (channels.needsPublicUrl(c.kind) && !env.publicUrl) out.push({ ...row, state: "needs_setup", detail: `Needs Z_PUBLIC_URL: ${c.kind} calls z at /hooks/${c.id}.`, fix });
-      else if (c.status === "ok") out.push({ ...row, state: "ready", detail: c.statusDetail ?? "Connected", fix: null });
-      else if (c.status === "idle") out.push({ ...row, state: "not_checked", detail: c.statusDetail ?? "Not connected yet", fix });
-      else out.push({ ...row, state: "needs_setup", detail: c.statusDetail ?? "Not working", fix });
+      if (channels.needsPublicUrl(c.kind) && !env.publicUrl) out.push({ ...row, state: "needs_setup", detail: say("channelNeedsPublicUrl", { kind: c.kind, id: c.id }), fix });
+      else if (c.status === "ok") out.push({ ...row, state: "ready", detail: status(c, say("chConnected")), fix: null });
+      else if (c.status === "idle") out.push({ ...row, state: "not_checked", detail: status(c, say("channelNotConnectedYet")), fix });
+      else out.push({ ...row, state: "needs_setup", detail: status(c, say("channelNotWorking")), fix });
     }
     for (const c of enabledConnectors) {
-      const fix = { label: "Open connection", path: `/connect?connector=${encodeURIComponent(c.id)}` };
+      const fix = { label: say("fixOpenConnection"), path: `/connect?connector=${encodeURIComponent(c.id)}` };
       const row = { id: `connector:${c.id}`, label: c.label };
-      if (c.status === "connected") out.push({ ...row, state: "ready", detail: `${c.tools.length} tool${c.tools.length === 1 ? "" : "s"} from ${c.urlDisplay}`, fix: null });
-      else if (c.status === "connecting") out.push({ ...row, state: "not_checked", detail: "Connecting…", fix: null });
-      else out.push({ ...row, state: "needs_setup", detail: c.statusDetail ?? (c.status === "needs_auth" ? "Sign in to connect" : "Not connected"), fix });
+      if (c.status === "connected") out.push({ ...row, state: "ready", detail: say("connectorTools", { count: c.tools.length, origin: c.urlDisplay }), fix: null });
+      else if (c.status === "connecting") out.push({ ...row, state: "not_checked", detail: say("connectorConnecting"), fix: null });
+      else out.push({ ...row, state: "needs_setup", detail: status(c, say(c.status === "needs_auth" ? "cnSignIn" : "connectorNotConnected")), fix });
     }
-    return out;
+    return out.map(toRow);
   }
 
   // Provider errors can echo what was sent (some quote the key back): rows pass the secret registry too.
@@ -314,11 +347,12 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       });
       const body = (await res.json().catch(() => null)) as { ok?: boolean; version?: string } | null;
-      if (res.ok && body?.ok && body.version === pkg.version) probe = { ok: true, detail: `${origin(env.publicUrl)} reaches this server.`, at };
-      else if (res.ok && body?.ok) probe = { ok: false, detail: `${origin(env.publicUrl)} answers as z ${body.version}, but this server is ${pkg.version}: it points elsewhere.`, at };
-      else probe = { ok: false, detail: `${origin(env.publicUrl)}/api/health answered ${res.status}${res.status === 401 ? " (a different Z_TOKEN?)" : ""}; it does not reach this server.`, at };
+      const at0 = origin(env.publicUrl);
+      if (res.ok && body?.ok && body.version === pkg.version) probe = { ok: true, detail: say("probeOk", { origin: at0 }), at };
+      else if (res.ok && body?.ok) probe = { ok: false, detail: say("probeElsewhere", { origin: at0, theirs: String(body.version), ours: pkg.version }), at };
+      else probe = { ok: false, detail: say("probeStatus", { origin: at0, status: res.status }), at };
     } catch (error) {
-      probe = { ok: false, detail: `${origin(env.publicUrl)} could not be reached: ${describeError(error)}`, at };
+      probe = { ok: false, detail: say("probeUnreachable", { origin: origin(env.publicUrl), error: describeError(error) }), at };
     }
   }
 

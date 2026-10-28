@@ -33,6 +33,7 @@ import { Page } from "../ui/page.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 import { Segmented } from "../ui/toggle-group.tsx";
+import { serverText } from "../lib/server-text.ts";
 
 type Editing = { preset: ConnectorPreset | null; connector: ConnectorView | null };
 
@@ -227,7 +228,7 @@ function StatusLine({ connector: c, className }: { connector: ConnectorView; cla
       <span aria-hidden className={cn("mt-1 size-2 shrink-0 rounded-full", dot[c.status])} />
       <span className="min-w-0 break-words">
         <span className={cn("font-medium", c.status === "error" ? "text-danger" : c.status === "needs_auth" ? "text-warn" : "text-fg")}>{t[`cst_${c.status}`]}</span>
-        {c.statusDetail && <span className="text-fg-muted"> · {c.statusDetail}</span>}
+        {c.statusDetail && <span className="text-fg-muted"> · {serverText(c.statusDetail, c.statusDetailMsg)}</span>}
       </span>
     </p>
   );

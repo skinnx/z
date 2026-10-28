@@ -1,9 +1,9 @@
 /** Settings, providers, routing, plugins and adapters. */
-import { listModels, describeError, ProviderInput, Routing, Settings, testProvider, type AdapterManifest, type ProviderConfig, type ProviderView } from "@z/core";
+import { listModels, describeError, ProviderInput, say, Routing, Settings, testProvider, type AdapterManifest, type ProviderConfig, type ProviderView } from "@z/core";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Services } from "../app.ts";
-import { badRequest, body, notFound, validate } from "../http.ts";
+import { badRequest, body, errorBody, notFound, validate } from "../http.ts";
 import { redactJson } from "../secrets.ts";
 import { isValidCron, isValidTimezone } from "../schedule.ts";
 
@@ -84,7 +84,7 @@ export function configRoutes({ rt, tasks, briefings, channels, setup }: Services
     try {
       return c.json({ models: await listModels(p) });
     } catch (error) {
-      return c.json({ error: `Could not list models: ${describeError(error)}` }, 502);
+      return c.json(errorBody(say("errListModels", { error: describeError(error) })), 502);
     }
   });
 

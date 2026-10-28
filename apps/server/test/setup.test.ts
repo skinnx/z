@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import type { Diagnostics, SetupChecklist, SetupRow } from "@z/core";
+import { english, type Diagnostics, type SetupChecklist, type SetupRow } from "@z/core";
 import { Hono } from "hono";
 import type { Services } from "../src/app.ts";
 import { createBriefings } from "../src/briefings.ts";
@@ -61,7 +61,7 @@ function boot(envVars: Record<string, string> = {}) {
     });
     return { status: res.status, text: await res.text() };
   };
-  return { dir, env, store, call };
+  return { dir, env, store, call, channels };
 }
 
 /** A local OpenAI-compatible endpoint answering with `reply(authorization)`. */
@@ -138,7 +138,7 @@ test("setup: a fresh install is honest about what is missing", async () => {
   assert.equal(list.checkedAt, null);
   assert.equal(list.rows[0]!.id, "chat_model");
   assert.equal(row(list, "chat_model").state, "needs_setup");
-  assert.deepEqual(row(list, "chat_model").fix, { label: "Add a provider", path: "/models" });
+  assert.deepEqual(row(list, "chat_model").fix, { label: "Add a provider", path: "/models", labelMsg: { key: "fixAddProvider" } });
   assert.equal(row(list, "lanes").state, "needs_setup");
   // Loopback by default: no token needed.
   assert.equal(row(list, "token").state, "ready");
@@ -197,7 +197,7 @@ test("setup: a rejected key is needs_setup with the provider's own error, minus 
   const chat = row(JSON.parse(res.text), "chat_model");
   assert.equal(chat.state, "needs_setup");
   assert.match(chat.detail, /401 Incorrect API key provided: \[secret:66bb\]/);
-  assert.deepEqual(chat.fix, { label: "Open models", path: "/models" });
+  assert.deepEqual(chat.fix, { label: "Open models", path: "/models", labelMsg: { key: "fixOpenModels" } });
 
   // The provider Test button records the same live result, and redacts it too.
   const tested = await z.call("POST", "/providers/p1/test");
@@ -243,4 +243,108 @@ test("diagnostics: no secret or URL path of anything configured", async () => {
     assert.ok(!(await z.call("GET", "/setup")).text.includes(secret), `setup leaked ${secret}`);
     assert.ok(!(await z.call("GET", "/providers")).text.includes(secret), `providers leaked ${secret}`);
   }
+});
+
+// ─── Server text: rows as message keys (contract/messages.ts) ───────────────
+
+/** Every row's English is its keys' English; returns `id → [label, detail, fix, ack]` keys. */
+function rowKeys(list: SetupChecklist) {
+  return Object.fromEntries(
+    list.rows.map((r) => {
+      assert.ok(r.labelMsg || r.id.startsWith("channel:") || r.id.startsWith("connector:"), `${r.id} has a label key`);
+      assert.ok(r.detailMsg, `${r.id} has a detail key`);
+      if (r.labelMsg) assert.equal(r.label, english(r.labelMsg));
+      assert.equal(r.detail, english(r.detailMsg));
+      if (r.fix) assert.equal(r.fix.label, english(r.fix.labelMsg!));
+      if (r.ack) assert.equal(r.ack, english(r.ackMsg!));
+      return [r.id, [r.labelMsg?.key, r.detailMsg.key, r.fix?.labelMsg?.key, r.ackMsg?.key]];
+    }),
+  );
+}
+
+test("setup: every row carries keys for its label, detail, fix and ack", async () => {
+  const z = boot();
+  const fresh = JSON.parse((await z.call("GET", "/setup")).text) as SetupChecklist;
+  assert.deepEqual(rowKeys(fresh), {
+    chat_model: ["rowChatModel", "setupNoProvider", "fixAddProvider", undefined],
+    lanes: ["rowLanes", "listDot", "fixOpenModels", undefined],
+    token: ["rowToken", "tokenLocalOnly", undefined, undefined],
+    public_url: ["rowPublicUrl", "publicOptional", undefined, undefined],
+    master_key: ["rowMasterKey", "masterGenerated", undefined, "ackBackedUp"],
+    push: ["rowPush", "pushNone", "fixTurnOnNotifications", undefined],
+    owner: ["rowOwner", "ownerOptional", "fixAddChannel", undefined],
+  });
+  assert.deepEqual(row(fresh, "token").detailMsg, { key: "tokenLocalOnly", params: { host: z.env.host } });
+  // Lane names are keys too, nested in each lane's issue.
+  const lanes = row(fresh, "lanes").detailMsg as unknown as { params: { items: { key: string; params: { lane: { key: string }; detail: { key: string } } }[] } };
+  assert.deepEqual(
+    lanes.params.items.map((i) => [i.key, i.params.lane.key, i.params.detail.key]),
+    [
+      ["laneIssue", "laneAgent", "laneNoModel"],
+      ["laneIssue", "laneBriefing", "laneNoModel"],
+      ["laneIssue", "laneFast", "laneNoModel"],
+    ],
+  );
+
+  // A model not tested yet, then answering; an acknowledged master key.
+  const provider = await fakeProvider(pong);
+  await addProvider(z, provider.baseURL, "sk-good-key-1234567890");
+  assert.deepEqual(row(JSON.parse((await z.call("GET", "/setup")).text), "chat_model").detailMsg, {
+    key: "setupCheckChat",
+    params: { detail: { key: "refNotChecked", params: { ref: "p1:m" } } },
+  });
+  await z.call("POST", "/setup/master_key/ack");
+  const checked = JSON.parse((await z.call("POST", "/setup/check")).text) as SetupChecklist;
+  const keys = rowKeys(checked);
+  assert.deepEqual(keys.chat_model, ["rowChatModel", "refAnswered", undefined, undefined]);
+  assert.equal((row(checked, "chat_model").detailMsg!.params as { ref: string }).ref, "p1:m");
+  assert.deepEqual(keys.lanes, ["rowLanes", "lanesReady", undefined, undefined]);
+  assert.deepEqual(keys.master_key, ["rowMasterKey", "masterAcked", undefined, undefined]);
+
+  for (const [vars, key] of [
+    [{ Z_HOST: "0.0.0.0" }, "tokenGenerated"],
+    [{ Z_TOKEN: "short" }, "tokenShort"],
+    [{ Z_TOKEN: "0123456789abcdef0123456789abcdef" }, "tokenEnv"],
+    [{ Z_PUBLIC_URL: "https://z.example.com" }, "tokenExposed"],
+  ] as const) {
+    assert.equal(rowKeys(JSON.parse((await boot(vars).call("GET", "/setup")).text)).token![1], key, JSON.stringify(vars));
+  }
+});
+
+test("setup: channel status the server writes is a key; the channel and owner rows use it", async () => {
+  const z = boot();
+  const limits = { running: 4, waiting: 20, authorWaiting: 2, authorHourly: 10 };
+  z.store.channels.upsert({ id: "tg", kind: "telegram", label: "TG", enabled: true, config: {}, always: false, lane: "bot", limits });
+  await z.channels.sync("tg");
+  const channel = z.store.channels.get("tg")!;
+  assert.equal(channel.status, "error");
+  assert.deepEqual(channel.statusDetailMsg, { key: "chNoAdapter", params: { kind: "telegram" } });
+  assert.equal(channel.statusDetail, 'No enabled plugin provides a "telegram" adapter');
+  assert.deepEqual(z.channels.view(channel).statusDetailMsg, channel.statusDetailMsg, "the view carries it");
+
+  const list = JSON.parse((await z.call("GET", "/setup")).text) as SetupChecklist;
+  assert.deepEqual(rowKeys(list)["channel:tg"], [undefined, "chNoAdapter", "fixOpenChannels", undefined]);
+  assert.deepEqual(row(list, "owner").detailMsg, { key: "ownerPair", params: { channel: "TG" } });
+
+  z.store.channels.upsert({ ...channel, enabled: false });
+  await z.channels.sync("tg");
+  assert.deepEqual(z.store.channels.get("tg")!.statusDetailMsg, { key: "chDisabled" });
+  // Adapter text has no key.
+  z.store.channels.setStatus("tg", "error", "Telegram said no");
+  assert.equal(z.store.channels.get("tg")!.statusDetailMsg, null);
+});
+
+test("errors: routes send errorMsg next to error; validation keeps its English detail", async () => {
+  const z = boot();
+  const missing = await z.call("GET", "/providers/nope/models");
+  assert.equal(missing.status, 404);
+  assert.deepEqual(JSON.parse(missing.text), { error: "Provider not found", errorMsg: { key: "errNotFound", params: { what: { key: "thingProvider" } } } });
+
+  const invalid = JSON.parse((await z.call("PUT", "/settings", { timezone: "Mars/Olympus" })).text);
+  assert.equal(invalid.errorMsg.key, "errInvalid");
+  assert.equal(invalid.error, invalid.errorMsg.params.detail);
+  assert.match(invalid.error, /^timezone: unknown time zone/);
+
+  const ack = JSON.parse((await z.call("POST", "/setup/token/ack")).text);
+  assert.deepEqual(ack, { error: "This item can't be confirmed by hand", errorMsg: { key: "errNoAck" } });
 });

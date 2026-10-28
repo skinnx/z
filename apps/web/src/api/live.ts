@@ -4,6 +4,7 @@ import { t } from "../i18n.ts";
 import { notify } from "../ui/toast.tsx";
 import { authRequired, eventsUrl, token, unreachable } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
+import { serverText } from "../lib/server-text.ts";
 
 const TYPES = ["task", "approval", "briefing", "channel", "notice", "connector"] as const;
 
@@ -39,7 +40,7 @@ function apply(event: LiveEvent, go: (path: string) => void) {
       queryClient.setQueryData<Notice[]>(keys.notices, (list) => (list ? upsert(list, n) : list));
       if (n.kind === "memory") void queryClient.invalidateQueries({ queryKey: keys.memories });
       // Approvals already toast above; watch hits are the other thing worth interrupting for.
-      if (n.kind === "watch" && !n.read && !known) notify("watch", n.title, n.body, { label: t().showDetails, onClick: () => go(n.path) });
+      if (n.kind === "watch" && !n.read && !known) notify("watch", serverText(n.title, n.titleMsg), serverText(n.body, n.bodyMsg), { label: t().showDetails, onClick: () => go(n.path) });
       break;
     }
   }

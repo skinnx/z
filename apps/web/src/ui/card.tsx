@@ -3,6 +3,8 @@ import type { ComponentProps, ReactNode } from "react";
 import { useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { Button } from "./button.tsx";
+import { ApiError } from "../api/client.ts";
+import { serverText } from "../lib/server-text.ts";
 
 export function Card({ className, ...props }: ComponentProps<"div">) {
   return <div className={cn("min-w-0 rounded-(--radius-card) border border-line bg-surface", className)} {...props} />;
@@ -88,7 +90,8 @@ export function Loading({ label, className }: { label: string; className?: strin
 /** What to tell the owner about a failed request: an unreachable server reads as such, in their language. */
 export function errorText(error: unknown, t: Dict): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message === "offline" ? t.offline : message;
+  if (message === "offline") return t.offline;
+  return error instanceof ApiError ? serverText(message, error.msg) : message;
 }
 
 /** A failed load: what went wrong and one way forward. */

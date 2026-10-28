@@ -367,6 +367,19 @@ const MIGRATIONS: Migration[] = [
   `,
   },
   // ─── End Codex CLI provider ───────────────────────────────────────────────
+  // ─── Server text as message keys (contract/messages.ts), next to the English ─
+  {
+    id: "0017-server-text",
+    sql: `
+  ALTER TABLE notices ADD COLUMN title_msg TEXT;          -- JSON ServerText
+  ALTER TABLE notices ADD COLUMN body_msg TEXT;           -- JSON ServerText
+  ALTER TABLE channels ADD COLUMN status_detail_msg TEXT; -- JSON ServerText
+  ALTER TABLE connectors ADD COLUMN status_detail_msg TEXT; -- JSON ServerText
+  ALTER TABLE tasks ADD COLUMN error_msg TEXT;            -- JSON ServerText
+  ALTER TABLE briefings ADD COLUMN summary_msg TEXT;      -- JSON ServerText
+  `,
+  },
+  // ─── End server text ──────────────────────────────────────────────────────
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */

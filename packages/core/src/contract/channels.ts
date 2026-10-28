@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Lane } from "./common.ts";
+import type { ServerText } from "./messages.ts";
 
 // ─── Channels: the summonable bot ───────────────────────────────────────────
 
@@ -48,6 +49,8 @@ export type ChannelView = Omit<z.output<typeof ChannelInput>, "config"> & {
   lastEventAt: string | null;
   status: "ok" | "error" | "idle";
   statusDetail: string | null;
+  /** The same in words the client translates (see contract/messages.ts); null/absent for plugin, adapter or platform text. */
+  statusDetailMsg?: ServerText | null;
 };
 
 /** What an adapter hands to the bot runtime for one inbound message. */

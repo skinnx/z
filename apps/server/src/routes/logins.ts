@@ -1,13 +1,13 @@
 /** Saved sign-ins the browser fills by itself. Views carry the origin and username only. */
 import { randomUUID } from "node:crypto";
-import { LoginInput, LoginUpdate } from "@z/core";
+import { LoginInput, LoginUpdate, say } from "@z/core";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Services } from "../app.ts";
-import { body, notFound } from "../http.ts";
+import { body, errorResponse, notFound } from "../http.ts";
 
 const taken = (origin: string) =>
-  new HTTPException(409, { res: Response.json({ error: `A sign-in for ${origin} is already saved` }, { status: 409 }) });
+  new HTTPException(409, { res: errorResponse(say("errLoginExists", { origin }), 409) });
 
 export function loginRoutes({ rt }: Services) {
   const { store } = rt;

@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { serve } from "@hono/node-server";
+import { say } from "@z/core";
 import { Hono, type MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import pkg from "../package.json" with { type: "json" };
@@ -33,6 +34,7 @@ import { setupRoutes } from "./routes/setup.ts";
 import { installRedaction } from "./secrets.ts";
 import { createSetup } from "./setup.ts";
 import { mountWeb } from "./static.ts";
+import { errorBody } from "./http.ts";
 import { createStore } from "./store.ts";
 import { ConflictError } from "./tasks.ts";
 import { createTasks } from "./tasks.ts";
@@ -58,9 +60,9 @@ const app = new Hono();
 
 app.onError((error, c) => {
   if (error instanceof HTTPException) return error.getResponse();
-  if (error instanceof ConflictError) return c.json({ error: error.message }, 409);
+  if (error instanceof ConflictError) return c.json(errorBody(error.msg), 409);
   console.error(`[z] ${c.req.method} ${c.req.path} failed:`, error);
-  return c.json({ error: "Internal server error" }, 500);
+  return c.json(errorBody(say("errInternal")), 500);
 });
 
 const api = new Hono();
@@ -69,7 +71,7 @@ api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
 for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes, loginRoutes, setupRoutes, skillRoutes]) {
   api.route("/", routes(services));
 }
-api.all("*", (c) => c.json({ error: "Not found" }, 404));
+api.all("*", (c) => c.json(errorBody(say("errRouteNotFound")), 404));
 
 app.route("/api", api);
 app.all("/hooks/:channelId", (c) => services.channels.hook(c.req.param("channelId"), c.req.raw));
@@ -117,7 +119,7 @@ function auth(token: string | null): MiddlewareHandler {
     const header = c.req.header("authorization");
     const given = header?.startsWith("Bearer ") ? header.slice(7) : c.req.query("token");
     const buf = Buffer.from(given ?? "");
-    if (buf.length !== expected.length || !timingSafeEqual(buf, expected)) return c.json({ error: "Unauthorized" }, 401);
+    if (buf.length !== expected.length || !timingSafeEqual(buf, expected)) return c.json(errorBody(say("errUnauthorized")), 401);
     return next();
   };
 }

@@ -1,5 +1,5 @@
 /** Streaming chat and its stored threads. */
-import { ModelRef, NoModelConfiguredError, parseModelRef, streamChat, type ContextSummary } from "@z/core";
+import { ModelRef, NoModelConfiguredError, parseModelRef, say, streamChat, type ContextSummary } from "@z/core";
 import { safeValidateUIMessages, type UIMessage } from "ai";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -47,7 +47,7 @@ export function chatRoutes({ rt }: Services) {
         rt.ownerDeps("chat"),
       );
     } catch (error) {
-      if (error instanceof NoModelConfiguredError) throw badRequest(error.message);
+      if (error instanceof NoModelConfiguredError) throw badRequest(say("errNoModel"));
       throw error;
     }
   });

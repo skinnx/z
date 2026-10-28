@@ -14,18 +14,28 @@ import { randomUUID } from "node:crypto";
 import {
   DELIVERY_BACKOFF_MS,
   describeError,
+  english,
+  say,
   MAX_DELIVERY_ATTEMPTS,
   previewFits,
   type Approval,
   type Notice,
   type NoticeQuestion,
+  type ServerText,
 } from "@z/core";
 import type { Channels } from "./channels.ts";
 import type { Push, PushPayload } from "./push.ts";
 import type { Runtime } from "./runtime.ts";
 import type { DeliveryRecord } from "./store.ts";
 
-export type NoticeInput = Omit<Notice, "id" | "read" | "createdAt">;
+/**
+ * What raises a notice. `title` / `body` given as a ServerText (`say(…)`) keep their key on the notice
+ * (`titleMsg` / `bodyMsg`) so the app words them in the owner's language; the English is stored as well.
+ */
+export type NoticeInput = Omit<Notice, "id" | "read" | "createdAt" | "title" | "body" | "titleMsg" | "bodyMsg"> & {
+  title: string | ServerText;
+  body: string | ServerText;
+};
 
 /** What the service worker shows; longer bodies are cut, so an approval that needs more opens the app. */
 export const PUSH_BODY_MAX = 600;
@@ -63,7 +73,17 @@ export function startDelivery(rt: Runtime, push: Transports["push"], channels: T
 /** Persist a notice, stream it to open apps and queue its deliveries. Never throws on delivery. */
 export function notify(input: NoticeInput): Notice {
   if (!hub) throw new Error("notify() called before startDelivery()");
-  const notice: Notice = { id: randomUUID(), ...input, read: false, createdAt: new Date(hub.now()).toISOString() };
+  const { title, body, ...rest } = input;
+  const notice: Notice = {
+    id: randomUUID(),
+    ...rest,
+    title: english(title),
+    body: english(body),
+    ...(typeof title === "string" ? {} : { titleMsg: title }),
+    ...(typeof body === "string" ? {} : { bodyMsg: body }),
+    read: false,
+    createdAt: new Date(hub.now()).toISOString(),
+  };
   hub.rt.store.notices.insert(notice);
   hub.rt.bus.emit({ type: "notice", notice });
   hub.outbox.enqueue(notice);
@@ -97,7 +117,12 @@ export function settleQuestion(taskId: string, answer: string | null) {
 
 /** An approval notice's body: why it asks, then the whole preview. */
 export function approvalBody(approval: Pick<Approval, "reason" | "preview">): string {
-  return [approval.reason ? `Asking because ${approval.reason}` : "", approval.preview.fullText].filter(Boolean).join("\n\n");
+  return english(approvalBodyMsg(approval));
+}
+
+/** The same as a message key: "Asking because" is worded by the app; the reason and preview stay as written. */
+export function approvalBodyMsg(approval: Pick<Approval, "reason" | "preview">): ServerText {
+  return say("noticeApprovalBody", { ...(approval.reason ? { reason: approval.reason } : {}), preview: approval.preview.fullText });
 }
 
 /**
