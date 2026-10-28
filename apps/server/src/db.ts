@@ -250,6 +250,19 @@ const MIGRATIONS: string[] = [
   ALTER TABLE briefings ADD COLUMN could_not_check TEXT; -- JSON CouldNotCheck[]
   `,
   // ─── End task engine ──────────────────────────────────────────────────────
+  // ─── Saved sign-ins: one login per origin; username, password and TOTP secret are sealed ─
+  `
+  CREATE TABLE IF NOT EXISTS logins (
+    id TEXT PRIMARY KEY,
+    origin TEXT NOT NULL UNIQUE,
+    secret TEXT NOT NULL,      -- sealed JSON { username, password, totp? }
+    has_totp INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_used_at TEXT
+  );
+  `,
+  // ─── End saved sign-ins ───────────────────────────────────────────────────
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */

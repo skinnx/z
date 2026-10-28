@@ -1,8 +1,32 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ActivePlugin, ChannelAdapter, PluginManifest, ZPlugin } from "@z/core";
+import type { ActivePlugin, ChannelAdapter, LoginVault, PluginManifest, ZPlugin } from "@z/core";
 import { builtinPlugins } from "@z/plugins";
+import { notify } from "./notify.ts";
 import type { Store } from "./store.ts";
+
+/** Saved sign-ins, for the built-in browser alone: it fills them into the page, the model never sees them. */
+const browserPlugin = builtinPlugins.find((p) => p.id === "browser");
+
+function loginVault(store: Store): LoginVault {
+  return {
+    login: async (origin) => {
+      const login = store.logins.byOrigin(origin);
+      if (!login) {
+        notify({
+          kind: "task",
+          title: `Save a sign-in for ${new URL(origin).host}?`,
+          body: `z was asked to sign in to ${origin} but nothing is saved for it. Add it under Settings → Security → Saved sign-ins.`,
+          path: "/?settings=security",
+        });
+        return null;
+      }
+      store.logins.touch(login.id);
+      return { username: login.username, password: login.password, ...(login.totp ? { totp: login.totp } : {}) };
+    },
+    username: (origin) => store.logins.byOrigin(origin)?.username ?? null,
+  };
+}
 
 /**
  * Built-in plugins, server-provided ones (`own`, e.g. memory) and those named in Z_PLUGINS
@@ -41,6 +65,7 @@ export function createPluginRegistry(plugins: ZPlugin[], store: Store) {
     };
 
   const find = (id: string) => plugins.find((p) => p.id === id) ?? null;
+  const vault = loginVault(store);
   const enabled = () => plugins.filter((p) => state(p).enabled);
 
   return {
@@ -48,7 +73,7 @@ export function createPluginRegistry(plugins: ZPlugin[], store: Store) {
     /** Enabled plugins whose required settings are filled in; these provide tools and briefings. */
     active: (): ActivePlugin[] =>
       enabled()
-        .map((plugin) => ({ plugin, settings: state(plugin).settings }))
+        .map((plugin) => ({ plugin, settings: state(plugin).settings, ...(plugin === browserPlugin && { vault }) }))
         .filter(({ plugin, settings }) => !requiredMissing(plugin, settings)),
     adapters: (): ChannelAdapter[] => enabled().flatMap((p) => p.adapters ?? []),
     manifests: () => plugins.map(manifest),

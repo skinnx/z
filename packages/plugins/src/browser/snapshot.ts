@@ -235,3 +235,48 @@ export const DESCRIBE_SCRIPT = `(ref) => window.__zSnapshot?.describe?.(ref) ?? 
 
 /** The element behind a number, for Playwright to act on. */
 export const RESOLVE_SCRIPT = `(ref) => { const el = window.__zSnapshot?.refs.get(ref)?.deref(); return el && el.isConnected ? el : null; }`;
+
+/**
+ * The visible sign-in fields of the page, for browser_sign_in to fill itself:
+ * `{ username, password, otp, submit }` (each an element or null). Same signals as the snapshot's
+ * masking: autocomplete attributes and type=password first, then name/id/label/placeholder patterns.
+ */
+export const LOGIN_FIELDS_SCRIPT = String.raw`() => {
+  const usable = (el) => el.isConnected && !el.disabled && !el.readOnly && el.checkVisibility({ visibilityProperty: true });
+  const auto = (el) => (el.getAttribute("autocomplete") || "").toLowerCase();
+  const words = (el) =>
+    [el.name, el.id, el.getAttribute("aria-label"), el.placeholder, ...[...(el.labels || [])].map((l) => l.innerText)]
+      .join(" ")
+      .toLowerCase();
+  const inputs = [...document.querySelectorAll("input")].filter(usable);
+  const texty = inputs.filter((el) => ["text", "email", "tel", "number", ""].includes((el.getAttribute("type") || "").toLowerCase()));
+
+  const passwords = inputs.filter((el) => el.type === "password" && !/new-password/.test(auto(el)));
+  const password = passwords.find((el) => /current-password/.test(auto(el))) || passwords[0] || null;
+
+  const OTP = /one.?time|otp|totp|2fa|mfa|two.?factor|verification|authenticat|security code|\bcode\b/;
+  const otp =
+    texty.find((el) => /one-time-code/.test(auto(el))) ||
+    (password ? null : texty.find((el) => OTP.test(words(el)) && !/user|email|login/.test(words(el)))) ||
+    null;
+
+  const scope = (password || otp)?.form || document;
+  const candidates = texty.filter((el) => el !== otp && (scope === document || el.form === scope));
+  const username =
+    (otp ? null :
+      candidates.find((el) => /username|email/.test(auto(el))) ||
+      candidates.find((el) => el.type === "email") ||
+      candidates.find((el) => /user|e-?mail|login|account|identifier|phone/.test(words(el))) ||
+      (password && candidates.filter((el) => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1))) ||
+    null;
+
+  const field = password || otp || username;
+  const form = field?.form;
+  const buttons = [...(form || document).querySelectorAll("button, input[type=submit], input[type=image], [role=button]")].filter(usable);
+  const label = (el) => (el.innerText || el.value || el.getAttribute("aria-label") || "").toLowerCase();
+  const submit =
+    buttons.find((el) => form && (el.type === "submit" || el.type === "image")) ||
+    buttons.find((el) => /sign.?in|log.?in|continue|next|submit|verify|confirm/.test(label(el))) ||
+    null;
+  return { username, password, otp, submit };
+}`;

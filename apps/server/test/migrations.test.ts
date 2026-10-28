@@ -45,7 +45,8 @@ for (let prefix = 0; prefix < MIGRATION_COUNT; prefix++) {
         assert.equal(rows.length, 1, `${table} keeps its row`);
         for (const [key, value] of Object.entries(row)) assert.equal(rows[0]![key], value, `${table}.${key} unchanged`);
       }
-      if (seeded.has("tasks")) {
+      // Only a database from before the task-engine migration has tasks without these columns.
+      if (seeded.has("tasks") && !("failures" in seeded.get("tasks")!)) {
         const task = db.prepare("SELECT failures, question FROM tasks").get() as { failures: number; question: string | null };
         assert.deepEqual({ ...task }, { failures: 0, question: null }, "new task columns get their defaults");
       }
