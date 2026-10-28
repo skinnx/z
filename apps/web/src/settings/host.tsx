@@ -2,7 +2,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { Drawer } from "@base-ui/react/drawer";
 import { useMediaQuery } from "@base-ui/react/unstable-use-media-query";
-import { lazy, Suspense, useEffect, useId, useRef } from "react";
+import { lazy, startTransition, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useT } from "../i18n.ts";
 import { backdropClass } from "../ui/dialog.tsx";
 import { Loading } from "../ui/card.tsx";
@@ -43,28 +43,41 @@ export function SettingsHost() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const onOpenChange = (open: boolean) => {
-    if (!open) route.close();
+  // Closing starts here, in the same event: the popup stops taking taps and leaves at once, and the
+  // URL (whose change re-renders the screen underneath) follows as a transition, never in the way of
+  // the next tap. Under reduced motion there is no exit to wait for at all.
+  const [closing, setClosing] = useState(false);
+  // Any navigation (the close landing, or settings opened again) ends it.
+  useEffect(() => setClosing(false), [route]);
+  const open = route.isOpen && !closing;
+  const onOpenChange = (next: boolean) => {
+    if (next) return;
+    setClosing(true);
+    startTransition(() => route.close());
   };
   // The popup takes focus first; the body then hands it to the active tab once the tab list has
   // registered its items (focusing a tab earlier breaks arrow-key navigation). Touch doesn't move focus.
   const initialFocus = (type: string) => (type === "touch" ? false : (popup.current ?? true));
   const finalFocus = () => settingsOpener() ?? true;
 
-  const body = (
-    <LoadBoundary>
-      <Suspense fallback={<Loading label={t.loading} className="h-full" />}>
-        <SettingsBody phone={phone} titleId={titleId} />
-      </Suspense>
-    </LoadBoundary>
+  // The same element across the host's own re-renders (opening, closing): the panels don't re-render with it.
+  const body = useMemo(
+    () => (
+      <LoadBoundary>
+        <Suspense fallback={<Loading label={t.loading} className="h-full" />}>
+          <SettingsBody phone={phone} titleId={titleId} />
+        </Suspense>
+      </LoadBoundary>
+    ),
+    [t, phone, titleId],
   );
 
   if (phone) {
     return (
-      <Drawer.Root open={route.isOpen} onOpenChange={onOpenChange} swipeDirection="down">
+      <Drawer.Root open={open} onOpenChange={onOpenChange} swipeDirection="down">
         <Drawer.Portal>
-          <Drawer.Backdrop className="fixed inset-0 z-40 bg-black/40 opacity-[calc(1-var(--drawer-swipe-progress,0))] transition-opacity duration-300 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0" />
-          <Drawer.Viewport className="fixed inset-0 z-50 flex items-end">
+          <Drawer.Backdrop className="fixed inset-0 z-40 bg-black/40 opacity-[calc(1-var(--drawer-swipe-progress,0))] transition-opacity duration-300 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:pointer-events-none data-ending-style:opacity-0" />
+          <Drawer.Viewport className="fixed inset-0 z-50 flex items-end data-ending-style:pointer-events-none">
             <Drawer.Popup
               ref={popup}
               aria-labelledby={titleId}
@@ -81,7 +94,7 @@ export function SettingsHost() {
   }
 
   return (
-    <Dialog.Root open={route.isOpen} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className={backdropClass} />
         <Dialog.Viewport className="fixed inset-0 z-50 grid place-items-center p-4">

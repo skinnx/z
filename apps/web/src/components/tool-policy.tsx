@@ -3,10 +3,12 @@
  * per tool "Just do it / Ask me / Never" next to what the tool does, per source three bulk
  * actions, and the quick-check (reviewer) switch with one plain sentence.
  */
-import type { Risk } from "@z/core";
+import type { Risk, Settings } from "@z/core";
 import { Ban, ChevronDown, Eye, Hand, ListChecks } from "lucide-react";
-import type { ReactNode } from "react";
-import { useSaveSetting, useSettings } from "../api/settings.ts";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { keys, queryClient } from "../api/query.ts";
+import { useApprovalPolicies, useSaveSetting, useSettings } from "../api/settings.ts";
+import { useStable } from "../lib/use-stable.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { riskIcon, riskTone } from "../lib/icons.tsx";
@@ -65,31 +67,46 @@ export function PolicyControl({ name, risk, value, onChange, className }: { name
   );
 }
 
-/** A policy control that saves right away, optimistically, with a quiet check once it lands. */
-export function LivePolicyControl({ tool, className }: { tool: PolicyTool; className?: string }) {
-  const settings = useSettings();
-  const { save, saved } = useSaveSetting();
-  const approvals = settings.data?.approvals ?? {};
-  return (
-    <span className="flex items-center gap-1.5">
-      <SavedMark show={saved} iconOnly />
-      <PolicyControl
-        name={tool.name}
-        risk={tool.risk}
-        className={className}
-        value={effectivePolicy(tool.risk, approvals[tool.key], tool.declared)}
-        onChange={(v) => settings.data && save({ approvals: { ...approvals, [tool.key]: v } })}
-      />
-    </span>
-  );
+const NO_POLICIES: Record<string, Policy> = {};
+
+/**
+ * Policy editing for a whole list of tools: the stored choices are read once here (rows get plain
+ * values and stay memoised), a change saves at once, optimistically, and `savedKey` names the row
+ * that just landed, for its quiet check mark.
+ */
+export function usePolicyList() {
+  const approvals = useApprovalPolicies() ?? NO_POLICIES;
+  const { save } = useSaveSetting();
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const setPolicy = useStable((key: string, value: Policy) => {
+    const current = queryClient.getQueryData<Settings>(keys.settings);
+    if (!current) return;
+    save(
+      { approvals: { ...current.approvals, [key]: value } },
+      {
+        onSuccess: () => {
+          setSavedKey(key);
+          clearTimeout(timer.current);
+          timer.current = setTimeout(() => setSavedKey(null), 1500);
+        },
+      },
+    );
+  });
+  return { approvals, setPolicy, savedKey };
 }
 
 /**
  * One tool: what it does (risk phrase), its name and summary, and the control. `badges` and `menu`
- * carry what only some lists have (the connector's "Change what this tool does").
+ * carry what only some lists have (the connector's "Change what this tool does"). Memoised: lists
+ * run to hundreds of rows, and a change re-renders only the row it touches.
  */
-export function ToolPolicyRow({
+export const ToolPolicyRow = memo(function ToolPolicyRow({
   tool,
+  policy,
+  saved,
+  onPolicyChange,
   description,
   code,
   badges,
@@ -99,6 +116,11 @@ export function ToolPolicyRow({
 }: {
   className?: string;
   tool: PolicyTool;
+  /** The stored choice for `tool.key`, if any (`usePolicyList().approvals`). */
+  policy: Policy | undefined;
+  /** Its change just saved. */
+  saved: boolean;
+  onPolicyChange: (key: string, value: Policy) => void;
   description?: string;
   /** The internal tool name, when the row shows a friendlier title. */
   code?: string;
@@ -107,8 +129,8 @@ export function ToolPolicyRow({
   as?: "div" | "li";
 }) {
   const t = useT();
-  const approvals = useSettings().data?.approvals ?? {};
-  const denied = effectivePolicy(tool.risk, approvals[tool.key], tool.declared) === "deny";
+  const value = effectivePolicy(tool.risk, policy, tool.declared);
+  const denied = value === "deny";
   return (
     <As className={cn("flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:gap-4", className)}>
       <div className="min-w-0 flex-1">
@@ -129,12 +151,15 @@ export function ToolPolicyRow({
         {tool.risk === "external" && <p className="mt-0.5 text-xs text-fg-muted">{t.externalAlwaysAsks}</p>}
       </div>
       <div className="flex items-center gap-1 sm:shrink-0">
-        <LivePolicyControl tool={tool} className="w-full sm:w-auto" />
+        <span className="flex items-center gap-1.5">
+          <SavedMark show={saved} iconOnly />
+          <PolicyControl name={tool.name} risk={tool.risk} className="w-full sm:w-auto" value={value} onChange={(v) => onPolicyChange(tool.key, v)} />
+        </span>
         {menu}
       </div>
     </As>
   );
-}
+});
 
 /** "Ask for everything" / "Let read-only tools run" / "Never use this source", for every tool of one source. */
 export function BulkPolicyMenu({ source, tools, onMarkAllRead }: { source: string; tools: PolicyTool[]; onMarkAllRead?: () => void }) {

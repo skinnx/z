@@ -7,7 +7,15 @@ import { keys, queryClient } from "./query.ts";
 
 /** `refetchInterval` polls, e.g. while waiting for the owner to pair. */
 export function useSettings(refetchInterval?: number) {
-  return useQuery({ queryKey: keys.settings, queryFn: () => api<Settings>("/settings"), ...(refetchInterval ? { refetchInterval } : {}) });
+  return useQuery({ queryKey: keys.settings, queryFn: fetchSettings, ...(refetchInterval ? { refetchInterval } : {}) });
+}
+
+const fetchSettings = () => api<Settings>("/settings");
+const selectApprovals = (s: Settings) => s.approvals;
+
+/** Just the per-tool approval choices: re-renders when they change, not on every other setting. */
+export function useApprovalPolicies() {
+  return useQuery({ queryKey: keys.settings, queryFn: fetchSettings, select: selectApprovals }).data;
 }
 
 export type SettingsPatch = Partial<Omit<Settings, "owner">>;

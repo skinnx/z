@@ -1,16 +1,16 @@
 /** Per-tool approval policy, grouped by plugin or connector. Aggregators can list hundreds: search and page. */
 import { ChevronDown, Search, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { startTransition, useDeferredValue, useMemo, useState } from "react";
 import { useConnectors } from "../../api/connectors.ts";
 import { usePlugins } from "../../api/plugins.ts";
-import { BulkPolicyMenu, QuickCheckRow, ToolPolicyRow, type PolicyTool } from "../../components/tool-policy.tsx";
+import { BulkPolicyMenu, QuickCheckRow, ToolPolicyRow, usePolicyList, type PolicyTool } from "../../components/tool-policy.tsx";
 import { useT } from "../../i18n.ts";
 import { Button } from "../../ui/button.tsx";
 import { Empty, Loading, LoadError } from "../../ui/card.tsx";
 import { Input } from "../../ui/field.tsx";
 import { RowGroup } from "../../ui/row.tsx";
 
-type Tool = PolicyTool & { description: string; code?: string };
+type Tool = PolicyTool & { description: string; code?: string; /** Lower-cased name, key and description, for search. */ text: string };
 type Group = { id: string; label: string; tools: Tool[] };
 
 const PAGE = 25;
@@ -28,25 +28,31 @@ export function ApprovalsPanel() {
         .map((p) => ({
           id: `plugin:${p.id}`,
           label: p.name,
-          tools: p.tools.map((tool) => ({ key: `${p.id}_${tool.name}`, name: tool.name, description: tool.description, risk: tool.risk, declared: tool.defaultPolicy })),
+          tools: p.tools.map((tool) => withText({ key: `${p.id}_${tool.name}`, name: tool.name, description: tool.description, risk: tool.risk, declared: tool.defaultPolicy })),
         })),
       ...(connectors.data ?? [])
         .filter((c) => c.tools.length > 0)
         .map((c) => ({
           id: `connector:${c.id}`,
           label: c.label,
-          tools: c.tools.map((tool) => ({ key: tool.toolName, name: tool.title || tool.name, code: tool.title ? tool.name : undefined, description: tool.description, risk: tool.risk })),
+          tools: c.tools.map((tool) => withText({ key: tool.toolName, name: tool.title || tool.name, code: tool.title ? tool.name : undefined, description: tool.description, risk: tool.risk })),
         })),
     ],
     [plugins.data, connectors.data],
   );
 
-  const q = query.trim().toLowerCase();
-  const filtered = q
-    ? groups
-        .map((g) => ({ ...g, tools: g.label.toLowerCase().includes(q) ? g.tools : g.tools.filter((x) => `${x.name} ${x.key} ${x.description}`.toLowerCase().includes(q)) }))
-        .filter((g) => g.tools.length > 0)
-    : groups;
+  const policies = usePolicyList();
+  // The box shows each key at once; filtering hundreds of rows follows when there is time.
+  const q = useDeferredValue(query).trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      q
+        ? groups
+            .map((g) => ({ ...g, tools: g.label.toLowerCase().includes(q) ? g.tools : g.tools.filter((x) => x.text.includes(q)) }))
+            .filter((g) => g.tools.length > 0)
+        : groups,
+    [groups, q],
+  );
   const total = groups.reduce((n, g) => n + g.tools.length, 0);
   const matched = filtered.reduce((n, g) => n + g.tools.length, 0);
 
@@ -77,13 +83,15 @@ export function ApprovalsPanel() {
         </div>
       ) : (
         // Keyed on the query so paging restarts with each search. Bulk actions always cover the whole source.
-        filtered.map((g) => <ToolGroup key={`${g.id}|${q}`} group={g} all={groups.find((x) => x.id === g.id)?.tools ?? g.tools} />)
+        filtered.map((g) => <ToolGroup key={`${g.id}|${q}`} group={g} all={groups.find((x) => x.id === g.id)?.tools ?? g.tools} policies={policies} />)
       )}
     </div>
   );
 }
 
-function ToolGroup({ group, all }: { group: Group; all: Tool[] }) {
+const withText = (tool: Omit<Tool, "text">): Tool => ({ ...tool, text: `${tool.name} ${tool.key} ${tool.description}`.toLowerCase() });
+
+function ToolGroup({ group, all, policies }: { group: Group; all: Tool[]; policies: ReturnType<typeof usePolicyList> }) {
   const t = useT();
   const [limit, setLimit] = useState(PAGE);
   const shown = group.tools.slice(0, limit);
@@ -101,11 +109,19 @@ function ToolGroup({ group, all }: { group: Group; all: Tool[] }) {
       }
     >
       {shown.map((tool) => (
-        <ToolPolicyRow key={tool.key} tool={tool} description={tool.description} code={tool.code} />
+        <ToolPolicyRow
+          key={tool.key}
+          tool={tool}
+          policy={policies.approvals[tool.key]}
+          saved={policies.savedKey === tool.key}
+          onPolicyChange={policies.setPolicy}
+          description={tool.description}
+          code={tool.code}
+        />
       ))}
       {left > 0 && (
         <div className="py-1.5">
-          <Button size="sm" variant="ghost" onClick={() => setLimit((n) => n + PAGE)}>
+          <Button size="sm" variant="ghost" onClick={() => startTransition(() => setLimit((n) => n + PAGE))}>
             <ChevronDown aria-hidden />
             {t.showMore(Math.min(PAGE, left), left)}
           </Button>

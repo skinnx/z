@@ -1,7 +1,7 @@
 import type { ConnectorAuth, ConnectorInput, ConnectorPreset, ConnectorTool, ConnectorView, Risk } from "@z/core";
 import { Form } from "@base-ui/react/form";
 import { Ban, BookOpen, Briefcase, Cable, Check, ChevronDown, ClipboardPaste, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, SlidersHorizontal, Trash2, Users, type LucideIcon } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   connectorInput,
@@ -12,17 +12,18 @@ import {
   useDeleteConnector,
   useRefreshConnector,
   useSaveConnector,
+  useSetConnectorEnabled,
   useSetToolRisk,
 } from "../api/connectors.ts";
 import { ErrorFix } from "../components/error-fix.tsx";
-import { BulkPolicyMenu, effectivePolicy, QuickCheckRow, ToolPolicyRow, type PolicyTool } from "../components/tool-policy.tsx";
+import { BulkPolicyMenu, effectivePolicy, QuickCheckRow, ToolPolicyRow, usePolicyList, type Policy, type PolicyTool } from "../components/tool-policy.tsx";
 import { connectorFailure } from "../lib/errors.ts";
-import { Menu, MenuItem, MenuSeparator } from "../ui/menu.tsx";
-import { useSettings } from "../api/settings.ts";
+import { createMenuHandle, MenuItem, MenuSeparator, MenuTrigger, SharedMenu, type MenuHandle } from "../ui/menu.tsx";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { authIcon, CATEGORIES, statusDot as dot, fillTemplate, headerValue, isSecretName, placeholders, presetOf, templateParts, uniqueId, urlHost } from "../lib/connectors.ts";
 import { slug } from "../lib/format.ts";
+import { useStable } from "../lib/use-stable.ts";
 import { riskIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Monogram } from "../ui/avatar.tsx";
@@ -34,6 +35,7 @@ import { Field, Input } from "../ui/field.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { Page } from "../ui/page.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
+import { createTooltipHandle, SharedTooltip, type TooltipHandle } from "../ui/tooltip.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 import { Segmented } from "../ui/toggle-group.tsx";
 import { serverText } from "../lib/server-text.ts";
@@ -286,7 +288,7 @@ function needsSignIn(c: ConnectorView) {
 
 function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: ConnectorView; focus: boolean; onFocused: () => void; onEdit: () => void }) {
   const t = useT();
-  const save = useSaveConnector();
+  const setEnabled = useSetConnectorEnabled();
   const refresh = useRefreshConnector();
   const remove = useDeleteConnector();
   const oauth = useConnectOAuth();
@@ -355,8 +357,8 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
           <Switch
             aria-label={`${t.enabled}: ${c.label}`}
             checked={c.enabled}
-            disabled={save.isPending}
-            onCheckedChange={(enabled) => save.mutate(connectorInput(c, { enabled }), { onError: notifyError })}
+            disabled={setEnabled.isPending}
+            onCheckedChange={(enabled) => setEnabled.mutate({ connector: c, enabled })}
           />
         </div>
 
@@ -408,19 +410,31 @@ const RISKS = ["read", "write", "external"] as const satisfies readonly Risk[];
 const SEARCH_FROM = 8;
 const PAGE = 40;
 
+/** Rows rendered with the first paint of an opened list; the rest of the page follows when there is time. */
+const FIRST_ROWS = 8;
+
 function ToolList({ connector: c }: { connector: ConnectorView }) {
   const t = useT();
-  const approvals = useSettings().data?.approvals ?? {};
+  const policies = usePolicyList();
+  const { approvals } = policies;
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
-  const q = query.trim().toLowerCase();
-  const matches = q
-    ? c.tools.filter((x) => `${x.name} ${x.title ?? ""} ${x.description}`.toLowerCase().includes(q))
-    : c.tools;
-  const hidden = c.tools.filter((x) => effectivePolicy(x.risk, approvals[x.toolName]) === "deny").length;
-  const shown = matches.slice(0, limit);
+  // Each key shows in the box at once; filtering and re-rendering the rows follow when there is time.
+  const q = useDeferredValue(query).trim().toLowerCase();
+  // Opening the list paints its first rows straight away and renders the rest of the page right after.
+  const rendered = useDeferredValue(limit, FIRST_ROWS);
+  const haystack = useMemo(() => c.tools.map((x) => `${x.name} ${x.title ?? ""} ${x.description}`.toLowerCase()), [c.tools]);
+  const matches = useMemo(() => (q ? c.tools.filter((_, i) => haystack[i]!.includes(q)) : c.tools), [c.tools, haystack, q]);
+  const hidden = useMemo(() => c.tools.filter((x) => effectivePolicy(x.risk, approvals[x.toolName]) === "deny").length, [c.tools, approvals]);
+  const shown = matches.slice(0, Math.min(limit, rendered));
   const policyTools = useMemo(() => c.tools.map(policyTool), [c.tools]);
   const save = useSaveConnector();
+  const setRisk = useSetToolRisk();
+  // Rows get one stable callback; the connector it reads is always the current one.
+  const onSetRisk = useStable((tool: string, risk: Risk | null) => setRisk.mutate({ connector: c, tool, risk }, { onError: notifyError }));
+  // One menu and one tooltip for every row (each row only has their triggers).
+  const [riskMenu] = useState(() => createMenuHandle<ConnectorTool>());
+  const [tooltips] = useState(() => createTooltipHandle());
 
   return (
     <div className="border-t border-line">
@@ -476,15 +490,47 @@ function ToolList({ connector: c }: { connector: ConnectorView }) {
       ) : (
         <ul aria-label={t.toolsOf(c.label)} className="divide-y divide-line">
           {shown.map((tool) => (
-            <ToolRow key={tool.name} connector={c} tool={tool} />
+            <ToolRow
+              key={tool.name}
+              tool={tool}
+              policy={approvals[tool.toolName]}
+              saved={policies.savedKey === tool.toolName}
+              onPolicyChange={policies.setPolicy}
+              riskMenu={riskMenu}
+              tooltips={tooltips}
+            />
           ))}
         </ul>
       )}
-      {matches.length > shown.length && (
+      <SharedTooltip handle={tooltips} />
+      <SharedMenu handle={riskMenu}>
+        {(tool) => (
+          <>
+            {RISKS.map((r) => {
+              const Icon = riskIcon[r];
+              return (
+                <MenuItem key={r} icon={<Icon aria-hidden className="size-4" />} onClick={() => r !== tool.risk && onSetRisk(tool.name, r)}>
+                  <span className="flex-1">{t.treatAs(t[`riskPhrase_${r}`])}</span>
+                  {r === tool.risk && <Check aria-hidden className="size-4 text-accent-text" />}
+                </MenuItem>
+              );
+            })}
+            {tool.riskSource === "user" && (
+              <>
+                <MenuSeparator />
+                <MenuItem icon={<RotateCcw aria-hidden className="size-4" />} onClick={() => onSetRisk(tool.name, null)}>
+                  {t.resetRisk}
+                </MenuItem>
+              </>
+            )}
+          </>
+        )}
+      </SharedMenu>
+      {matches.length > limit && (
         <div className="border-t border-line px-2 py-1.5">
-          <Button size="sm" variant="ghost" onClick={() => setLimit((n) => n + PAGE)}>
+          <Button size="sm" variant="ghost" onClick={() => startTransition(() => setLimit((n) => n + PAGE))}>
             <ChevronDown aria-hidden />
-            {t.showMore(Math.min(PAGE, matches.length - shown.length), matches.length - shown.length)}
+            {t.showMore(Math.min(PAGE, matches.length - limit), matches.length - limit)}
           </Button>
         </div>
       )}
@@ -497,18 +543,38 @@ function ToolList({ connector: c }: { connector: ConnectorView }) {
 
 const policyTool = (tool: ConnectorTool): PolicyTool => ({ key: tool.toolName, name: tool.title || tool.name, risk: tool.risk });
 
-/** One tool: the shared approval row, plus a menu to correct what the server says the tool does. */
-function ToolRow({ connector, tool }: { connector: ConnectorView; tool: ConnectorTool }) {
+/**
+ * One tool: the shared approval row, plus the trigger of the list's menu to correct what the server
+ * says the tool does. Memoised per tool.
+ */
+const ToolRow = memo(function ToolRow({
+  tool,
+  policy,
+  saved,
+  onPolicyChange,
+  riskMenu,
+  tooltips,
+}: {
+  tool: ConnectorTool;
+  policy: Policy | undefined;
+  saved: boolean;
+  onPolicyChange: (key: string, value: Policy) => void;
+  riskMenu: MenuHandle<ConnectorTool>;
+  tooltips: TooltipHandle;
+}) {
   const t = useT();
-  const setRisk = useSetToolRisk();
-  const approvals = useSettings().data?.approvals ?? {};
-  const denied = effectivePolicy(tool.risk, approvals[tool.toolName]) === "deny";
+  const denied = effectivePolicy(tool.risk, policy) === "deny";
   const name = tool.title || tool.name;
+  const asPolicyTool = useMemo(() => policyTool(tool), [tool]);
   return (
     <ToolPolicyRow
       as="li"
-      className="px-4"
-      tool={policyTool(tool)}
+      // Rows out of view skip layout and paint until scrolled to.
+      className="px-4 [content-visibility:auto] [contain-intrinsic-size:auto_5.5rem]"
+      tool={asPolicyTool}
+      policy={policy}
+      saved={saved}
+      onPolicyChange={onPolicyChange}
       description={tool.description}
       code={tool.title ? tool.name : undefined}
       badges={
@@ -527,35 +593,19 @@ function ToolRow({ connector, tool }: { connector: ConnectorView; tool: Connecto
         </>
       }
       menu={
-        <Menu
+        <MenuTrigger
+          handle={riskMenu}
+          payload={tool}
           trigger={
-            <IconButton label={`${t.editRisk}: ${name}`} size="icon-sm">
+            <IconButton label={`${t.editRisk}: ${name}`} size="icon-sm" tooltipHandle={tooltips}>
               <SlidersHorizontal aria-hidden />
             </IconButton>
           }
-        >
-          {RISKS.map((r) => {
-            const Icon = riskIcon[r];
-            return (
-              <MenuItem key={r} icon={<Icon aria-hidden className="size-4" />} onClick={() => r !== tool.risk && setRisk.mutate({ connector, tool: tool.name, risk: r }, { onError: notifyError })}>
-                <span className="flex-1">{t.treatAs(t[`riskPhrase_${r}`])}</span>
-                {r === tool.risk && <Check aria-hidden className="size-4 text-accent-text" />}
-              </MenuItem>
-            );
-          })}
-          {tool.riskSource === "user" && (
-            <>
-              <MenuSeparator />
-              <MenuItem icon={<RotateCcw aria-hidden className="size-4" />} onClick={() => setRisk.mutate({ connector, tool: tool.name, risk: null }, { onError: notifyError })}>
-                {t.resetRisk}
-              </MenuItem>
-            </>
-          )}
-        </Menu>
+        />
       }
     />
   );
-}
+});
 
 type HeaderRow = { name: string; value: string; stored: boolean };
 
