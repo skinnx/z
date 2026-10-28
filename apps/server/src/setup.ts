@@ -78,7 +78,7 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
         return { state: "ready", detail: `${ref} answered${latency}${fell}`, model: ref };
       }
       if (c.rateLimited || c.timedOut) inconclusive ??= `${ref}: ${c.rateLimited ? "rate limited" : "no answer"}, so it could not be checked (${c.error ?? "try again"})`;
-      else failed.push(`${ref}: ${c.error ?? "failed"}`);
+      else failed.push(`${ref}: ${(c.error ?? "failed").replace(/\.\s*$/, "")}`);
     }
     if (inconclusive) return { state: "not_checked", detail: [inconclusive, ...failed].join("; ") };
     return { state: "needs_setup", detail: failed.join("; ") };
