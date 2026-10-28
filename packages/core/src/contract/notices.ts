@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ServerText } from "./messages.ts";
 import type { NoticeQuestion, TaskStatus } from "./tasks.ts";
+import type { ApprovalStatus } from "./tools.ts";
 
 // ─── Notices: what z tells its owner, delivered in-app, by Web Push and to the owner channel ─
 
@@ -17,6 +18,11 @@ export type Notice = {
   path: string;
   /** Present for approvals: lets push and channels offer Approve / Deny. */
   approvalId?: string;
+  /**
+   * With `approvalId`: the approval's status now, so a notice decided elsewhere shows the outcome.
+   * Deciding an approval (anywhere) marks its notices read; so do answering a question and resolving a task.
+   */
+  approvalStatus?: ApprovalStatus;
   /** Present for `question`: simple choices become buttons on push and channels. */
   question?: NoticeQuestion;
   /**

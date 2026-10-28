@@ -90,11 +90,32 @@ export function notify(input: NoticeInput): Notice {
   return notice;
 }
 
-/** An approval was decided or expired: drop its waiting deliveries and edit sent channel messages. */
+/** Mark notices read and stream them, so open apps show the outcome and the bell stops counting them. */
+function markHandled(notices: Notice[]): Notice[] {
+  const { store, bus } = hub!.rt;
+  const unread = notices.filter((n) => !n.read).map((n) => n.id);
+  if (unread.length) store.notices.markRead(unread);
+  return notices.map((n) => {
+    const updated = { ...n, read: true };
+    bus.emit({ type: "notice", notice: updated });
+    return updated;
+  });
+}
+
+/**
+ * An approval was decided or expired: its notices become read and carry the outcome, waiting
+ * deliveries are dropped and sent channel messages edited.
+ */
 export function settleApproval(approval: Pick<Approval, "id" | "status">) {
   if (!hub) return;
   const outcome = approval.status === "approved" ? "Approved." : approval.status === "denied" ? "Denied." : "Expired: no longer needed.";
-  hub.outbox.settle(hub.rt.store.notices.forApproval(approval.id), outcome);
+  hub.outbox.settle(markHandled(hub.rt.store.notices.forApproval(approval.id)), outcome);
+}
+
+/** A task was resolved: its unread notices ("Ready for review", "Interrupted") are handled. */
+export function settleTask(taskId: string) {
+  if (!hub) return;
+  markHandled(hub.rt.store.notices.unreadForPath(`/tasks?task=${taskId}`));
 }
 
 /**
@@ -103,16 +124,14 @@ export function settleApproval(approval: Pick<Approval, "id" | "status">) {
  */
 export function settleQuestion(taskId: string, answer: string | null) {
   if (!hub) return;
-  const { store, bus } = hub.rt;
+  const { store } = hub.rt;
   const settled: Notice[] = [];
   for (const notice of store.notices.openQuestions(taskId)) {
     const question: NoticeQuestion = { ...notice.question!, answer: answer ?? "" };
     store.notices.setQuestion(notice.id, question);
-    const updated = { ...notice, question };
-    bus.emit({ type: "notice", notice: updated });
-    settled.push(updated);
+    settled.push({ ...notice, question });
   }
-  hub.outbox.settle(settled, answer === null ? "No longer needed." : `Answered: ${answer}`);
+  hub.outbox.settle(markHandled(settled), answer === null ? "No longer needed." : `Answered: ${answer}`);
 }
 
 /** An approval notice's body: why it asks, then the whole preview. */

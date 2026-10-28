@@ -15,6 +15,16 @@ export const en = {
   output: "Output",
   newApproval: "Approval needed",
   review: "Review",
+  expired: "Expired",
+  forTask: (title: string) => `For “${title}”`,
+  toolId: "Tool id",
+
+  // needs you
+  workingOn: "Working on",
+  moreTasks: (n: number) => `+${n} more`,
+  resolvedToast: "Resolved",
+  chatFailing: "Chat isn't answering. Tasks and approvals below still work.",
+  fixModels: "Fix in Models",
 
   // composer
   delegate: "Delegate",
@@ -70,6 +80,15 @@ export const vi: DictOf<typeof en> = {
   output: "Kết quả",
   newApproval: "Cần phê duyệt",
   review: "Xem",
+  expired: "Đã hết hạn",
+  forTask: (title) => `Cho việc “${title}”`,
+  toolId: "Mã công cụ",
+
+  workingOn: "Đang làm",
+  moreTasks: (n) => `+${n} việc nữa`,
+  resolvedToast: "Đã xong",
+  chatFailing: "Trò chuyện chưa trả lời được. Việc và phê duyệt bên dưới vẫn hoạt động.",
+  fixModels: "Sửa trong Mô hình",
 
   delegate: "Giao việc",
   delegatePlaceholder: "z nên lo việc gì cho bạn?",

@@ -27,7 +27,7 @@ import {
 } from "@z/core";
 import type { ModelMessage } from "ai";
 import type { z } from "zod";
-import { approvalBodyMsg, buttonable, clip, notify, settleApproval, settleQuestion } from "./notify.ts";
+import { approvalBodyMsg, buttonable, clip, notify, settleApproval, settleQuestion, settleTask } from "./notify.ts";
 import { planRecovery } from "./recovery.ts";
 import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
@@ -436,7 +436,9 @@ export function createTasks(rt: Runtime, { now: clock = () => new Date() }: { no
       if (!task) return null;
       if (task.status !== "review" && task.status !== "interrupted") throw new ConflictError(say("errTaskNotReview", { status: task.status }));
       endRun(id);
-      return update(id, { status: "done" });
+      const done = update(id, { status: "done" });
+      settleTask(id);
+      return done;
     },
 
     /** Record a decision; once every approval of the pause is decided, resume the loop. */

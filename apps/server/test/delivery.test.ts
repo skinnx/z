@@ -196,7 +196,10 @@ test("outbox: deciding an approval drops its waiting delivery; a sent one is edi
 
   const [approval] = z.store.approvals.forTask(task.id);
   z.model.push({ text: "Sent." });
+  assert.equal(z.store.notices.get(notice.id)?.approvalStatus, "pending");
   z.tasks.decide(approval!.id, { approve: true, remember: false });
+  const decided = z.store.notices.get(notice.id)!;
+  assert.deepEqual([decided.approvalStatus, decided.read], ["approved", true], "the notice shows the outcome and is no longer unread");
   const d = channelDelivery(z.store, notice);
   assert.deepEqual([d.status, d.lastError], ["dropped", "settled before delivery"]);
   time.advance(DELIVERY_BACKOFF_MS[0]);
@@ -252,6 +255,7 @@ test("questions: stored on the notice, offered on push and channel, and answerin
   z.model.push({ text: "Sent on Slack." });
   z.tasks.answer(task.id, "Slack");
   assert.equal(z.store.notices.get(notice.id)?.question?.answer, "Slack", "the in-app buttons go away");
+  assert.equal(z.store.notices.get(notice.id)?.read, true, "an answered question no longer counts as unread");
   assert.equal(z.store.outbox.get(pushDelivery.id)?.status, "dropped");
   await until(() => channel.edits.length === 1, "the channel message edit");
   assert.match(channel.edits[0]!.text, /Answered: Slack$/);

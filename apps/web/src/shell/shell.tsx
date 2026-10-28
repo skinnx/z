@@ -1,7 +1,7 @@
 import { Command, Ellipsis, Settings, SunMoon } from "lucide-react";
 import { Suspense, useCallback } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
-import { usePendingApprovals } from "../api/approvals.ts";
+import { useNeedsYou } from "../api/needs.ts";
 import { useLiveEvents } from "../api/live.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
@@ -42,7 +42,8 @@ export function Shell() {
   const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
-  const pending = usePendingApprovals().data?.length ?? 0;
+  // One count for everything waiting on the owner, the same as Today's "Needs you".
+  const pending = useNeedsYou().count;
   const go = useCallback((path: string) => navigate(path), [navigate]);
   useLiveEvents(go);
   const settings = useSettingsRoute();

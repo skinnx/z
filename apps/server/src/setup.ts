@@ -307,7 +307,12 @@ export function createSetup(rt: Runtime, channels: Channels, connectors: Connect
   }
 
   // Provider errors can echo what was sent (some quote the key back): rows pass the secret registry too.
-  const checklist = (): SetupChecklist => redactJson({ rows: rows(), checkedAt: store.kv.get<string>(CHECKED_AT_KEY) ?? null });
+  const checklist = (): SetupChecklist =>
+    redactJson({
+      rows: rows(),
+      checkedAt: store.kv.get<string>(CHECKED_AT_KEY) ?? null,
+      modelAnswered: Object.values(checks()).some((c) => c.ok) || store.usage.any(),
+    });
 
   /** Test each lane's chain in order until one model answers; one call per model per check. */
   async function checkModels() {
