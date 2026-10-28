@@ -1,6 +1,6 @@
 import { RateLimitedError, type ChannelAdapter, type InboundMessage } from "@z/core";
 import { z } from "zod";
-import { errorMessage, safeEqual } from "../util.ts";
+import { errorMessage, hmacSha256Hex, safeEqual } from "../util.ts";
 import { config, pressed } from "./shared.ts";
 
 /** Public http(s) image URLs; the server downloads them for the model. */
@@ -53,20 +53,71 @@ export function webhookToInbound(body: z.output<typeof WebhookBody>, channelId: 
   };
 }
 
+// ─── Signing: X-Z-Signature: v1=<hex HMAC-SHA256(secret, "<timestamp>.<delivery>.<raw body>")> ─
+
+/** Signed requests older or newer than this are refused (replays past the receipt window). */
+export const SIGNATURE_TOLERANCE_S = 300;
+const MAX_BODY_BYTES = 512_000;
+const DELIVERY_ID = /^[A-Za-z0-9._:-]{1,200}$/;
+
+export function signature(secret: string, timestamp: string, delivery: string, body: string): string {
+  return `v1=${hmacSha256Hex(secret, `${timestamp}.${delivery}.${body}`)}`;
+}
+
+/** Headers for a signed POST of `body` (outbound owner notices). */
+export function signedHeaders(secret: string, body: string, now = Date.now()): Record<string, string> {
+  const timestamp = String(Math.floor(now / 1000));
+  const delivery = crypto.randomUUID();
+  return { "x-z-timestamp": timestamp, "x-z-delivery": delivery, "x-z-signature": signature(secret, timestamp, delivery, body) };
+}
+
+/**
+ * Check a request's signature over its raw body, before anything parses it. Legacy mode also
+ * accepts the bare shared secret in X-Z-Secret when the request carries no signature.
+ * Returns the delivery id (null for an unsigned legacy request without one), or an error.
+ */
+export function verify(
+  headers: Headers,
+  body: string,
+  secret: string,
+  legacy: boolean,
+  now = Date.now(),
+): { ok: true; delivery: string | null } | { ok: false; error: string } {
+  const sig = headers.get("x-z-signature");
+  const delivery = headers.get("x-z-delivery");
+  if (delivery !== null && !DELIVERY_ID.test(delivery)) return { ok: false, error: "Invalid X-Z-Delivery" };
+  if (sig === null) {
+    if (!legacy) return { ok: false, error: "Missing X-Z-Signature" };
+    return safeEqual(headers.get("x-z-secret") ?? "", secret) ? { ok: true, delivery } : { ok: false, error: "Invalid X-Z-Secret" };
+  }
+  const timestamp = headers.get("x-z-timestamp") ?? "";
+  if (!delivery || !/^\d{1,12}$/.test(timestamp)) return { ok: false, error: "Signed requests need X-Z-Timestamp and X-Z-Delivery" };
+  if (Math.abs(now / 1000 - Number(timestamp)) > SIGNATURE_TOLERANCE_S) return { ok: false, error: "Stale X-Z-Timestamp" };
+  if (!safeEqual(sig.trim().toLowerCase(), signature(secret, timestamp, delivery, body))) return { ok: false, error: "Invalid X-Z-Signature" };
+  return { ok: true, delivery };
+}
+
 export const webhookAdapter: ChannelAdapter = {
   kind: "webhook",
   label: "Webhook (JSON)",
   config: [
-    { key: "secret", label: "Shared secret (sent as X-Z-Secret)", secret: true, required: true },
-    { key: "notifyUrl", label: "Notify URL (optional): receives owner notices as JSON POSTs" },
+    { key: "secret", label: "Signing secret (HMAC-SHA256, see README)", secret: true, required: true },
+    { key: "notifyUrl", label: "Notify URL (optional): receives signed owner notices as JSON POSTs" },
+    { key: "legacySecret", label: "Legacy mode: also accept the bare secret in X-Z-Secret, unsigned", toggle: true },
   ],
   send: async (runtime, threadId, message) => {
     const url = config(runtime, "notifyUrl");
     if (!url) throw new Error("notifyUrl is not configured");
+    const secret = config(runtime, "secret");
+    const body = JSON.stringify({ type: "notice", threadId, text: message.text, actions: message.actions ?? [] });
     const res = await runtime.fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-z-secret": config(runtime, "secret") },
-      body: JSON.stringify({ type: "notice", threadId, text: message.text, actions: message.actions ?? [] }),
+      headers: {
+        "content-type": "application/json",
+        ...signedHeaders(secret, body),
+        ...(config(runtime, "legacySecret") === "on" ? { "x-z-secret": secret } : {}),
+      },
+      body,
       signal: AbortSignal.timeout(15_000),
     });
     await res.body?.cancel();
@@ -76,23 +127,33 @@ export const webhookAdapter: ChannelAdapter = {
     const secret = config(runtime, "secret");
     if (!secret) return Response.json({ error: "Channel has no secret configured" }, { status: 503 });
     if (request.method !== "POST") return Response.json({ error: "Use POST" }, { status: 405 });
-    if (!safeEqual(request.headers.get("x-z-secret") ?? "", secret)) {
-      return Response.json({ error: "Invalid X-Z-Secret" }, { status: 401 });
+    if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) {
+      return Response.json({ error: "Body too large" }, { status: 413 });
     }
-    let raw: unknown;
-    let body: z.output<typeof WebhookBody>;
+    const text = await request.text();
+    if (Buffer.byteLength(text) > MAX_BODY_BYTES) return Response.json({ error: "Body too large" }, { status: 413 });
+    const verified = verify(request.headers, text, secret, config(runtime, "legacySecret") === "on");
+    if (!verified.ok) return Response.json({ error: verified.error }, { status: 401 });
+
+    let action: z.output<typeof WebhookAction> | null;
+    let body: z.output<typeof WebhookBody> | null = null;
     try {
-      raw = await request.json();
-      const action = raw && typeof raw === "object" && "action" in raw ? WebhookAction.parse(raw) : null;
-      if (action) {
-        const { ack, final } = await pressed(runtime, action.action, { threadId: action.threadId, authorId: action.authorId });
-        return final ? Response.json({ ack }) : Response.json({ error: ack }, { status: 403 });
-      }
-      body = WebhookBody.parse(raw);
+      const raw: unknown = JSON.parse(text);
+      action = raw && typeof raw === "object" && "action" in raw ? WebhookAction.parse(raw) : null;
+      if (!action) body = WebhookBody.parse(raw);
     } catch (error) {
       return Response.json({ error: `Invalid body: ${errorMessage(error)}` }, { status: 400 });
     }
-    const message = webhookToInbound(body, runtime.channel.id);
+    const { delivery } = verified;
+    if (delivery && !runtime.deliveries.claim(delivery)) return Response.json({ duplicate: true, delivery });
+
+    if (action) {
+      const { ack, final } = await pressed(runtime, action.action, { threadId: action.threadId, authorId: action.authorId });
+      // A refused press may be retried (by the owner), so it doesn't use up the delivery id.
+      if (!final && delivery) runtime.deliveries.release(delivery);
+      return final ? Response.json({ ack }) : Response.json({ error: ack }, { status: 403 });
+    }
+    const message = webhookToInbound(body!, runtime.channel.id);
     try {
       const reply = await runtime.dispatch(message);
       runtime.status("ok");
@@ -105,6 +166,8 @@ export const webhookAdapter: ChannelAdapter = {
       });
     } catch (error) {
       runtime.status("error", errorMessage(error));
+      // Nothing was answered: let the integration retry with the same delivery id.
+      if (delivery) runtime.deliveries.release(delivery);
       if (error instanceof RateLimitedError) {
         const seconds = Math.max(1, Math.ceil(error.retryAfterMs / 1000));
         return Response.json(
