@@ -228,13 +228,34 @@ const MIGRATIONS: string[] = [
   END;
   `,
   // ─── End memory review ────────────────────────────────────────────────────
+  // ─── Task engine: crash journal, consecutive failures, questions, briefing gaps ─
+  // `task_calls`: every write/external tool call a run started, and its result once it ends.
+  // A `running` task whose started call has no result was stopped mid-action and is never re-run.
+  `
+  CREATE TABLE IF NOT EXISTS task_calls (
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    tool_call_id TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    risk TEXT NOT NULL,
+    input TEXT NOT NULL,      -- JSON
+    summary TEXT NOT NULL,
+    output TEXT,              -- JSON, once finished
+    error TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    PRIMARY KEY (task_id, tool_call_id)
+  );
+  ALTER TABLE tasks ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN question TEXT;       -- JSON TaskQuestion & { toolCallId } while needs_input
+  ALTER TABLE briefings ADD COLUMN could_not_check TEXT; -- JSON CouldNotCheck[]
+  `,
+  // ─── End task engine ──────────────────────────────────────────────────────
 ];
 
-export function openDatabase(dataDir: string): DatabaseSync {
-  const db = new DatabaseSync(join(dataDir, "z.db"));
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+/** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */
+export function migrate(db: DatabaseSync, upTo = MIGRATIONS.length) {
   const current = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
-  for (let i = current; i < MIGRATIONS.length; i++) {
+  for (let i = current; i < upTo; i++) {
     db.exec("BEGIN");
     try {
       db.exec(MIGRATIONS[i]!);
@@ -245,5 +266,13 @@ export function openDatabase(dataDir: string): DatabaseSync {
       throw error;
     }
   }
+}
+
+export const MIGRATION_COUNT = MIGRATIONS.length;
+
+export function openDatabase(dataDir: string): DatabaseSync {
+  const db = new DatabaseSync(join(dataDir, "z.db"));
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  migrate(db);
   return db;
 }

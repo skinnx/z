@@ -12,4 +12,5 @@ export * from "./context.ts";
 export * from "./memory.ts";
 export * from "./sensitive.ts";
 export * from "./watch.ts";
+export * from "./run-tools.ts";
 export { localDate } from "./prompt.ts";

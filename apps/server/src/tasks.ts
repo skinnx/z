@@ -1,15 +1,22 @@
-/** Task queue, recurring schedules and the approval pause/resume cycle. */
+/**
+ * Task queue, recurring schedules and the pause/resume cycles: approvals, `ask_person` questions,
+ * review → resolve, failure fatigue, and crash recovery that never replays a side effect.
+ */
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import {
   DEFAULT_WATCH_SCHEDULE,
   deriveTitle,
+  MAX_CONSECUTIVE_FAILURES,
   MAX_FINGERPRINTS,
+  pendingQuestion,
   runTask,
   runWatch,
+  withAnswer,
   withApprovalResponses,
   type Approval,
   type ApprovalDecision,
+  type PendingQuestion,
   type Task,
   type TaskEvent,
   type TaskInput,
@@ -17,10 +24,14 @@ import {
 import type { ModelMessage } from "ai";
 import type { z } from "zod";
 import { approvalBody, clip, notify } from "./notify.ts";
+import { planRecovery } from "./recovery.ts";
 import type { Runtime } from "./runtime.ts";
 import { nextRunAt } from "./schedule.ts";
 
 const CONCURRENCY = 2;
+/** Choices short and few enough to become buttons on the owner channel. */
+const MAX_BUTTONS = 4;
+const MAX_BUTTON_LABEL = 30;
 
 export class ConflictError extends Error {}
 
@@ -33,6 +44,7 @@ export function createTasks(rt: Runtime) {
   const jobs = new Map<string, Cron>();
 
   const timezone = () => store.settings.get().timezone;
+  const now = () => new Date().toISOString();
 
   function emit(id: string): Task | null {
     const task = store.tasks.get(id);
@@ -45,6 +57,9 @@ export function createTasks(rt: Runtime) {
     return emit(id);
   }
 
+  const step = (id: string, text: string) => store.tasks.appendEvents(id, [{ type: "step", at: now(), text }]);
+  const titleOf = (task: Task) => clip(store.tasks.get(task.id)?.title ?? task.title, 80);
+
   function enqueue(id: string) {
     if (!queue.includes(id) && !running.has(id)) queue.push(id);
     pump();
@@ -52,6 +67,12 @@ export function createTasks(rt: Runtime) {
 
   function pump() {
     while (running.size < CONCURRENCY && queue.length) void execute(queue.shift()!);
+  }
+
+  /** A run ended for good: forget its conversation and crash journal. */
+  function endRun(id: string) {
+    store.tasks.setMessages(id, null);
+    store.tasks.clearCalls(id);
   }
 
   async function execute(id: string) {
@@ -68,26 +89,24 @@ export function createTasks(rt: Runtime) {
 
     if (task.mode === "watch") return executeWatch(task, controller, onEvent);
 
+    const live = () => !controller.signal.aborted && store.tasks.get(id) !== null;
     try {
       const outcome = await runTask(task, rt.ownerDeps(`task:${id.slice(0, 8)}`), {
         messages: store.tasks.messages(id),
         signal: controller.signal,
         onEvent,
+        // Crash safety: the conversation after every step, and each write/external call before and after it runs.
+        onMessages: (messages) => live() && store.tasks.setMessages(id, messages),
+        onToolStart: (call) => live() && store.tasks.callStarted(id, call),
+        onToolEnd: (call) => store.tasks.callFinished(id, call.toolCallId, call),
       });
-      if (controller.signal.aborted || !store.tasks.get(id)) return;
+      if (!live()) return;
 
       if (outcome.status === "waiting") {
         store.tasks.setMessages(id, outcome.messages);
         const events: TaskEvent[] = [];
         for (const request of outcome.approvals) {
-          const approval: Approval = {
-            id: randomUUID(),
-            taskId: id,
-            ...request,
-            status: "pending",
-            createdAt: new Date().toISOString(),
-            decidedAt: null,
-          };
+          const approval: Approval = { id: randomUUID(), taskId: id, ...request, status: "pending", createdAt: now(), decidedAt: null };
           store.approvals.insert(approval);
           events.push({ type: "approval", at: approval.createdAt, approvalId: approval.id });
           bus.emit({ type: "approval", approval });
@@ -99,16 +118,38 @@ export function createTasks(rt: Runtime) {
         return;
       }
 
-      store.tasks.setMessages(id, null);
-      if (outcome.status === "done") finish(task, { result: outcome.result, error: null }, "done");
+      if (outcome.status === "needs_input") {
+        store.tasks.setMessages(id, outcome.messages);
+        ask(task, outcome.question);
+        return;
+      }
+
+      endRun(id);
+      if (outcome.status === "done") finish(task, { result: outcome.result, error: null }, "done", outcome.quiet);
       else finish(task, { error: outcome.error }, "failed");
     } catch (error) {
-      store.tasks.setMessages(id, null);
+      endRun(id);
       finish(task, { error: error instanceof Error ? error.message : String(error) }, "failed");
     } finally {
       running.delete(id);
       pump();
     }
+  }
+
+  /** Pause on an `ask_person` question and tell the owner; simple choices become buttons. */
+  function ask(task: Task, q: PendingQuestion) {
+    const askedAt = now();
+    store.tasks.setQuestion(task.id, { ...q, askedAt });
+    step(task.id, `Asked: ${q.question}`);
+    update(task.id, { status: "needs_input" });
+    const buttons = q.choices.length > 0 && q.choices.length <= MAX_BUTTONS && q.choices.every((c) => c.length <= MAX_BUTTON_LABEL);
+    notify({
+      kind: "question",
+      title: `Question · ${titleOf(task)}`,
+      body: clip(q.question + (q.choices.length && !buttons ? `\nChoices: ${q.choices.join(" / ")}` : ""), 1000),
+      path: `/tasks?task=${task.id}`,
+      ...(buttons ? { question: { taskId: task.id, choices: q.choices } } : {}),
+    });
   }
 
   /** A watch check: look with read tools, decide, notify only on something new. */
@@ -123,13 +164,14 @@ export function createTasks(rt: Runtime) {
       if (controller.signal.aborted || !store.tasks.get(id)) return;
       if (outcome.status === "failed") return finish(task, { error: outcome.error }, "failed");
 
-      const checkedAt = new Date().toISOString();
+      const checkedAt = now();
       const { decision } = outcome;
       const previous = store.tasks.get(id)?.watch?.lastFinding ?? null;
       const lastFinding = decision.notify ? { title: decision.title, body: decision.body, at: checkedAt } : previous;
       store.tasks.recordWatch(id, { lastCheckAt: checkedAt, lastFinding }, outcome.fingerprints, MAX_FINGERPRINTS);
       if (decision.notify) notify({ kind: "watch", title: clip(decision.title, 120), body: clip(decision.body, 1000), path: `/tasks?task=${id}` });
-      finish(task, { ...(decision.notify ? { result: decision.body } : {}), error: null }, "done");
+      // The watch's own decision is its notice: no separate completion notice.
+      finish(task, { ...(decision.notify ? { result: decision.body } : {}), error: null }, "done", true);
     } catch (error) {
       finish(task, { error: error instanceof Error ? error.message : String(error) }, "failed");
     } finally {
@@ -138,18 +180,42 @@ export function createTasks(rt: Runtime) {
     }
   }
 
-  /** One-shot tasks end and tell the owner; recurring ones go back to `scheduled`. */
-  function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed") {
+  /**
+   * One-shot tasks go to `review` (or `failed`) and tell the owner. Recurring ones go back to `scheduled`:
+   * a failure notifies only when it breaks a run of successes, and MAX_CONSECUTIVE_FAILURES in a row pause the task.
+   * `quiet` (no_update, or a watch) suppresses the completion notice.
+   */
+  function finish(task: Task, patch: { result?: string; error: string | null }, status: "done" | "failed", quiet = false) {
+    const path = `/tasks?task=${task.id}`;
     if (task.schedule) {
-      update(task.id, { ...patch, status: "scheduled", nextRunAt: nextRunAt(task.schedule, timezone()) });
+      if (status === "done") {
+        update(task.id, { ...patch, status: "scheduled", failures: 0, nextRunAt: nextRunAt(task.schedule, timezone()) });
+        if (!quiet && patch.result) notify({ kind: "task", title: `Done · ${titleOf(task)}`, body: clip(patch.result, 300), path });
+        return;
+      }
+      const failures = (store.tasks.get(task.id)?.failures ?? 0) + 1;
+      if (failures >= MAX_CONSECUTIVE_FAILURES) {
+        update(task.id, { ...patch, status: "paused", failures, nextRunAt: null });
+        step(task.id, `Paused after ${failures} failed runs in a row.`);
+        notify({
+          kind: "task",
+          title: `Paused · ${titleOf(task)}`,
+          body: clip(`Failed ${failures} runs in a row, so z stopped running it. Last error: ${patch.error ?? "unknown"}. Run it again once fixed.`, 400),
+          path,
+        });
+        return;
+      }
+      update(task.id, { ...patch, status: "scheduled", failures, nextRunAt: nextRunAt(task.schedule, timezone()) });
+      if (failures === 1) notify({ kind: "task", title: `Failing · ${titleOf(task)}`, body: clip(patch.error || "", 300), path });
       return;
     }
-    const done = update(task.id, { ...patch, status, nextRunAt: null });
+    update(task.id, { ...patch, status: status === "done" ? "review" : "failed", nextRunAt: null });
+    if (quiet && status === "done") return;
     notify({
       kind: "task",
-      title: `${status === "done" ? "Done" : "Failed"} · ${clip(done?.title ?? task.title, 80)}`,
+      title: `${status === "done" ? "Ready for review" : "Failed"} · ${titleOf(task)}`,
       body: clip((status === "done" ? patch.result : patch.error) || "", 300),
-      path: `/tasks?task=${task.id}`,
+      path,
     });
   }
 
@@ -160,6 +226,7 @@ export function createTasks(rt: Runtime) {
     jobs.set(task.id, new Cron(task.schedule, { timezone: timezone(), protect: true }, () => fire(task.id)));
   }
 
+  /** Scheduled runs skip tasks that are busy, wait for the owner (needs you) or are paused. */
   function fire(id: string) {
     const task = store.tasks.get(id);
     if (!task || !["scheduled", "done", "failed"].includes(task.status)) return;
@@ -179,12 +246,47 @@ export function createTasks(rt: Runtime) {
     jobs.get(id)?.stop();
     jobs.delete(id);
     expireApprovals(id);
-    store.tasks.setMessages(id, null);
+    store.tasks.setQuestion(id, null);
+    endRun(id);
+  }
+
+  /** Resume a paused conversation: back to the queue, or to the next question if one is still open. */
+  function resume(task: Task, messages: ModelMessage[]) {
+    store.tasks.setMessages(task.id, messages);
+    const question = pendingQuestion(messages);
+    if (question) return ask(task, question);
+    update(task.id, { status: "queued" });
+    enqueue(task.id);
+  }
+
+  /** Startup: decide what each task interrupted mid-run may do. */
+  function recover(task: Task) {
+    // Watches only read: redo the check.
+    if (task.mode === "watch") {
+      endRun(task.id);
+      store.tasks.update(task.id, { status: "queued" });
+      return;
+    }
+    const messages = store.tasks.messages(task.id) ?? [{ role: "user" as const, content: task.instructions }];
+    const plan = planRecovery(messages, store.tasks.calls(task.id));
+    if (plan.action === "resume") {
+      store.tasks.setMessages(task.id, plan.messages);
+      store.tasks.update(task.id, { status: "queued" });
+      console.log(`[z:tasks] ${task.id.slice(0, 8)} resumes after restart`);
+      return;
+    }
+    const summary = plan.calls.map((c) => c.summary).join("; ");
+    const error = `z stopped mid-action: ${summary}. Check and run again if needed.`;
+    endRun(task.id);
+    step(task.id, error);
+    update(task.id, { status: "interrupted", error, nextRunAt: null });
+    console.log(`[z:tasks] ${task.id.slice(0, 8)} interrupted mid-action (${plan.calls.map((c) => c.tool).join(", ")}): not re-run`);
+    notify({ kind: "task", title: `Interrupted · ${titleOf(task)}`, body: clip(error, 400), path: `/tasks?task=${task.id}` });
   }
 
   return {
     create(input: z.output<typeof TaskInput>): Task {
-      const at = new Date().toISOString();
+      const at = now();
       const watch = input.mode === "watch";
       // A watch always has a schedule, and checks once right away to show it works.
       const sched = input.schedule ?? (watch ? DEFAULT_WATCH_SCHEDULE : null);
@@ -204,6 +306,8 @@ export function createTasks(rt: Runtime) {
         nextRunAt: sched ? nextRunAt(sched, timezone()) : null,
         createdAt: at,
         updatedAt: at,
+        question: null,
+        failures: 0,
       };
       store.tasks.insert(task);
       bus.emit({ type: "task", task });
@@ -221,7 +325,8 @@ export function createTasks(rt: Runtime) {
       if (!task) return null;
       if (task.status === "running" || task.status === "queued") throw new ConflictError(`Task is already ${task.status}`);
       expireApprovals(id);
-      store.tasks.setMessages(id, null);
+      store.tasks.setQuestion(id, null);
+      endRun(id);
       const queued = update(id, { status: "queued", error: null });
       enqueue(id);
       return queued;
@@ -236,6 +341,28 @@ export function createTasks(rt: Runtime) {
     delete(id: string): boolean {
       stop(id);
       return store.tasks.delete(id);
+    },
+
+    /** The owner's answer to `ask_person` becomes the tool result and the run resumes. */
+    answer(id: string, text: string): Task | null {
+      const task = store.tasks.get(id);
+      if (!task) return null;
+      const question = store.tasks.question(id);
+      const messages = store.tasks.messages(id);
+      if (task.status !== "needs_input" || !question || !messages) throw new ConflictError(`Task is ${task.status}, not waiting for an answer`);
+      store.tasks.setQuestion(id, null);
+      step(id, `Answered: ${text}`);
+      resume(task, withAnswer(messages, question.toolCallId, text));
+      return store.tasks.get(id);
+    },
+
+    /** Mark a finished (or interrupted) one-shot task resolved. */
+    resolve(id: string): Task | null {
+      const task = store.tasks.get(id);
+      if (!task) return null;
+      if (task.status !== "review" && task.status !== "interrupted") throw new ConflictError(`Task is ${task.status}, not ready for review`);
+      endRun(id);
+      return update(id, { status: "done" });
     },
 
     /** Record a decision; once every approval of the pause is decided, resume the loop. */
@@ -256,8 +383,8 @@ export function createTasks(rt: Runtime) {
       const forPause = store.approvals.forTask(task.id).filter((a) => open.has(a.toolApprovalId));
       if (forPause.some((a) => a.status === "pending")) return decided;
 
-      store.tasks.setMessages(
-        task.id,
+      resume(
+        task,
         withApprovalResponses(
           messages,
           forPause.map((a) => ({
@@ -267,8 +394,6 @@ export function createTasks(rt: Runtime) {
           })),
         ),
       );
-      update(task.id, { status: "queued" });
-      enqueue(task.id);
       return decided;
     },
 
@@ -281,9 +406,9 @@ export function createTasks(rt: Runtime) {
       }
     },
 
-    /** Startup: tasks interrupted mid-run go back to the queue. */
+    /** Startup: tasks stopped mid-run resume or become `interrupted`; then schedules and the queue. */
     start() {
-      for (const task of store.tasks.byStatus("running")) store.tasks.update(task.id, { status: "queued" });
+      for (const task of store.tasks.byStatus("running")) recover(task);
       for (const task of store.tasks.list().reverse()) {
         if (task.schedule) schedule(task);
         if (task.status === "queued") enqueue(task.id);
