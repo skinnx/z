@@ -99,7 +99,13 @@ export function configRoutes({ rt, tasks, briefings, channels }: Services) {
         (a): AdapterManifest => ({
           kind: a.kind,
           label: a.label,
-          config: a.config.map((f) => ({ key: f.key, label: f.label, secret: f.secret ?? false, required: f.required ?? false })),
+          config: a.config.map((f) => ({
+            key: f.key,
+            label: f.label,
+            secret: f.secret ?? false,
+            required: f.required ?? false,
+            ...(f.toggle ? { toggle: true } : {}),
+          })),
           mode: a.webhook && !a.start ? "webhook" : "connect",
         }),
       ),

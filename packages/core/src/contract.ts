@@ -208,6 +208,25 @@ export type Settings = z.output<typeof Settings>;
 export const ChannelKind = z.enum(["webhook", "telegram", "discord", "slack", "x"]);
 export type ChannelKind = z.infer<typeof ChannelKind>;
 
+// ─── Channel limits: anyone in a group chat can spend the owner's BYOK budget ─
+/**
+ * Caps on bot runs, checked before any model call. Over a cap the author gets one short
+ * "busy, try again in N min" reply (no model call), then silence until they are under it again.
+ * The paired owner is exempt.
+ */
+export const ChannelLimits = z.object({
+  /** Answers running at once in this channel. */
+  running: z.number().int().min(1).max(50).default(4),
+  /** Messages queued behind them; past this, new ones get the busy reply. */
+  waiting: z.number().int().min(0).max(500).default(20),
+  /** One author's messages in flight (queued or running). */
+  authorWaiting: z.number().int().min(1).max(50).default(2),
+  /** One author's accepted messages per rolling hour. */
+  authorHourly: z.number().int().min(1).max(1000).default(10),
+});
+export type ChannelLimits = z.output<typeof ChannelLimits>;
+// ─── End channel limits ─────────────────────────────────────────────────────
+
 export const ChannelInput = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
   kind: ChannelKind,
@@ -218,6 +237,8 @@ export const ChannelInput = z.object({
   /** Answer every message instead of only mentions/replies. */
   always: z.boolean().default(false),
   lane: Lane.default("bot"),
+  /** Omit to keep the stored limits (the defaults for a new channel). */
+  limits: ChannelLimits.prefault({}),
 });
 export type ChannelInput = z.input<typeof ChannelInput>;
 
@@ -276,8 +297,8 @@ export type PluginManifest = {
 export type AdapterManifest = {
   kind: ChannelKind;
   label: string;
-  /** Fields for ChannelInput.config, rendered as a form. */
-  config: { key: string; label: string; secret: boolean; required: boolean }[];
+  /** Fields for ChannelInput.config, rendered as a form. A `toggle` field is on when its value is `on`. */
+  config: { key: string; label: string; secret: boolean; required: boolean; toggle?: boolean }[];
   /** Whether the platform calls us (needs Z_PUBLIC_URL) or we connect out. */
   mode: "webhook" | "connect";
 };
@@ -455,6 +476,10 @@ export type LiveEvent =
 // DELETE /api/memories                     → { deleted: number }   (all memories)
 // GET    /api/events                       → text/event-stream of LiveEvent
 // POST   /hooks/:channelId                 → adapter defined (inbound platform webhooks)
+//   webhook kind: X-Z-Timestamp (unix s), X-Z-Delivery (unique id), X-Z-Signature `v1=<hex HMAC-SHA256(secret,
+//   "<timestamp>.<delivery>.<raw body>")>`; 401 when unsigned, stale (>5 min) or tampered. A delivery id seen in
+//   the last 7 days → 200 { duplicate: true }, nothing re-run. Bare X-Z-Secret only with config `legacySecret: "on"`.
+//   Owner notices POSTed to `notifyUrl` carry the same three headers.
 //
 // Auth: when Z_TOKEN is set, every /api route requires `Authorization: Bearer <Z_TOKEN>`
 // (or `?token=` for EventSource). /hooks routes are verified by each adapter.

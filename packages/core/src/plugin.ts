@@ -27,7 +27,8 @@ import type {
   Risk,
 } from "./contract.ts";
 
-export type SettingField = { key: string; label: string; secret?: boolean; required?: boolean };
+/** `toggle`: an on/off switch in the channel form, stored as `on` (adapter config only). */
+export type SettingField = { key: string; label: string; secret?: boolean; required?: boolean; toggle?: boolean };
 
 export type ToolContext = {
   /** This plugin's settings, already decrypted. */
@@ -83,6 +84,14 @@ export type ChannelRuntime = {
   state: {
     get: (key: string) => string | null;
     set: (key: string, value: string) => void;
+  };
+  /**
+   * Inbound delivery receipts, kept 7 days. `claim` records an id and returns false when it was
+   * already seen (a retry or replay); `release` forgets it so a failed delivery can be retried.
+   */
+  deliveries: {
+    claim: (deliveryId: string) => boolean;
+    release: (deliveryId: string) => void;
   };
   /** Report health to the UI. */
   status: (status: "ok" | "error" | "idle", detail?: string) => void;
