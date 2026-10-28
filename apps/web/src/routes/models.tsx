@@ -397,7 +397,8 @@ function ProviderForm({
         />
       </Field>
 
-      <fieldset className="flex flex-col gap-2">
+      {/* min-w-0: a fieldset is min-content wide by default, so one long model id would widen the dialog. */}
+      <fieldset className="flex min-w-0 flex-col gap-2">
         <legend className="mb-1.5 flex w-full items-center justify-between text-sm font-medium">
           {t.models}
           {provider && live.data && <span className="text-xs font-normal text-fg-muted">{t.modelsLoaded(live.data.length)}</span>}
