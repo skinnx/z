@@ -49,6 +49,30 @@ function apply(event: LiveEvent, go: (path: string) => void) {
   }
 }
 
+/** What the stream keeps current: missed events while it was down, refetched when it is back. */
+const URGENT = [keys.approvals, keys.tasks, keys.notices];
+const LIVE = [keys.briefing, keys.channels, keys.connectors, keys.memories];
+const STAGGER_MS = 1500;
+const fed = [...URGENT, ...LIVE];
+const startsWith = (key: readonly unknown[], prefix: readonly unknown[]) => prefix.every((p, i) => key[i] === p);
+
+/**
+ * After a reconnect, refetch only what the stream would have told us about, and only what is on
+ * screen: what needs the owner at once, the heavier lists a moment later. Everything else is just
+ * marked stale (it can only have changed from another device) and refetches when next shown; a
+ * thread or a static catalogue is left alone. Returns the timer for the second wave.
+ */
+function catchUp(): ReturnType<typeof setTimeout> {
+  for (const queryKey of URGENT) void queryClient.invalidateQueries({ queryKey });
+  void queryClient.invalidateQueries({
+    refetchType: "none",
+    predicate: (q) => !fed.some((k) => startsWith(q.queryKey, k)) && q.queryKey[0] !== "thread" && (q.options as { staleTime?: unknown }).staleTime !== Infinity,
+  });
+  return setTimeout(() => {
+    for (const queryKey of LIVE) void queryClient.invalidateQueries({ queryKey });
+  }, STAGGER_MS);
+}
+
 /** One EventSource for the whole app, feeding the React Query cache. `go` opens an app path from a toast. */
 export function useLiveEvents(go: (path: string) => void) {
   const tok = token.use();
@@ -64,11 +88,11 @@ export function useLiveEvents(go: (path: string) => void) {
     };
     source.onmessage = handle;
     for (const type of TYPES) source.addEventListener(type, handle);
-    // After a reconnect, anything may have changed while we were away.
     let opened = false;
+    let later: ReturnType<typeof setTimeout> | undefined;
     source.onopen = () => {
       unreachable.set(false);
-      if (opened) void queryClient.invalidateQueries();
+      if (opened) later = catchUp();
       opened = true;
     };
     // The browser retries on its own; until then the shell says the server can't be reached.
@@ -76,6 +100,9 @@ export function useLiveEvents(go: (path: string) => void) {
       // (A missing token fails the stream too; the token dialog covers that.)
       if (source.readyState !== EventSource.OPEN && !authRequired.get()) unreachable.set(true);
     };
-    return () => source.close();
+    return () => {
+      clearTimeout(later);
+      source.close();
+    };
   }, [tok, go]);
 }

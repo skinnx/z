@@ -11,9 +11,10 @@ import { Button } from "../ui/button.tsx";
 import { Kbd, Spinner } from "../ui/card.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { Menu, MenuItem, MenuLinkItem, MenuSeparator } from "../ui/menu.tsx";
-import { CommandMenu, commandMenuOpen } from "./command-menu.tsx";
+import { CommandMenu, commandMenuOpen, warmCommandMenu } from "./command-menu.tsx";
 import { NoticeBell, NoticeTab } from "./notices.tsx";
 import { NAV } from "./nav.ts";
+import { intentProps } from "./prefetch.ts";
 import { OfflineBar } from "./offline.tsx";
 import { TokenDialog } from "./token-dialog.tsx";
 import { SettingsHost } from "../settings/host.tsx";
@@ -80,6 +81,7 @@ export function Shell() {
               key={n.to}
               to={n.to}
               end={n.to === "/"}
+              {...intentProps(n.to)}
               className={({ isActive }) =>
                 cn(
                   "flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
@@ -103,7 +105,13 @@ export function Shell() {
             <span className="min-w-0 flex-1 truncate text-start">{t.nav_settings}</span>
             <Kbd>{isMac ? "⌘," : "Ctrl ,"}</Kbd>
           </Button>
-          <Button variant="ghost" className="w-full justify-start px-3 text-fg-muted" onClick={() => commandMenuOpen.set(true)}>
+          <Button
+            variant="ghost"
+            className="w-full justify-start px-3 text-fg-muted"
+            onClick={() => commandMenuOpen.set(true)}
+            onPointerEnter={warmCommandMenu}
+            onFocus={warmCommandMenu}
+          >
             <Command aria-hidden />
             <span className="min-w-0 flex-1 truncate text-start">{t.commandMenu}</span>
             <Kbd>{isMac ? "⌘K" : "Ctrl K"}</Kbd>
@@ -135,6 +143,7 @@ export function Shell() {
             key={n.to}
             to={n.to}
             end={n.to === "/"}
+            {...intentProps(n.to)}
             className={({ isActive }) =>
               cn(
                 "relative flex h-16 flex-col items-center justify-center gap-1 text-[0.6875rem] font-medium",
@@ -168,7 +177,7 @@ export function Shell() {
           }
         >
           {NAV.filter((n) => !n.primary).map((n) => (
-            <MenuLinkItem key={n.to} icon={<n.icon aria-hidden />} render={<NavLink to={n.to} />}>
+            <MenuLinkItem key={n.to} icon={<n.icon aria-hidden />} render={<NavLink to={n.to} {...intentProps(n.to)} />}>
               {t[n.label]}
             </MenuLinkItem>
           ))}

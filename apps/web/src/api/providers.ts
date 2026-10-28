@@ -1,11 +1,13 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { Lane, ModelRef, ProviderInput, ProviderSaveResult, ProviderTestResult, ProviderView, Routing } from "@z/core";
 import { createSignal } from "../lib/store.ts";
 import { api } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
+export const providersQuery = queryOptions({ queryKey: keys.providers, queryFn: () => api<ProviderView[]>("/providers") });
+
 export function useProviders() {
-  return useQuery({ queryKey: keys.providers, queryFn: () => api<ProviderView[]>("/providers") });
+  return useQuery(providersQuery);
 }
 
 export function useSaveProvider() {
@@ -89,8 +91,10 @@ export function useModelRefs(): ModelRef[] {
   return (data ?? []).filter((p) => p.enabled).flatMap((p) => p.models.map((m) => `${p.id}:${m}`));
 }
 
+export const routingQuery = queryOptions({ queryKey: keys.routing, queryFn: () => api<Routing>("/routing") });
+
 export function useRouting() {
-  return useQuery({ queryKey: keys.routing, queryFn: () => api<Routing>("/routing") });
+  return useQuery(routingQuery);
 }
 
 export function useSaveRouting() {

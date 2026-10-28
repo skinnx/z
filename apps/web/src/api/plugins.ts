@@ -1,10 +1,12 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { PluginManifest } from "@z/core";
 import { api } from "./client.ts";
 import { keys, optimisticList, queryClient, upsert } from "./query.ts";
 
+export const pluginsQuery = queryOptions({ queryKey: keys.plugins, queryFn: () => api<PluginManifest[]>("/plugins") });
+
 export function usePlugins() {
-  return useQuery({ queryKey: keys.plugins, queryFn: () => api<PluginManifest[]>("/plugins") });
+  return useQuery(pluginsQuery);
 }
 
 /** Shown at once (the switch flips); rolled back with a toast on failure. */

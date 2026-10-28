@@ -12,12 +12,13 @@ import {
   Sunrise,
   type LucideIcon,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { useGenerateBriefing } from "../api/briefing.ts";
-import { useConnectors } from "../api/connectors.ts";
+import { queryClient } from "../api/query.ts";
 import { useTasks } from "../api/tasks.ts";
-import { useThreads } from "../api/threads.ts";
+import { threadsQuery } from "../api/threads.ts";
 import { locale, useT } from "../i18n.ts";
 import { createSignal } from "../lib/store.ts";
 import { StatusIcon } from "../lib/icons.tsx";
@@ -28,9 +29,19 @@ import { itemClass } from "../ui/popup.ts";
 import { notifyError } from "../ui/toast.tsx";
 import { ScrollArea } from "../ui/scroll-area.tsx";
 import { NAV } from "./nav.ts";
+import { connectorsQuery } from "./prefetch.ts";
 import { SECTIONS, sectionIcon, sectionLabel, useSettingsRoute } from "../settings/route.ts";
 
 export const commandMenuOpen = createSignal(false);
+
+/**
+ * The menu's own lists (recent threads, sources) load when it opens, not with every screen; a hover
+ * on its button or a held Cmd/Ctrl starts them a moment early. (The shell always loads tasks.)
+ */
+export function warmCommandMenu() {
+  void queryClient.prefetchQuery(threadsQuery);
+  void queryClient.prefetchQuery(connectorsQuery);
+}
 
 type Item = { value: string; label: string; icon: React.ReactNode; hint?: string; run: () => void };
 type Group = { value: string; items: Item[] };
@@ -42,13 +53,14 @@ export function CommandMenu() {
   const open = commandMenuOpen.use();
   const navigate = useNavigate();
   const tasks = useTasks();
-  const threads = useThreads();
+  const threads = useQuery({ ...threadsQuery, enabled: open });
   const briefing = useGenerateBriefing();
-  const connectors = useConnectors();
+  const connectors = useQuery({ ...connectorsQuery, enabled: open });
   const settings = useSettingsRoute();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.key === "Meta" || e.key === "Control") && !e.repeat) warmCommandMenu();
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         commandMenuOpen.set(!commandMenuOpen.get());

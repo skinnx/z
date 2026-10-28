@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import type { Settings } from "@z/core";
 import { useEffect, useRef, useState } from "react";
 import { notifyError } from "../ui/toast.tsx";
@@ -6,16 +6,17 @@ import { api } from "./client.ts";
 import { keys, queryClient } from "./query.ts";
 
 /** `refetchInterval` polls, e.g. while waiting for the owner to pair. */
+export const settingsQuery = queryOptions({ queryKey: keys.settings, queryFn: () => api<Settings>("/settings") });
+
 export function useSettings(refetchInterval?: number) {
-  return useQuery({ queryKey: keys.settings, queryFn: fetchSettings, ...(refetchInterval ? { refetchInterval } : {}) });
+  return useQuery({ ...settingsQuery, ...(refetchInterval ? { refetchInterval } : {}) });
 }
 
-const fetchSettings = () => api<Settings>("/settings");
 const selectApprovals = (s: Settings) => s.approvals;
 
 /** Just the per-tool approval choices: re-renders when they change, not on every other setting. */
 export function useApprovalPolicies() {
-  return useQuery({ queryKey: keys.settings, queryFn: fetchSettings, select: selectApprovals }).data;
+  return useQuery({ ...settingsQuery, select: selectApprovals }).data;
 }
 
 export type SettingsPatch = Partial<Omit<Settings, "owner">>;
