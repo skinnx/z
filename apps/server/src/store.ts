@@ -813,5 +813,26 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, plugins, threads, notices, push, connectors, logins, kv };
+  /** The applied migration count (`PRAGMA user_version`), for diagnostics. */
+  const schemaVersion = (): number => Number(get("PRAGMA user_version")?.user_version ?? 0);
+
+  /** Tasks per status, for diagnostics. */
+  const taskCounts = (): Record<string, number> =>
+    Object.fromEntries(all("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").map((r) => [r.status, Number(r.n)]));
+
+  /**
+   * Open every sealed value once at boot, so the secret registry (secrets.ts) knows all of them
+   * before anything can be logged, not only the ones a request happened to decrypt.
+   */
+  const openAllSecrets = () => {
+    providers.list();
+    channels.list();
+    for (const c of connectors.list()) connectors.oauth(c.id);
+    for (const r of all("SELECT id FROM plugins")) plugins.get(r.id);
+    for (const l of logins.list()) logins.byOrigin(l.origin);
+    push.list();
+    push.vapid.get();
+  };
+
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, deliveries, memory, memories, plugins, threads, notices, push, connectors, logins, kv, schemaVersion, taskCounts, openAllSecrets };
 }

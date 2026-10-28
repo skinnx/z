@@ -30,6 +30,7 @@ export const keys = {
   memorySearch: (q?: string) => (q === undefined ? (["memories", "search"] as const) : (["memories", "search", q] as const)),
   connectors: ["connectors"] as const,
   connectorPresets: ["connector-presets"] as const,
+  setup: ["setup"] as const,
   thread: (id: string) => ["thread", id] as const,
 };
 

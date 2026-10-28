@@ -53,6 +53,7 @@ or `docker build -t z . && docker run -p 8787:8787 -v z-data:/data z`.
 | Variable | Default | |
 | --- | --- | --- |
 | `PORT` | `8787` | |
+| `HOST` | all interfaces | Address to listen on; `127.0.0.1` keeps z on this computer only (Setup then stops asking for `Z_TOKEN`) |
 | `Z_DATA_DIR` | `./.data` | SQLite database and generated master key |
 | `Z_MASTER_KEY` | generated into `Z_DATA_DIR/master.key` | 32-byte key (hex or base64) encrypting provider keys and channel secrets |
 | `Z_TOKEN` | unset | Require `Authorization: Bearer <token>` on `/api` — set it whenever the server is reachable by others |

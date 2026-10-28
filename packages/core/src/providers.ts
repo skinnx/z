@@ -443,25 +443,42 @@ async function errorText(res: Response): Promise<string> {
   return text.slice(0, 300);
 }
 
-export type ProviderTestResult = { ok: boolean; model?: string; latencyMs?: number; error?: string };
+/** `rateLimited` (429/402) and `timedOut`: inconclusive, the test says nothing about whether the model works. */
+export type ProviderTestResult = { ok: boolean; model?: string; latencyMs?: number; error?: string; rateLimited?: boolean; timedOut?: boolean };
 
 /** Send a tiny prompt to the provider's first configured model (or first listed one). */
-export async function testProvider(p: ProviderConfig, fetchImpl: typeof fetch = fetch): Promise<ProviderTestResult> {
+export async function testProvider(p: ProviderConfig, fetchImpl: typeof fetch = fetch, timeoutMs = 30_000): Promise<ProviderTestResult> {
   let modelId = p.models[0];
   try {
     if (!modelId) modelId = (await listModels(p, fetchImpl))[0];
     if (!modelId) return { ok: false, error: "No models configured or listed for this provider" };
-    const started = Date.now();
+  } catch (error) {
+    return { ok: false, error: describeError(error) };
+  }
+  return testModel(p, modelId, timeoutMs);
+}
+
+/** One real call to one model: a tiny prompt, no retries. */
+export async function testModel(p: ProviderConfig, modelId: string, timeoutMs = 30_000): Promise<ProviderTestResult> {
+  const started = Date.now();
+  try {
     await generateText({
       model: createLanguageModel(p, modelId),
       prompt: "Reply with the single word: pong",
       maxOutputTokens: 16,
       maxRetries: 0,
-      abortSignal: AbortSignal.timeout(30_000),
+      abortSignal: AbortSignal.timeout(timeoutMs),
     });
     return { ok: true, model: modelId, latencyMs: Date.now() - started };
   } catch (error) {
-    return { ok: false, ...(modelId ? { model: modelId } : {}), error: describeError(error) };
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    return {
+      ok: false,
+      model: modelId,
+      error: timedOut ? `No answer within ${Math.round(timeoutMs / 1000)} s` : describeError(error),
+      ...(rateLimitWaitMs(error) !== null ? { rateLimited: true } : {}),
+      ...(timedOut ? { timedOut: true } : {}),
+    };
   }
 }
 

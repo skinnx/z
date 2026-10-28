@@ -27,13 +27,19 @@ import { memoryRoutes } from "./routes/memory.ts";
 import { reachRoutes } from "./routes/reach.ts";
 import { workRoutes } from "./routes/work.ts";
 import { createRuntime } from "./runtime.ts";
+import { setupRoutes } from "./routes/setup.ts";
+import { installRedaction } from "./secrets.ts";
+import { createSetup } from "./setup.ts";
 import { mountWeb } from "./static.ts";
 import { createStore } from "./store.ts";
 import { ConflictError } from "./tasks.ts";
 import { createTasks } from "./tasks.ts";
 
+// First: everything written to stdout/stderr from here on has registered secrets redacted.
+installRedaction();
 const env = loadEnv();
 const store = createStore(openDatabase(env.dataDir), createSealer(env.masterKey));
+store.openAllSecrets();
 const plugins = createPluginRegistry(await loadPlugins(env.plugins, [memoryPlugin(store)]), store);
 const bus = createBus();
 const connectors = createConnectors(env, store, bus);
@@ -43,7 +49,8 @@ const pairing = createPairing();
 const push = createPush(rt);
 const channels = createChannels(rt, tasks, pairing);
 startDelivery(rt, push, channels);
-const services: Services = { rt, tasks, briefings: createBriefings(rt), channels, push, pairing, connectors };
+const setup = createSetup(rt, channels, connectors, push);
+const services: Services = { rt, tasks, briefings: createBriefings(rt), channels, push, pairing, connectors, setup };
 
 const app = new Hono();
 
@@ -57,7 +64,7 @@ app.onError((error, c) => {
 const api = new Hono();
 api.use("*", auth(env.token));
 api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
-for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes, loginRoutes]) {
+for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes, loginRoutes, setupRoutes]) {
   api.route("/", routes(services));
 }
 api.all("*", (c) => c.json({ error: "Not found" }, 404));
@@ -83,8 +90,8 @@ services.briefings.schedule();
 void services.channels.syncAll();
 void connectors.syncAll();
 
-const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
-  console.log(`[z] listening on http://localhost:${info.port}${servingWeb ? " (serving web app)" : ""}`);
+const server = serve({ fetch: app.fetch, port: env.port, ...(env.host ? { hostname: env.host } : {}) }, (info) => {
+  console.log(`[z] listening on http://${env.host ?? "localhost"}:${info.port}${servingWeb ? " (serving web app)" : ""}`);
   console.log(`[z] data dir ${env.dataDir}; ${plugins.manifests().length} plugin(s); auth ${env.token ? "on" : "off"}`);
   if (env.allowPrivateMcp) console.log("[z] Z_ALLOW_PRIVATE_MCP=1: connectors may reach private networks and plain http");
   if (process.env.Z_ALLOW_PRIVATE_BROWSER === "1") console.log("[z] Z_ALLOW_PRIVATE_BROWSER=1: the browser may open localhost and private networks");
