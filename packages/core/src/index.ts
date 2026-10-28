@@ -1,6 +1,7 @@
 export * from "./contract.ts";
 export * from "./plugin.ts";
 export * from "./providers.ts";
+export { closeCodexServers, codexAccount, CodexNotSignedInError } from "./codex.ts";
 export * from "./tools.ts";
 export * from "./agent.ts";
 export * from "./approvals.ts";

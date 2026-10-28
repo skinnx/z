@@ -125,6 +125,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     enabled: Boolean(r.enabled),
     ...(r.monthly_budget_usd !== null ? { monthlyBudgetUsd: r.monthly_budget_usd } : {}),
     ...(r.context_windows ? { contextWindows: parse(r.context_windows, {}) } : {}),
+    ...(r.command ? { command: r.command } : {}),
     apiKey: r.api_key ? sealer.open(r.api_key) : null,
   });
 
@@ -141,8 +142,8 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       const sealed = apiKey === undefined ? (existing?.api_key ?? null) : apiKey ? sealer.seal(apiKey) : null;
       const hint = apiKey === undefined ? (existing?.key_hint ?? null) : apiKey ? apiKey.slice(-4) : null;
       run(
-        `INSERT OR REPLACE INTO providers (id, kind, label, base_url, headers, models, enabled, monthly_budget_usd, context_windows, api_key, key_hint, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO providers (id, kind, label, base_url, headers, models, enabled, monthly_budget_usd, context_windows, command, api_key, key_hint, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         p.id,
         p.kind,
         p.label,
@@ -152,6 +153,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         p.enabled ? 1 : 0,
         p.monthlyBudgetUsd ?? null,
         p.contextWindows ? json(p.contextWindows) : null,
+        p.command ?? null,
         sealed,
         hint,
         existing?.created_at ?? now(),

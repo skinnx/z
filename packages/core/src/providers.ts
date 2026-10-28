@@ -18,8 +18,12 @@ import {
 import { createXai, xai } from "@ai-sdk/xai";
 import { generateText, type ToolSet } from "ai";
 import type { z } from "zod";
+import { codexAccount, createCodexModel, listCodexModels } from "./codex.ts";
 import { contextWindowFor, DEFAULT_CONTEXT_WINDOW } from "./context.ts";
-import type { Lane, ModelRef, ProviderInput, ProviderKind, Routing } from "./contract.ts";
+import { CODEX_NOT_SIGNED_IN, type Lane, type ModelRef, type ProviderInput, type ProviderKind, type ProviderTestResult, type Routing } from "./contract.ts";
+import { ModelUnavailableError } from "./model-errors.ts";
+
+export { ModelUnavailableError };
 
 /** A stored provider with its key decrypted, as core needs it. */
 export type ProviderConfig = Omit<z.output<typeof ProviderInput>, "apiKey"> & { apiKey: string | null };
@@ -43,6 +47,7 @@ const DEFAULT_BASE_URL: Partial<Record<ProviderKind, string>> = {
 };
 
 export function baseURLFor(p: Pick<ProviderConfig, "kind" | "baseURL">): string {
+  if (p.kind === "codex-cli") return "codex://app-server";
   if (p.kind === "openai-compatible") {
     if (!p.baseURL) throw new Error("openai-compatible providers need a baseURL");
     return trimSlash(p.baseURL);
@@ -81,6 +86,8 @@ export function createLanguageModel(p: ProviderConfig, modelId: string, opts: Mo
     case "ollama":
     case "openai-compatible":
       return createOpenAICompatible({ name: p.id, baseURL, apiKey, headers, includeUsage: true }).chatModel(modelId);
+    case "codex-cli":
+      return createCodexModel(p, modelId);
   }
 }
 
@@ -163,7 +170,8 @@ export function parseModelRef(ref: ModelRef): { providerId: string; modelId: str
  * tokens and $4 per million output tokens; local models are free.
  */
 export function estimateCostUsd(kind: ProviderKind, inputTokens: number, outputTokens: number): number {
-  if (kind === "ollama") return 0;
+  // Local models are free; Codex runs on the owner's ChatGPT plan, not per-token billing.
+  if (kind === "ollama" || kind === "codex-cli") return 0;
   return (inputTokens * 1 + outputTokens * 4) / 1_000_000;
 }
 
@@ -180,10 +188,6 @@ export function isFallbackError(error: unknown): boolean {
   if (error instanceof ModelUnavailableError) return true;
   // Network failures from fetch surface as TypeError ("fetch failed").
   return error instanceof TypeError;
-}
-
-export class ModelUnavailableError extends Error {
-  override name = "ModelUnavailableError";
 }
 
 /** Every model in a chain is rate limited or out of quota; `retryAfterMs` is when the first frees up. */
@@ -398,6 +402,7 @@ export function laneConfigured(routing: Routing, lane: Lane): boolean {
 // ─── Live model listing ─────────────────────────────────────────────────────
 
 export async function listModels(p: ProviderConfig, fetchImpl: typeof fetch = fetch): Promise<string[]> {
+  if (p.kind === "codex-cli") return listCodexModels(p);
   const base = baseURLFor(p);
   const headers: Record<string, string> = { ...p.headers };
   let url: string;
@@ -443,11 +448,10 @@ async function errorText(res: Response): Promise<string> {
   return text.slice(0, 300);
 }
 
-/** `rateLimited` (429/402) and `timedOut`: inconclusive, the test says nothing about whether the model works. */
-export type ProviderTestResult = { ok: boolean; model?: string; latencyMs?: number; error?: string; rateLimited?: boolean; timedOut?: boolean };
 
 /** Send a tiny prompt to the provider's first configured model (or first listed one). */
 export async function testProvider(p: ProviderConfig, fetchImpl: typeof fetch = fetch, timeoutMs = 30_000): Promise<ProviderTestResult> {
+  if (p.kind === "codex-cli") return testCodex(p, timeoutMs);
   let modelId = p.models[0];
   try {
     if (!modelId) modelId = (await listModels(p, fetchImpl))[0];
@@ -456,6 +460,18 @@ export async function testProvider(p: ProviderConfig, fetchImpl: typeof fetch = 
     return { ok: false, error: describeError(error) };
   }
   return testModel(p, modelId, timeoutMs);
+}
+
+/** Start the Codex CLI, read who it is signed in as, then (when signed in) one tiny turn. */
+async function testCodex(p: ProviderConfig, timeoutMs: number): Promise<ProviderTestResult> {
+  try {
+    const account = await codexAccount(p);
+    if (!account.signedIn) return { ok: false, error: CODEX_NOT_SIGNED_IN, account };
+    const modelId = p.models[0] ?? (await listCodexModels(p))[0] ?? "default";
+    return { ...(await testModel(p, modelId, timeoutMs)), account };
+  } catch (error) {
+    return { ok: false, error: describeError(error) };
+  }
 }
 
 /** One real call to one model: a tiny prompt, no retries. */

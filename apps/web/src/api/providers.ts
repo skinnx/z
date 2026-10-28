@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { Lane, ModelRef, ProviderInput, ProviderView, Routing } from "@z/core";
+import type { Lane, ModelRef, ProviderInput, ProviderTestResult, ProviderView, Routing } from "@z/core";
 import { api } from "./client.ts";
 import { keys, queryClient, upsert } from "./query.ts";
 
@@ -28,7 +28,7 @@ export function useDeleteProvider() {
   });
 }
 
-export type ProviderTest = { ok: boolean; model?: string; latencyMs?: number; error?: string };
+export type ProviderTest = ProviderTestResult;
 
 export function useTestProvider() {
   return useMutation({

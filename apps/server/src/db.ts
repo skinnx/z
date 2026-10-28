@@ -352,6 +352,14 @@ const MIGRATIONS: Migration[] = [
   `,
   },
   // ─── End delivery & missed runs ───────────────────────────────────────────
+  // ─── Codex CLI provider: optional path to the `codex` binary ──────────────
+  {
+    id: "0016-codex-cli",
+    sql: `
+  ALTER TABLE providers ADD COLUMN command TEXT;
+  `,
+  },
+  // ─── End Codex CLI provider ───────────────────────────────────────────────
 ];
 
 /** Apply migrations from the stored `user_version` up to `upTo` (all by default). Exported for tests. */

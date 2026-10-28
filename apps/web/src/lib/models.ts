@@ -55,6 +55,7 @@ export const PRESETS: ProviderPreset[] = [
   { key: "xai", mark: "xA", kind: "xai", label: "xAI", id: "xai", baseURL: "https://api.x.ai/v1", docs: "https://console.x.ai", needsKey: true },
   { key: "openrouter", mark: "OR", kind: "openrouter", label: "OpenRouter", id: "openrouter", baseURL: "https://openrouter.ai/api/v1", docs: "https://openrouter.ai/keys", needsKey: true },
   { key: "ollama", mark: "OL", kind: "ollama", label: "Ollama", id: "local", baseURL: "http://localhost:11434/v1", docs: "https://ollama.com/download", needsKey: false },
+  { key: "codex", mark: "CX", kind: "codex-cli", label: "Codex (ChatGPT plan)", id: "codex", needsKey: false },
   { key: "custom", mark: "{}", kind: "openai-compatible", label: "OpenAI-compatible", id: "custom", needsKey: false },
 ];
 
