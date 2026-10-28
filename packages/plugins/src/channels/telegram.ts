@@ -285,12 +285,18 @@ export const telegramAdapter: ChannelAdapter = {
   noticeLimit: 4096,
   send: async (runtime, threadId, message) => {
     const [chatId, topic] = threadId.split(":");
-    await call(runtime, "sendMessage", {
+    const sent = await call<{ message_id: number }>(runtime, "sendMessage", {
       chat_id: chatId,
       ...(topic ? { message_thread_id: Number(topic) } : {}),
       text: truncate(message.text, 4096),
       ...(message.actions?.length ? { reply_markup: telegramKeyboard(message.actions) } : {}),
     });
+    return { ref: String(sent.message_id) };
+  },
+  // Without reply_markup the keyboard is removed.
+  edit: async (runtime, threadId, ref, text) => {
+    const [chatId] = threadId.split(":");
+    await call(runtime, "editMessageText", { chat_id: chatId, message_id: Number(ref), text: truncate(text, 4096) });
   },
   webhook: async (request, runtime) => {
     if (!config(runtime, "botToken")) return new Response("Not configured", { status: 503 });
