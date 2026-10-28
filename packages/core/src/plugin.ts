@@ -19,7 +19,7 @@
 import type { Schema } from "ai";
 import type { z } from "zod";
 import type {
-  BriefItem,
+  BriefSourceItem,
   ChannelInput,
   ChannelKind,
   InboundMessage,
@@ -75,7 +75,7 @@ export type ZTool<I = any, O = unknown> = {
 };
 
 export type BriefingContext = Omit<ToolContext, "signal"> & { since: Date; timezone: string };
-export type BriefingSource = (ctx: BriefingContext) => Promise<BriefItem[]>;
+export type BriefingSource = (ctx: BriefingContext) => Promise<BriefSourceItem[]>;
 
 export type ChannelRuntime = {
   channel: z.output<typeof ChannelInput>;
