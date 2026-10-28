@@ -10,6 +10,9 @@ import {
   type BriefItem,
   type Briefing,
   type ChannelInput,
+  type ConnectorInput,
+  type ConnectorView,
+  type McpToolDefinition,
   type Memory,
   type Notice,
   type ProviderConfig,
@@ -28,6 +31,18 @@ export type ChannelRecord = ChannelConfig & {
   lastEventAt: string | null;
   status: "ok" | "error" | "idle";
   statusDetail: string | null;
+};
+
+export type ConnectorConfig = Omit<z.output<typeof ConnectorInput>, "url" | "headers"> & { url: string; headers: Record<string, string> };
+/** Last successful `initialize` + `tools/list`, so views and tool names survive restarts. */
+export type ConnectorCache = { server: { name: string; version: string } | null; instructions: string | null; tools: McpToolDefinition[] };
+export type ConnectorRecord = ConnectorConfig & {
+  urlDisplay: string;
+  status: ConnectorView["status"];
+  statusDetail: string | null;
+  cache: ConnectorCache | null;
+  hasOAuth: boolean;
+  updatedAt: string;
 };
 
 const json = (value: unknown) => JSON.stringify(value ?? null);
@@ -350,6 +365,74 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       ),
   };
 
+  // ─── Connectors ───────────────────────────────────────────────────────────
+
+  /** Origin only: some services put the secret in the path or query. */
+  const urlDisplay = (url: string) => {
+    try {
+      return `${new URL(url).origin}/…`;
+    } catch {
+      return "…";
+    }
+  };
+
+  const toConnector = (r: Row): ConnectorRecord => ({
+    id: r.id,
+    label: r.label,
+    url: sealer.open(r.url),
+    urlDisplay: r.url_display,
+    transport: r.transport,
+    auth: r.auth,
+    headers: sealer.openJson(r.headers, {}),
+    enabled: Boolean(r.enabled),
+    public: Boolean(r.public),
+    risks: parse(r.risks, {}),
+    status: r.status,
+    statusDetail: r.status_detail,
+    cache: parse(r.cache, null),
+    hasOAuth: Boolean(r.oauth),
+    updatedAt: r.updated_at,
+  });
+
+  const connectors = {
+    list: () => all("SELECT * FROM connectors ORDER BY created_at").map(toConnector),
+    get: (id: string) => {
+      const r = get("SELECT * FROM connectors WHERE id = ?", id);
+      return r ? toConnector(r) : null;
+    },
+    upsert: (c: ConnectorConfig) => {
+      const existing = get("SELECT created_at, status, status_detail, cache, oauth FROM connectors WHERE id = ?", c.id);
+      run(
+        `INSERT OR REPLACE INTO connectors (id, label, url, url_display, transport, auth, headers, header_keys, enabled, public, risks, oauth, cache, status, status_detail, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        c.id,
+        c.label,
+        sealer.seal(c.url),
+        urlDisplay(c.url),
+        c.transport,
+        c.auth,
+        sealer.sealJson(c.headers),
+        json(Object.keys(c.headers)),
+        c.enabled ? 1 : 0,
+        c.public ? 1 : 0,
+        json(c.risks),
+        existing?.oauth ?? null,
+        existing?.cache ?? null,
+        existing?.status ?? "connecting",
+        existing?.status_detail ?? null,
+        existing?.created_at ?? now(),
+        now(),
+      );
+    },
+    setStatus: (id: string, status: ConnectorRecord["status"], detail: string | null) =>
+      run("UPDATE connectors SET status = ?, status_detail = ? WHERE id = ?", status, detail, id),
+    setCache: (id: string, cache: ConnectorCache | null) => run("UPDATE connectors SET cache = ? WHERE id = ?", cache ? json(cache) : null, id),
+    /** Sealed OAuth state (tokens, client registration, PKCE verifier, pending state). */
+    oauth: <T>(id: string): T | null => sealer.openJson<T | null>(get("SELECT oauth FROM connectors WHERE id = ?", id)?.oauth ?? null, null),
+    setOAuth: (id: string, value: unknown) => run("UPDATE connectors SET oauth = ? WHERE id = ?", value ? sealer.sealJson(value) : null, id),
+    delete: (id: string) => run("DELETE FROM connectors WHERE id = ?", id).changes > 0,
+  };
+
   // ─── Memory ───────────────────────────────────────────────────────────────
 
   const toMemory = (r: Row): Memory => ({ id: r.id, text: r.text, source: r.source, createdAt: r.created_at, updatedAt: r.updated_at });
@@ -475,5 +558,5 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
   };
 
-  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, memories, plugins, threads, notices, push, kv };
+  return { settings, routing, providers, usage, tasks, approvals, briefings, channels, channelState, memory, memories, plugins, threads, notices, push, connectors, kv };
 }

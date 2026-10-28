@@ -7,6 +7,7 @@ import type { Services } from "./app.ts";
 import { createBriefings } from "./briefings.ts";
 import { createBus } from "./bus.ts";
 import { createChannels } from "./channels.ts";
+import { createConnectors } from "./connectors.ts";
 import { createSealer } from "./crypto.ts";
 import { openDatabase } from "./db.ts";
 import { loadEnv } from "./env.ts";
@@ -18,6 +19,7 @@ import { createPush } from "./push.ts";
 import { channelRoutes } from "./routes/channels.ts";
 import { chatRoutes } from "./routes/chat.ts";
 import { configRoutes } from "./routes/config.ts";
+import { connectorRoutes } from "./routes/connectors.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { memoryRoutes } from "./routes/memory.ts";
 import { reachRoutes } from "./routes/reach.ts";
@@ -31,13 +33,15 @@ import { createTasks } from "./tasks.ts";
 const env = loadEnv();
 const store = createStore(openDatabase(env.dataDir), createSealer(env.masterKey));
 const plugins = createPluginRegistry(await loadPlugins(env.plugins, [memoryPlugin(store)]), store);
-const rt = createRuntime(env, store, plugins, createBus());
+const bus = createBus();
+const connectors = createConnectors(env, store, bus);
+const rt = createRuntime(env, store, plugins, bus, connectors);
 const tasks = createTasks(rt);
 const pairing = createPairing();
 const push = createPush(rt);
 const channels = createChannels(rt, tasks, pairing);
 startDelivery(rt, push, channels);
-const services: Services = { rt, tasks, briefings: createBriefings(rt), channels, push, pairing };
+const services: Services = { rt, tasks, briefings: createBriefings(rt), channels, push, pairing, connectors };
 
 const app = new Hono();
 
@@ -51,26 +55,43 @@ app.onError((error, c) => {
 const api = new Hono();
 api.use("*", auth(env.token));
 api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
-for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes]) api.route("/", routes(services));
+for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes]) {
+  api.route("/", routes(services));
+}
 api.all("*", (c) => c.json({ error: "Not found" }, 404));
 
 app.route("/api", api);
 app.all("/hooks/:channelId", (c) => services.channels.hook(c.req.param("channelId"), c.req.raw));
+// The OAuth provider redirects the browser here: no bearer token, the single-use state is the check.
+app.get("/oauth/callback", async (c) =>
+  c.redirect(
+    await connectors.finishOAuth({
+      code: c.req.query("code"),
+      state: c.req.query("state"),
+      error: c.req.query("error"),
+      errorDescription: c.req.query("error_description"),
+      iss: c.req.query("iss"),
+    }),
+  ),
+);
 const servingWeb = mountWeb(app);
 
 services.tasks.start();
 services.briefings.schedule();
 void services.channels.syncAll();
+void connectors.syncAll();
 
 const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
   console.log(`[z] listening on http://localhost:${info.port}${servingWeb ? " (serving web app)" : ""}`);
   console.log(`[z] data dir ${env.dataDir}; ${plugins.manifests().length} plugin(s); auth ${env.token ? "on" : "off"}`);
+  if (env.allowPrivateMcp) console.log("[z] Z_ALLOW_PRIVATE_MCP=1: connectors may reach private networks and plain http");
 });
 
 async function shutdown() {
   services.tasks.stopAll();
   services.briefings.stop();
   await services.channels.stopAll();
+  await connectors.stopAll();
   server.close();
   process.exit(0);
 }
