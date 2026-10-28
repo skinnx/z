@@ -113,7 +113,42 @@ Reply to a post with "@z is this true?" and z researches before it answers: the 
 z asks wherever you are, not only in its own tab. Approvals, finished one-shot tasks and briefings become notices that are:
 
 - **pushed to your devices** — install z (it is a PWA) and turn on *Settings → Reach me → Notifications on this device*. Approval notifications carry **Approve / Deny** buttons that work without opening the app.
-- **sent to your owner channel** with buttons — in *Settings → Reach me*, choose **Pair a channel** and send the `/link 123456` it shows to your z bot on Telegram, Discord, Slack or a webhook (in Slack, start with the mention: `@z /link 123456`). Only the paired person can press the buttons. The webhook adapter POSTs notices to its *Notify URL* and takes button presses as `POST /hooks/:id {"action": "approve:<id>", "threadId", "authorId"}` with `X-Z-Secret`.
+- **sent to your owner channel** with buttons — in *Settings → Reach me*, choose **Pair a channel** and send the `/link 123456` it shows to your z bot on Telegram, Discord, Slack or a webhook (in Slack, start with the mention: `@z /link 123456`). Only the paired person can press the buttons. The webhook adapter POSTs notices to its *Notify URL* and takes button presses as `POST /hooks/:id {"action": "approve:<id>", "threadId", "authorId"}`, signed like any webhook call (below).
+
+## Webhooks
+
+A webhook channel answers `POST /hooks/:id` with JSON `{ "text", "author"?, "threadId"?, "messageId"?, "context"?, "images"? }` → `{ reply, verdict, sources, threadId, messageId }`. Every request is signed with the channel's secret:
+
+| Header | Value |
+| --- | --- |
+| `X-Z-Timestamp` | Unix time in seconds; more than 5 minutes off is refused |
+| `X-Z-Delivery` | A unique id per delivery (a UUID); `[A-Za-z0-9._:-]`, up to 200 characters |
+| `X-Z-Signature` | `v1=` + hex HMAC-SHA256(secret, `<timestamp>.<delivery>.<raw body>`) |
+
+z checks the signature over the raw bytes before parsing anything, in constant time; a bad, missing or stale signature is a `401` and nothing runs. A delivery id seen in the last 7 days answers `200 {"duplicate": true}` without running again, so retries are safe (a delivery that failed with a 5xx is forgotten and can be retried). Owner notices z POSTs to the *Notify URL* carry the same three headers; verify them the same way:
+
+```js
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+function verify(secret, headers, rawBody) {
+  const ts = headers["x-z-timestamp"], id = headers["x-z-delivery"];
+  const expected = Buffer.from("v1=" + createHmac("sha256", secret).update(`${ts}.${id}.${rawBody}`).digest("hex"));
+  const got = Buffer.from(headers["x-z-signature"] ?? "");
+  return Math.abs(Date.now() / 1000 - Number(ts)) <= 300 && got.length === expected.length && timingSafeEqual(got, expected);
+}
+```
+
+```sh
+body='{"text":"is this true? the Eiffel Tower is in Berlin","author":"ann"}'
+ts=$(date +%s); id=$(uuidgen)
+sig=$(printf '%s' "$ts.$id.$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+curl -X POST "$Z_PUBLIC_URL/hooks/my-hook" -H 'content-type: application/json' \
+  -H "X-Z-Timestamp: $ts" -H "X-Z-Delivery: $id" -H "X-Z-Signature: v1=$sig" -d "$body"
+```
+
+Channels created before signing keep working in *legacy mode* (a bare `X-Z-Secret: <secret>` header, unsigned); it is off for new channels — turn it off in the channel's settings once your integration signs.
+
+**Limits.** Anyone who can reach a bot can spend your keys, so each channel caps it: by default 4 answers at once with 20 waiting, and per person 2 in flight and 10 an hour (send `author` from webhooks, or every caller counts as one person). Over a cap the person gets one "busy, try again in N min" reply, with no model call, then silence until they are under it again. Your paired owner account is never capped. Change the numbers under *Limits* in the channel's settings.
 
 ## Browser
 

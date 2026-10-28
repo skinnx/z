@@ -4,6 +4,7 @@ import {
   describeError,
   linkCode,
   type ChannelAdapter,
+  type ChannelLimits,
   type ChannelRuntime,
   type ChannelView,
   type InboundMessage,
@@ -15,6 +16,11 @@ import type { ChannelRecord } from "./store.ts";
 import { ConflictError, type Tasks } from "./tasks.ts";
 
 type Connection = { stop: () => void | Promise<void> };
+/** Answers running in a channel, the queue behind them, and a moving average of answer time. */
+type Gate = { running: number; queue: (() => void)[]; averageMs: number };
+/** One author in one channel: messages in flight, accepted-message times in the last hour. */
+type Author = { pending: number; hits: number[]; busyNotified: boolean };
+const HOUR = 3600_000;
 
 export type Channels = ReturnType<typeof createChannels>;
 
@@ -46,6 +52,33 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     emit(id);
   }
 
+  // ─── Bot limits: in memory, per channel and per author (see ChannelLimits) ──
+  const gates = new Map<string, Gate>();
+  const authors = new Map<string, Author>();
+  let sweptAt = Date.now();
+
+  function authorFor(channelId: string, authorId: string): Author {
+    const now = Date.now();
+    if (now - sweptAt > 10 * 60_000) {
+      sweptAt = now;
+      for (const [key, a] of authors) if (!a.pending && a.hits.every((t) => now - t >= HOUR)) authors.delete(key);
+    }
+    const key = `${channelId}\n${authorId}`;
+    let author = authors.get(key);
+    if (!author) authors.set(key, (author = { pending: 0, hits: [], busyNotified: false }));
+    author.hits = author.hits.filter((t) => now - t < HOUR);
+    return author;
+  }
+
+  /** Minutes until the author may try again, or null when under every cap. */
+  function overLimit(gate: Gate, author: Author, limits: ChannelLimits): number | null {
+    if (author.hits.length >= limits.authorHourly) return Math.max(1, Math.ceil((author.hits[0]! + HOUR - Date.now()) / 60_000));
+    const full = gate.running >= limits.running && gate.queue.length >= limits.waiting;
+    if (!full && author.pending < limits.authorWaiting) return null;
+    // Roughly how long the queue ahead takes to drain at the recent answer time.
+    return Math.max(1, Math.ceil(((gate.queue.length / limits.running + 1) * gate.averageMs) / 60_000));
+  }
+
   async function dispatch(channelId: string, message: InboundMessage): Promise<OutboundReply | null> {
     store.channels.touch(channelId);
     emit(channelId);
@@ -54,6 +87,44 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     // Handled before the model, addressed or not: pairing must not depend on an LLM.
     const code = linkCode(message.text);
     if (code !== null) return { text: link(record, message, code), replyTo: message.messageId };
+    const owner = store.settings.get().owner;
+    const exempt = owner?.channelId === channelId && owner.authorId === message.author.id;
+    // Messages the bot won't answer cost nothing, and the owner is never capped.
+    if (exempt || !(message.addressed || record.always)) return answer(record, message);
+
+    let gate = gates.get(channelId);
+    if (!gate) gates.set(channelId, (gate = { running: 0, queue: [], averageMs: 30_000 }));
+    const author = authorFor(channelId, message.author.id);
+    const wait = overLimit(gate, author, record.limits);
+    if (wait !== null) {
+      // One reply per stretch over the cap, then quiet until the author is under it again.
+      if (author.busyNotified) return null;
+      author.busyNotified = true;
+      return { text: `I'm busy right now. Try again in ${wait} min.`, replyTo: message.messageId };
+    }
+    author.busyNotified = false;
+    author.hits.push(Date.now());
+    author.pending++;
+    try {
+      if (gate.running < record.limits.running) gate.running++;
+      else await new Promise<void>((resolve) => gate.queue.push(resolve));
+      const started = Date.now();
+      try {
+        return await answer(record, message);
+      } finally {
+        gate.averageMs = gate.averageMs * 0.8 + (Date.now() - started) * 0.2;
+        // Hand the slot straight to the next in line, or free it.
+        const next = gate.queue.shift();
+        if (next) next();
+        else gate.running--;
+      }
+    } finally {
+      author.pending--;
+    }
+  }
+
+  async function answer(record: ChannelRecord, message: InboundMessage): Promise<OutboundReply | null> {
+    const channelId = record.id;
     try {
       const { config: _secret, configured: _c, lastEventAt: _l, status: _s, statusDetail: _d, ...channel } = record;
       const answer = await answerMessage(
@@ -115,6 +186,10 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       state: {
         get: (key) => store.channelState.get(record.id, key),
         set: (key, value) => store.channelState.set(record.id, key, value),
+      },
+      deliveries: {
+        claim: (deliveryId) => store.deliveries.claim(record.id, deliveryId),
+        release: (deliveryId) => void store.deliveries.release(record.id, deliveryId),
       },
       status: (status, detail) => setStatus(record.id, status, detail ?? null),
       log: (text) => console.log(`[z:channel:${record.id}] ${text}`),

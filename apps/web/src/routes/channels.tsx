@@ -1,4 +1,4 @@
-import type { AdapterManifest, ChannelInput, ChannelKind, ChannelView, Lane } from "@z/core";
+import type { AdapterManifest, ChannelInput, ChannelKind, ChannelLimits, ChannelView, Lane } from "@z/core";
 import { Form } from "@base-ui/react/form";
 import { Check, Copy, Pencil, Plus, RadioTower, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -13,9 +13,11 @@ import { channelIcon, laneIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Button } from "../ui/button.tsx";
 import { Card, Empty, Section, Spinner, Loading, LoadError } from "../ui/card.tsx";
+import { Disclosure } from "../ui/collapsible.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { Field, Input } from "../ui/field.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
+import { NumberField } from "../ui/number-field.tsx";
 import { RadioCards } from "../ui/radio-cards.tsx";
 import { Select } from "../ui/select.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
@@ -202,6 +204,13 @@ function ChannelForm({
   const [always, setAlways] = useState(channel?.always ?? false);
   const [lane, setLane] = useState<Lane>(channel?.lane ?? "bot");
   const [enabled, setEnabled] = useState(channel?.enabled ?? true);
+  const [limits, setLimits] = useState<ChannelLimits>(channel?.limits ?? DEFAULT_LIMITS);
+  // Toggle config fields: on when stored; saved as "on", or "" to clear.
+  const [toggles, setToggles] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries((adapter?.config ?? []).filter((f) => f.toggle).map((f) => [f.key, channel?.configured.includes(f.key) ?? false])),
+  );
+  const textFields = adapter?.config.filter((f) => !f.toggle) ?? [];
+  const toggleFields = adapter?.config.filter((f) => f.toggle) ?? [];
   const finalId = channel?.id ?? (id || uniqueId(slug(label) || kind || "channel", existing));
   const idValid = /^[a-z0-9][a-z0-9-]{0,31}$/.test(finalId);
 
@@ -210,6 +219,7 @@ function ChannelForm({
     const a = adapters.find((x) => x.kind === k);
     if (!channel) setLabel(a?.label ?? k);
     setConfig({});
+    setToggles({});
   };
 
   return (
@@ -220,7 +230,8 @@ function ChannelForm({
         if (!kind || !idValid) return;
         // Only send what was typed: blank secret fields keep the stored value.
         const typed = Object.fromEntries(Object.entries(config).filter(([, v]) => v !== ""));
-        const input: ChannelInput = { id: finalId, kind, label: label.trim() || kind, enabled, config: typed, always, lane };
+        for (const f of toggleFields) typed[f.key] = toggles[f.key] ? "on" : "";
+        const input: ChannelInput = { id: finalId, kind, label: label.trim() || kind, enabled, config: typed, always, lane, limits };
         save.mutate(input, {
           onSuccess: (c) => {
             notify("success", t.saved, c.label);
@@ -258,17 +269,17 @@ function ChannelForm({
         </Field>
       </div>
 
-      {adapter && adapter.config.length > 0 && (
+      {adapter && textFields.length > 0 && (
         <fieldset className="grid gap-4 sm:grid-cols-2">
           <legend className="sr-only">{adapter.label}</legend>
-          {adapter.config.map((f) => {
+          {textFields.map((f) => {
             const stored = channel?.configured.includes(f.key) ?? false;
             return (
               <Field
                 key={f.key}
                 label={f.label}
                 description={stored ? (f.secret ? t.keepSecret : t.saved) : undefined}
-                className={cn(adapter.config.length === 1 && "sm:col-span-2")}
+                className={cn(textFields.length === 1 && "sm:col-span-2")}
               >
                 <Input
                   type={f.secret ? "password" : "text"}
@@ -285,6 +296,14 @@ function ChannelForm({
           })}
         </fieldset>
       )}
+      {toggleFields.map((f) => (
+        <SwitchRow
+          key={f.key}
+          label={f.label}
+          checked={toggles[f.key] ?? false}
+          onCheckedChange={(on) => setToggles((s) => ({ ...s, [f.key]: on }))}
+        />
+      ))}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label={t.lane}>
@@ -302,6 +321,25 @@ function ChannelForm({
         </div>
       </div>
       <SwitchRow label={t.alwaysAnswer} hint={`${t.alwaysAnswerHint} (@${handle})`} checked={always} onCheckedChange={setAlways} />
+
+      <Disclosure summary={t.botLimits}>
+        <div className="flex flex-col gap-3 pt-2">
+          <p className="text-xs text-fg-muted">{t.botLimitsHint}</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {LIMIT_KEYS.map((key) => (
+              <Field key={key} label={t[`limit_${key}`]}>
+                <NumberField
+                  value={limits[key]}
+                  onChange={(v) => setLimits((l) => ({ ...l, [key]: Math.max(LIMIT_MIN[key], Math.round(v ?? DEFAULT_LIMITS[key])) }))}
+                  min={LIMIT_MIN[key]}
+                  decrementLabel="−1"
+                  incrementLabel="+1"
+                />
+              </Field>
+            ))}
+          </div>
+        </div>
+      </Disclosure>
 
       {channel && adapter?.mode === "webhook" && !channel.webhookUrl && <p className="text-xs text-fg-muted">{t.needsPublicUrl}</p>}
 
@@ -327,6 +365,11 @@ function ChannelForm({
     </Form>
   );
 }
+
+/** The server's ChannelLimits defaults and minimums, for a channel not saved yet. */
+const DEFAULT_LIMITS: ChannelLimits = { running: 4, waiting: 20, authorWaiting: 2, authorHourly: 10 };
+const LIMIT_MIN: ChannelLimits = { running: 1, waiting: 0, authorWaiting: 1, authorHourly: 1 };
+const LIMIT_KEYS = ["running", "waiting", "authorWaiting", "authorHourly"] as const;
 
 function uniqueId(base: string, existing: ChannelView[]): string {
   if (!existing.some((c) => c.id === base)) return base;
