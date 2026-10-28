@@ -1,20 +1,16 @@
 /** Per-tool approval policy, grouped by plugin or connector. Aggregators can list hundreds: search and page. */
-import type { Risk } from "@z/core";
 import { ChevronDown, Search, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useConnectors } from "../../api/connectors.ts";
 import { usePlugins } from "../../api/plugins.ts";
-import { LivePolicyControl, type Policy } from "../../components/tool-policy.tsx";
+import { BulkPolicyMenu, QuickCheckRow, ToolPolicyRow, type PolicyTool } from "../../components/tool-policy.tsx";
 import { useT } from "../../i18n.ts";
-import { RiskIcon } from "../../lib/icons.tsx";
 import { Button } from "../../ui/button.tsx";
 import { Empty, Loading, LoadError } from "../../ui/card.tsx";
 import { Input } from "../../ui/field.tsx";
-import { useSaveSetting, useSettings } from "../../api/settings.ts";
-import { Row, RowGroup } from "../../ui/row.tsx";
-import { Switch } from "../../ui/switch.tsx";
+import { RowGroup } from "../../ui/row.tsx";
 
-type Tool = { key: string; name: string; description: string; risk: Risk; declared?: Policy };
+type Tool = PolicyTool & { description: string; code?: string };
 type Group = { id: string; label: string; tools: Tool[] };
 
 const PAGE = 25;
@@ -39,7 +35,7 @@ export function ApprovalsPanel() {
         .map((c) => ({
           id: `connector:${c.id}`,
           label: c.label,
-          tools: c.tools.map((tool) => ({ key: tool.toolName, name: tool.title || tool.name, description: tool.description, risk: tool.risk })),
+          tools: c.tools.map((tool) => ({ key: tool.toolName, name: tool.title || tool.name, code: tool.title ? tool.name : undefined, description: tool.description, risk: tool.risk })),
         })),
     ],
     [plugins.data, connectors.data],
@@ -61,8 +57,8 @@ export function ApprovalsPanel() {
 
   return (
     <div className="flex flex-col gap-1">
-      <ReviewerRow />
-      <p className="pt-3 text-xs text-fg-muted">{t.approvalsHint}</p>
+      <QuickCheckRow />
+      <p className="pt-3 text-xs text-fg-muted">{t.neverHint}</p>
       <div className="sticky top-0 z-10 -mx-5 flex items-center gap-3 bg-surface px-5 py-3">
         <div className="relative min-w-0 flex-1">
           <Search aria-hidden className="pointer-events-none absolute start-3 top-3 size-4 text-fg-muted" />
@@ -80,36 +76,14 @@ export function ApprovalsPanel() {
           </Button>
         </div>
       ) : (
-        // Keyed on the query so paging restarts with each search.
-        filtered.map((g) => <ToolGroup key={`${g.id}|${q}`} group={g} />)
+        // Keyed on the query so paging restarts with each search. Bulk actions always cover the whole source.
+        filtered.map((g) => <ToolGroup key={`${g.id}|${q}`} group={g} all={groups.find((x) => x.id === g.id)?.tools ?? g.tools} />)
       )}
     </div>
   );
 }
 
-/** The action reviewer: off, every change set to Ask asks; auto, what the owner explicitly asked for runs. */
-function ReviewerRow() {
-  const t = useT();
-  const settings = useSettings();
-  const { save, saved } = useSaveSetting();
-  if (!settings.data) return null;
-  return (
-    <RowGroup>
-      <Row label={t.reviewer} hint={t.reviewerHint} saved={saved}>
-        {({ labelId, hintId }) => (
-          <Switch
-            aria-labelledby={labelId}
-            aria-describedby={hintId}
-            checked={settings.data.reviewer === "auto"}
-            onCheckedChange={(on) => save({ reviewer: on ? "auto" : "off" })}
-          />
-        )}
-      </Row>
-    </RowGroup>
-  );
-}
-
-function ToolGroup({ group }: { group: Group }) {
+function ToolGroup({ group, all }: { group: Group; all: Tool[] }) {
   const t = useT();
   const [limit, setLimit] = useState(PAGE);
   const shown = group.tools.slice(0, limit);
@@ -120,27 +94,14 @@ function ToolGroup({ group }: { group: Group }) {
         <span className="flex items-center gap-2">
           {group.label}
           <span className="font-normal tabular-nums normal-case">{t.toolCount(group.tools.length)}</span>
+          <span className="ms-auto">
+            <BulkPolicyMenu source={group.label} tools={all} />
+          </span>
         </span>
       }
     >
       {shown.map((tool) => (
-        <div key={tool.key} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
-          <RiskIcon risk={tool.risk} t={t} />
-          <div className="min-w-0 flex-1 basis-32">
-            <p className="truncate font-mono text-sm" title={tool.name}>
-              {tool.name}
-            </p>
-            {tool.description && (
-              <p className="line-clamp-2 text-xs text-fg-muted sm:truncate" title={tool.description}>
-                {tool.description}
-              </p>
-            )}
-          </div>
-          {/* Phones: the control takes its own line, so the name and description keep the width. */}
-          <div className="max-sm:w-full max-sm:ps-7">
-            <LivePolicyControl toolKey={tool.key} risk={tool.risk} declared={tool.declared} showSaved className="w-full sm:w-44" />
-          </div>
-        </div>
+        <ToolPolicyRow key={tool.key} tool={tool} description={tool.description} code={tool.code} />
       ))}
       {left > 0 && (
         <div className="py-1.5">

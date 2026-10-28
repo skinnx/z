@@ -10,6 +10,9 @@ import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { Task as TaskDisclosure, TaskContent, TaskItem, TaskTrigger } from "../components/ai-elements/task.tsx";
 import { Composer } from "../components/composer.tsx";
 import { TaskQuestion } from "../components/task-question.tsx";
+import { ErrorFix } from "../components/error-fix.tsx";
+import { useProviders, useRouting } from "../api/providers.ts";
+import { providerForError } from "../lib/errors.ts";
 import { useT, type Dict } from "../i18n.ts";
 import { compact, dateTime, json, relativeTime, time } from "../lib/format.ts";
 import { parseCron } from "../lib/cron.ts";
@@ -254,6 +257,15 @@ function WatchRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   );
 }
 
+/** Why the last run failed, and the fix: the model it used (or its lane's) is the one to repair. Run now sits above. */
+function TaskErrorFix({ task }: { task: Task }) {
+  const providers = useProviders();
+  const routing = useRouting();
+  const used = task.events.findLast((e) => e.type === "model");
+  const refs = used?.type === "model" ? [used.model] : (routing.data?.[task.lane] ?? []);
+  return <ErrorFix error={task.error} provider={providerForError(task.error, refs, providers.data ?? [])} lane={task.lane} />;
+}
+
 function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) {
   const t = useT();
   const action = useTaskAction();
@@ -343,11 +355,7 @@ function TaskDetail({ task, onDeleted }: { task: Task; onDeleted: () => void }) 
 
       <blockquote className="rounded-xl border border-line bg-subtle/50 p-3 text-sm leading-relaxed whitespace-pre-wrap">{task.instructions}</blockquote>
 
-      {task.error && (
-        <div role="alert" className="rounded-xl border border-danger/40 bg-danger-soft p-3 text-sm break-words text-danger">
-          {task.error}
-        </div>
-      )}
+      {task.error && <TaskErrorFix task={task} />}
 
       {task.mode === "watch" && task.watch?.lastFinding ? (
         <section aria-label={t.lastFinding} className="flex flex-col gap-1 rounded-xl border border-accent/40 bg-accent-soft/40 p-3">

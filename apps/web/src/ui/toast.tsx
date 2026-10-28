@@ -1,6 +1,7 @@
 import { Toast as BaseToast } from "@base-ui/react/toast";
 import { CircleAlert, CircleCheck, Radar, ShieldAlert, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { ApiError } from "../api/client.ts";
 import { t } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { buttonClass } from "./button.tsx";
@@ -28,6 +29,8 @@ export function notify(
 }
 
 export function notifyError(error: unknown) {
+  // The server can't be reached: the offline bar already says so, with Retry.
+  if (error instanceof ApiError && error.status === 0) return;
   notify("error", t().error, errorText(error, t()));
 }
 

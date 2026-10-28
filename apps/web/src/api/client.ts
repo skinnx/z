@@ -11,8 +11,14 @@ export const authRequired = createSignal(false);
  * dropped, or the browser is offline. Any answer from the server clears it. The shell shows one bar for it.
  */
 export const unreachable = createSignal(typeof navigator !== "undefined" && navigator.onLine === false);
+/** The device itself has no network (as opposed to the z server being down). */
+export const deviceOffline = createSignal(typeof navigator !== "undefined" && navigator.onLine === false);
 if (typeof window !== "undefined") {
-  window.addEventListener("offline", () => unreachable.set(true));
+  window.addEventListener("offline", () => {
+    deviceOffline.set(true);
+    unreachable.set(true);
+  });
+  window.addEventListener("online", () => deviceOffline.set(false));
 }
 
 export class ApiError extends Error {
