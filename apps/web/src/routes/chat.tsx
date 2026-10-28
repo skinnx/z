@@ -11,7 +11,7 @@ import {
   type UIMessage,
 } from "ai";
 import { Check, ChevronsUpDown, CircleAlert, Copy, Cpu, KeyRound, ListCollapse, MessageSquarePlus, RefreshCw, ShieldCheck, Sparkles, SquareSlash, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { Link, Navigate, NavLink, useLocation, useNavigate, useParams } from "react-router";
 import { authHeaders, authRequired, unreachable } from "../api/client.ts";
 import { useConnectors } from "../api/connectors.ts";
@@ -57,6 +57,7 @@ import type { Skill } from "@z/core";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
+import { useStable } from "../lib/use-stable.ts";
 import { providerForError } from "../lib/errors.ts";
 import { splitRef } from "../lib/models.ts";
 import { Confirm } from "../ui/alert-dialog.tsx";
@@ -213,38 +214,35 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
   });
 
   const busy = status === "submitted" || status === "streaming";
-  const [text, setText] = useState("");
-  const [skill, setSkill] = useState<Skill | null>(null);
   const [stopped, setStopped] = useState(false);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composer = useRef<ComposerHandle>(null);
   const noProviders = providers.data?.length === 0;
+  const fresh = useRef(initial.length === 0);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const send = () => {
-    const trimmed = withSkill(skill, text);
-    if (!trimmed || busy) return;
-    setText("");
-    setSkill(null);
+  const send = useStable((text: string) => {
     setStopped(false);
-    if (initial.length === 0 && messages.length === 0) {
+    if (fresh.current && messages.length === 0) {
+      fresh.current = false;
       // A brand new thread becomes visible in the list as soon as the server has it.
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: keys.threads }), 1500);
     }
-    void sendMessage({ text: trimmed });
-  };
-
-  const prefill = (value: string) => {
-    setText(value);
-    requestAnimationFrame(() => {
-      const el = inputRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(value.length, value.length);
-    });
-  };
+    void sendMessage({ text });
+  });
+  const onStop = useStable(() => {
+    setStopped(true);
+    void stop();
+  });
+  const onApprove = useStable((approvalId: string, approved: boolean) => void addToolApprovalResponse({ id: approvalId, approved }));
+  const onRegenerate = useStable(() => {
+    setStopped(false);
+    void regenerate();
+  });
+  const onModelChange = useStable((next: string | null) => {
+    setModel(next);
+    // Picked as the fix for a failed turn: the next send goes to the new model.
+    if (error) clearError();
+  });
+  const prefill = useStable((value: string) => composer.current?.prefill(value));
 
   const last = messages[messages.length - 1];
   const lastAssistant = messages.findLast((m) => m.role === "assistant");
@@ -281,19 +279,10 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
               key={m.id}
               message={m}
               streaming={busy && m === last}
-              onApprove={(approvalId, approved) => void addToolApprovalResponse({ id: approvalId, approved })}
-              actions={
-                // A reply that failed before saying anything has nothing to copy or regenerate: the error below offers the fix.
-                m === lastAssistant && !busy && m.parts.some(visiblePart) && !m.parts.some((p) => isToolUIPart(p) && p.state === "approval-requested") ? (
-                  <ReplyActions
-                    text={textOf(m)}
-                    onRegenerate={() => {
-                      setStopped(false);
-                      void regenerate();
-                    }}
-                  />
-                ) : null
-              }
+              onApprove={onApprove}
+              onRegenerate={onRegenerate}
+              // A reply that failed before saying anything has nothing to copy or regenerate: the error below offers the fix.
+              actions={m === lastAssistant && !busy && m.parts.some(visiblePart) && !m.parts.some((p) => isToolUIPart(p) && p.state === "approval-requested")}
             />
           ))}
           {waiting && (
@@ -319,50 +308,113 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
       </Conversation>
       <ChatAnnouncer messages={messages} status={status} stopped={stopped} />
 
-      <div className="bg-bg px-3 pt-2 pb-3">
-        <PromptInput className="mx-auto max-w-3xl" onSubmit={() => send()}>
-          <SkillTextarea
-            ref={inputRef}
-            label={t.messagePlaceholder}
-            placeholder={skill ? skill.description : t.messagePlaceholder}
-            value={text}
-            onValueChange={setText}
-            skill={skill}
-            onSkillChange={(next) => {
-              setSkill(next);
-              inputRef.current?.focus();
-            }}
-            aria-describedby="chat-newline-hint"
-          />
-          <span id="chat-newline-hint" className="sr-only">
-            {t.newlineHint}
-          </span>
-          <PromptInputFooter>
-            <PromptInputTools>
-              <ModelPicker
-                value={model}
-                open={pickerOpen}
-                onOpenChange={setPickerOpen}
-                onChange={(next) => {
-                  setModel(next);
-                  // Picked as the fix for a failed turn: the next send goes to the new model.
-                  if (error) clearError();
-                }}
-              />
-            </PromptInputTools>
-            <PromptInputSubmit
-              // A failed turn shows its fix above; the composer goes back to sending.
-              status={status === "error" ? "ready" : status}
-              onStop={() => {
-                setStopped(true);
-                void stop();
-              }} disabled={!text.trim() && !skill} />
-          </PromptInputFooter>
-        </PromptInput>
-      </div>
+      <ChatComposer
+        ref={composer}
+        status={status}
+        onSend={send}
+        onStop={onStop}
+        model={model}
+        onModelChange={onModelChange}
+        pickerOpen={pickerOpen}
+        onPickerOpenChange={setPickerOpen}
+      />
     </>
   );
 }
+
+type ComposerHandle = { prefill: (value: string) => void };
+
+/**
+ * The message box. Its text lives here, not in ChatView, so a keystroke re-renders the box alone,
+ * never the thread above it.
+ */
+const ChatComposer = memo(function ChatComposer({
+  ref,
+  status,
+  onSend,
+  onStop,
+  model,
+  onModelChange,
+  pickerOpen,
+  onPickerOpenChange,
+}: {
+  ref: Ref<ComposerHandle>;
+  status: ChatStatus;
+  onSend: (text: string) => void;
+  onStop: () => void;
+  model: string | null;
+  onModelChange: (model: string | null) => void;
+  pickerOpen: boolean;
+  onPickerOpenChange: (open: boolean) => void;
+}) {
+  const t = useT();
+  const [text, setText] = useState("");
+  const [skill, setSkill] = useState<Skill | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const busy = status === "submitted" || status === "streaming";
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      prefill(value) {
+        setText(value);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.focus();
+          el.setSelectionRange(value.length, value.length);
+        });
+      },
+    }),
+    [],
+  );
+
+  const send = () => {
+    const trimmed = withSkill(skill, text);
+    if (!trimmed || busy) return;
+    setText("");
+    setSkill(null);
+    onSend(trimmed);
+  };
+
+  return (
+    <div className="bg-bg px-3 pt-2 pb-3">
+      <PromptInput className="mx-auto max-w-3xl" onSubmit={() => send()}>
+        <SkillTextarea
+          ref={inputRef}
+          label={t.messagePlaceholder}
+          placeholder={skill ? skill.description : t.messagePlaceholder}
+          value={text}
+          onValueChange={setText}
+          skill={skill}
+          onSkillChange={(next) => {
+            setSkill(next);
+            inputRef.current?.focus();
+          }}
+          aria-describedby="chat-newline-hint"
+        />
+        <span id="chat-newline-hint" className="sr-only">
+          {t.newlineHint}
+        </span>
+        <PromptInputFooter>
+          <PromptInputTools>
+            <ModelPicker value={model} open={pickerOpen} onOpenChange={onPickerOpenChange} onChange={onModelChange} />
+          </PromptInputTools>
+          <PromptInputSubmit
+            // A failed turn shows its fix above; the composer goes back to sending.
+            status={status === "error" ? "ready" : status}
+            onStop={onStop}
+            disabled={!text.trim() && !skill}
+          />
+        </PromptInputFooter>
+      </PromptInput>
+    </div>
+  );
+});
 
 /** Parts that render something the reader can see. */
 const visiblePart = (p: UIMessage["parts"][number]) =>
@@ -457,23 +509,33 @@ function ReplyActions({ text, onRegenerate }: { text: string; onRegenerate: () =
   );
 }
 
-function ChatMessage({
+/**
+ * Off-screen messages skip layout and paint (`content-visibility: auto`); the browser remembers each
+ * one's size once it has rendered, so the thread keeps its height and nothing jumps when it scrolls in.
+ */
+const offscreen = "[content-visibility:auto]";
+
+/** Memoised: a reply streaming in, or anything else in the view changing, re-renders this message only when its own props change. */
+const ChatMessage = memo(function ChatMessage({
   message,
   streaming,
   onApprove,
+  onRegenerate,
   actions,
 }: {
   message: UIMessage;
   streaming: boolean;
   onApprove: (approvalId: string, approved: boolean) => void;
-  actions: React.ReactNode;
+  onRegenerate: () => void;
+  /** Copy and Regenerate under it (the latest finished reply). */
+  actions: boolean;
 }) {
   const t = useT();
   const skills = useSkills();
   if (message.role === "user") {
     const invoked = splitSkill(textOf(message), skills.data);
     return (
-      <Message from="user">
+      <Message from="user" className={cn(offscreen, "[contain-intrinsic-size:auto_4rem]")}>
         <MessageContent>
           <span className="sr-only">{t.you}: </span>
           {invoked ? (
@@ -498,7 +560,7 @@ function ChatMessage({
   const lastIndex = message.parts.length - 1;
 
   return (
-    <Message from="assistant" aria-label={t.assistant}>
+    <Message from="assistant" aria-label={t.assistant} className={cn(!streaming && offscreen, "[contain-intrinsic-size:auto_24rem]")}>
       <MessageContent>
         {message.parts.map((part, i) => {
           if (part.type === "text") {
@@ -553,10 +615,10 @@ function ChatMessage({
           </Sources>
         )}
       </MessageContent>
-      {actions}
+      {actions && <ReplyActions text={textOf(message)} onRegenerate={onRegenerate} />}
     </Message>
   );
-}
+});
 
 function ToolCall({ part, onApprove }: { part: ToolUIPart | DynamicToolUIPart; onApprove: (id: string, approved: boolean) => void }) {
   const t = useT();

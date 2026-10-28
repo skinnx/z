@@ -2,7 +2,7 @@
  * Adapted from AI Elements `conversation` (https://elements.ai-sdk.dev/components/conversation).
  * Copyright 2023 Vercel, Inc. Licensed under Apache-2.0; see ./LICENSE and ./NOTICE.
  * Modified for z: z's Button instead of shadcn's, z tokens and strings, instant scrolling under
- * prefers-reduced-motion, the log is not itself a live region (see ChatAnnouncer), no download.
+ * prefers-reduced-motion, a thread opens at its latest message (no scroll animation), the log is not itself a live region (see ChatAnnouncer), no download.
  */
 import { ArrowDown } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
@@ -18,7 +18,9 @@ export type ConversationProps = ComponentProps<typeof StickToBottom>;
 /** The scrolling message area. It sticks to the bottom while a reply streams, until you scroll up. */
 export const Conversation = ({ className, ...props }: ConversationProps) => {
   const motion = reducedMotion() ? "instant" : "smooth";
-  return <StickToBottom className={cn("relative min-h-0 flex-1 overflow-y-hidden", className)} initial={motion} resize={motion} {...props} />;
+  // Opening a thread lands on its latest message: a smooth scroll through a long thread would keep
+  // moving the content the reader is trying to look at.
+  return <StickToBottom className={cn("relative min-h-0 flex-1 overflow-y-hidden", className)} initial="instant" resize={motion} {...props} />;
 };
 
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
