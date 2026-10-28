@@ -21,6 +21,7 @@ import {
   createModelResolver,
   describeError,
   ProviderKind,
+  ChannelLimits,
   Settings,
   type ActivePlugin,
   type InboundMessage,
@@ -166,7 +167,7 @@ async function run(item: Item): Promise<Attempt> {
       routing: { chat: [], agent: [], briefing: [], fast: [], bot: [`eval:${model}`] },
       settings: Settings.parse({}),
       plugins,
-      channel: { id: "eval", kind: "webhook", label: "Fact-check eval", enabled: true, always: false, lane: "bot" },
+      channel: { id: "eval", kind: "webhook", label: "Fact-check eval", enabled: true, always: false, lane: "bot", limits: ChannelLimits.parse({}) },
       memory: [],
     });
     const sources = answer?.reply.sources ?? [];
