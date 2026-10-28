@@ -177,6 +177,19 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End connectors ───────────────────────────────────────────────────────
+  // ─── Saved sign-ins: one login per origin; username, password and TOTP secret are sealed ─
+  `
+  CREATE TABLE IF NOT EXISTS logins (
+    id TEXT PRIMARY KEY,
+    origin TEXT NOT NULL UNIQUE,
+    secret TEXT NOT NULL,      -- sealed JSON { username, password, totp? }
+    has_totp INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_used_at TEXT
+  );
+  `,
+  // ─── End saved sign-ins ───────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

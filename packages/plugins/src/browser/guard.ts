@@ -5,6 +5,7 @@
  * The proxy connects to the address it checked, so DNS rebinding can't swap it afterwards.
  */
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
+import { lookup } from "node:dns/promises";
 import { connect, isIP, type Socket } from "node:net";
 import { errorMessage, resolvePublicHost } from "../util.ts";
 
@@ -65,13 +66,19 @@ function tunnel(host: string, address: string, port: number): Promise<Socket> {
   });
 }
 
-export async function startGuardProxy(onBlocked: (target: string) => void): Promise<GuardProxy> {
+/** `allowPrivate` (Z_ALLOW_PRIVATE_BROWSER=1) lets pages reach localhost and the LAN, e.g. a self-hosted app. */
+export async function startGuardProxy(onBlocked: (target: string) => void, allowPrivate = false): Promise<GuardProxy> {
   const resolved = new Map<string, { expires: number; address: Promise<string> }>();
   /** One public address for `host` (IPv4 preferred), cached briefly; rejects for private hosts. */
   const publicAddress = (host: string) => {
     const hit = resolved.get(host);
     if (hit && hit.expires > Date.now()) return hit.address;
-    const address = resolvePublicHost(host).then((all) => all.find((a) => isIP(a) === 4) ?? all[0]!);
+    const all = allowPrivate
+      ? isIP(host)
+        ? Promise.resolve([host])
+        : lookup(host, { all: true, verbatim: true }).then((found) => found.map((a) => a.address))
+      : resolvePublicHost(host);
+    const address = all.then((found) => found.find((a) => isIP(a) === 4) ?? found[0]!);
     resolved.set(host, { expires: Date.now() + 30_000, address });
     return address;
   };

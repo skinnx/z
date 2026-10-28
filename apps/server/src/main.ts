@@ -22,6 +22,7 @@ import { configRoutes } from "./routes/config.ts";
 import { connectorRoutes } from "./routes/connectors.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { dataRoutes } from "./routes/data.ts";
+import { loginRoutes } from "./routes/logins.ts";
 import { memoryRoutes } from "./routes/memory.ts";
 import { reachRoutes } from "./routes/reach.ts";
 import { workRoutes } from "./routes/work.ts";
@@ -56,7 +57,7 @@ app.onError((error, c) => {
 const api = new Hono();
 api.use("*", auth(env.token));
 api.get("/health", (c) => c.json({ ok: true, version: pkg.version }));
-for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes]) {
+for (const routes of [configRoutes, workRoutes, chatRoutes, channelRoutes, reachRoutes, eventRoutes, memoryRoutes, connectorRoutes, dataRoutes, loginRoutes]) {
   api.route("/", routes(services));
 }
 api.all("*", (c) => c.json({ error: "Not found" }, 404));
@@ -86,6 +87,7 @@ const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
   console.log(`[z] listening on http://localhost:${info.port}${servingWeb ? " (serving web app)" : ""}`);
   console.log(`[z] data dir ${env.dataDir}; ${plugins.manifests().length} plugin(s); auth ${env.token ? "on" : "off"}`);
   if (env.allowPrivateMcp) console.log("[z] Z_ALLOW_PRIVATE_MCP=1: connectors may reach private networks and plain http");
+  if (process.env.Z_ALLOW_PRIVATE_BROWSER === "1") console.log("[z] Z_ALLOW_PRIVATE_BROWSER=1: the browser may open localhost and private networks");
 });
 
 async function shutdown() {
