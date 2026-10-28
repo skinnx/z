@@ -1,6 +1,6 @@
 import type { ConnectorAuth, ConnectorInput, ConnectorPreset, ConnectorTool, ConnectorView, Risk } from "@z/core";
 import { Form } from "@base-ui/react/form";
-import { BookOpen, Briefcase, Cable, Check, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, ShieldAlert, Trash2, Users, type LucideIcon } from "lucide-react";
+import { Ban, BookOpen, Briefcase, Cable, Check, ChevronDown, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, Trash2, Users, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
@@ -13,7 +13,8 @@ import {
   useSaveConnector,
   useSetToolRisk,
 } from "../api/connectors.ts";
-import { LivePolicyControl } from "../components/tool-policy.tsx";
+import { effectivePolicy, LivePolicyControl } from "../components/tool-policy.tsx";
+import { useSettings } from "../api/settings.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { authIcon, CATEGORIES, fillTemplate, headerValue, isSecretName, placeholders, presetOf, templateParts, uniqueId, urlHost } from "../lib/connectors.ts";
@@ -172,7 +173,9 @@ function PresetTile({ preset: p, connected, onClick }: { preset: ConnectorPreset
   const Auth = authIcon[p.auth];
   return (
     <Tile onClick={onClick}>
-      <Monogram text={p.label} className="hidden size-9 rounded-lg text-xs normal-case sm:inline-flex" />
+      <span className="hidden shrink-0 sm:contents">
+        <Monogram text={p.label} className="size-9 rounded-lg text-xs normal-case" />
+      </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
           <span className="truncate text-sm font-medium">{p.label}</span>
@@ -316,11 +319,7 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
         </div>
 
         <Collapsible.Panel>
-          <ul aria-label={t.toolsOf(c.label)} className="divide-y divide-line border-t border-line">
-            {c.tools.map((tool) => (
-              <ToolRow key={tool.name} connector={c} tool={tool} />
-            ))}
-          </ul>
+          <ToolList connector={c} />
         </Collapsible.Panel>
       </Collapsible.Root>
     </Card>
@@ -329,14 +328,87 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
 }
 
 const RISKS = ["read", "write", "external"] as const satisfies readonly Risk[];
+/** Aggregators can list hundreds of tools: search past this many, render a page at a time. */
+const SEARCH_FROM = 8;
+const PAGE = 40;
 
-function ToolRow({ connector, tool }: { connector: ConnectorView; tool: ConnectorTool }) {
+function ToolList({ connector: c }: { connector: ConnectorView }) {
+  const t = useT();
+  const approvals = useSettings().data?.approvals ?? {};
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(PAGE);
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? c.tools.filter((x) => `${x.name} ${x.title ?? ""} ${x.description}`.toLowerCase().includes(q))
+    : c.tools;
+  const hidden = c.tools.filter((x) => effectivePolicy(x.risk, approvals[x.toolName]) === "deny").length;
+  const shown = matches.slice(0, limit);
+
+  return (
+    <div className="border-t border-line">
+      <div className="flex flex-col gap-2 px-4 pt-3 pb-1">
+        {c.tools.length > SEARCH_FROM && (
+          <div className="flex items-center gap-3">
+            <div className="relative min-w-0 flex-1">
+              <Search aria-hidden className="pointer-events-none absolute start-3 top-3 size-4 text-fg-muted" />
+              <Input
+                type="search"
+                aria-label={t.searchTools(c.label)}
+                placeholder={t.searchTools(c.label)}
+                value={query}
+                onValueChange={(v) => {
+                  setQuery(v);
+                  setLimit(PAGE);
+                }}
+                className="ps-9"
+              />
+            </div>
+            <span aria-live="polite" className="shrink-0 text-xs text-fg-muted tabular-nums">
+              {q ? t.toolsMatching(matches.length, c.tools.length) : t.toolCount(c.tools.length)}
+            </span>
+          </div>
+        )}
+        <p className="flex items-start gap-1.5 text-xs text-fg-muted">
+          <Ban aria-hidden className="mt-px size-3.5 shrink-0" />
+          <span>
+            {t.denyTrims}
+            {hidden > 0 && <span className="font-medium text-fg"> {t.toolsHidden(hidden)}</span>}
+          </span>
+        </p>
+      </div>
+      {matches.length === 0 ? (
+        <div className="flex items-center gap-3 px-4 py-4 text-sm text-fg-muted">
+          {t.noToolMatch}
+          <Button size="sm" variant="ghost" onClick={() => setQuery("")}>
+            {t.clearSearch}
+          </Button>
+        </div>
+      ) : (
+        <ul aria-label={t.toolsOf(c.label)} className="divide-y divide-line">
+          {shown.map((tool) => (
+            <ToolRow key={tool.name} connector={c} tool={tool} denied={effectivePolicy(tool.risk, approvals[tool.toolName]) === "deny"} />
+          ))}
+        </ul>
+      )}
+      {matches.length > shown.length && (
+        <div className="border-t border-line px-2 py-1.5">
+          <Button size="sm" variant="ghost" onClick={() => setLimit((n) => n + PAGE)}>
+            <ChevronDown aria-hidden />
+            {t.showMore(Math.min(PAGE, matches.length - shown.length), matches.length - shown.length)}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolRow({ connector, tool, denied }: { connector: ConnectorView; tool: ConnectorTool; denied: boolean }) {
   const t = useT();
   const setRisk = useSetToolRisk();
   const name = tool.title || tool.name;
   return (
-    <li className="flex flex-col gap-2 px-4 py-3 @container sm:flex-row sm:items-start sm:gap-4">
-      <div className="min-w-0 flex-1">
+    <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
+      <div className={cn("min-w-0 flex-1", denied && "opacity-60")}>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <RiskIcon risk={tool.risk} t={t} />
           <span className="min-w-0 truncate text-sm font-medium">{name}</span>
@@ -344,6 +416,12 @@ function ToolRow({ connector, tool }: { connector: ConnectorView; tool: Connecto
           <Badge tone={tool.riskSource === "user" ? "accent" : tool.riskSource === "default" ? "warn" : "neutral"} className="h-5">
             {t[`rsrc_${tool.riskSource}`]}
           </Badge>
+          {denied && (
+            <Badge tone="danger" className="h-5">
+              <Ban aria-hidden />
+              {t.toolHidden}
+            </Badge>
+          )}
         </p>
         {tool.description && (
           <p className="mt-1 line-clamp-2 text-xs break-words text-fg-muted" title={tool.description}>

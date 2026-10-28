@@ -379,6 +379,14 @@ const en = {
   resetRisk: "Use the server's hint",
   oauthDone: "Signed in",
   oauthFailed: "Sign-in failed",
+  searchTools: (label: string) => `Search ${label} tools`,
+  toolsMatching: (n: number, total: number) => `${n} of ${total}`,
+  noToolMatch: "No tool matches.",
+  clearSearch: "Clear search",
+  showMore: (n: number, left: number) => (n === left ? `Show ${n} more` : `Show ${n} more of ${left}`),
+  denyTrims: "Deny a tool and z never sees it — the way to trim big servers.",
+  toolsHidden: (n: number) => (n === 1 ? "1 hidden." : `${n} hidden.`),
+  toolHidden: "Hidden from z",
 } as const;
 
 type Widen<T> = T extends (...args: infer A) => string ? (...args: A) => string : string;
@@ -748,6 +756,14 @@ const vi: Dict = {
   resetRisk: "Dùng gợi ý của máy chủ",
   oauthDone: "Đã đăng nhập",
   oauthFailed: "Đăng nhập thất bại",
+  searchTools: (label) => `Tìm công cụ của ${label}`,
+  toolsMatching: (n, total) => `${n} / ${total}`,
+  noToolMatch: "Không có công cụ nào khớp.",
+  clearSearch: "Xoá tìm kiếm",
+  showMore: (n, left) => (n === left ? `Xem thêm ${n}` : `Xem thêm ${n} trong ${left}`),
+  denyTrims: "Từ chối một công cụ thì z sẽ không bao giờ thấy nó — cách gọn nhất để bớt công cụ của máy chủ lớn.",
+  toolsHidden: (n) => `Đã ẩn ${n}.`,
+  toolHidden: "Ẩn khỏi z",
 };
 
 export type Locale = "en" | "vi";
