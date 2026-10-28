@@ -3,7 +3,8 @@ import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../lib/cn.ts";
 
-const panelClass = "h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 data-starting-style:h-0 data-ending-style:h-0";
+const panelClass =
+  "h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 motion-reduce:transition-none data-starting-style:h-0 data-ending-style:h-0";
 const triggerClass = "group inline-flex min-h-8 items-center gap-1 rounded-md pe-2 text-xs font-medium text-fg-muted hover:text-fg";
 const chevron = <ChevronRight aria-hidden className="size-4 transition-transform group-data-panel-open:rotate-90 rtl:-scale-x-100" />;
 
@@ -43,3 +44,15 @@ export const Collapsible = {
     <BaseCollapsible.Panel className={cn(panelClass, className)}>{children}</BaseCollapsible.Panel>
   ),
 };
+
+/**
+ * Unstyled parts for components that bring their own trigger and panel look (the AI Elements
+ * Reasoning, Tool, Sources, Task and ChainOfThought). The panel keeps the height animation.
+ */
+export const CollapsibleRoot = BaseCollapsible.Root;
+export const CollapsibleTrigger = BaseCollapsible.Trigger;
+export function CollapsiblePanel({ className, ...props }: Omit<BaseCollapsible.Panel.Props, "className"> & { className?: string }) {
+  return <BaseCollapsible.Panel className={cn(panelClass, className)} {...props} />;
+}
+export type CollapsibleRootProps = BaseCollapsible.Root.Props;
+export type CollapsibleTriggerProps = BaseCollapsible.Trigger.Props;
