@@ -1,7 +1,7 @@
 /** The proactive agent: run a Task as a tool loop that pauses for approvals. */
 import { generateText, stepCountIs, type ModelMessage } from "ai";
-import type { Memory, Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
-import { memoryPrompt } from "./memory.ts";
+import type { Risk, Routing, Settings, Task, TaskEvent } from "./contract.ts";
+import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, laneConfigured, type ModelResolver } from "./providers.ts";
 import { buildTools, summarizeCall, toolNotes, type ActivePlugin } from "./tools.ts";
@@ -14,7 +14,7 @@ export type AgentDeps = {
   settings: Settings;
   plugins: ActivePlugin[];
   /** The owner's long-term memories. Owner-facing runs only; never set for channel bots. */
-  memories?: Memory[];
+  memories?: MemoryRecall;
   log?: (text: string) => void;
 };
 

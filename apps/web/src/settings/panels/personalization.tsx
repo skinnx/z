@@ -1,6 +1,7 @@
 import type { Settings } from "@z/core";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
+import { useLocation, useSearchParams } from "react-router";
 import { useDeleteAllMemories, useMemories } from "../../api/memories.ts";
 import { useSaveSetting } from "../../api/settings.ts";
 import { useT } from "../../i18n.ts";
@@ -64,9 +65,22 @@ function PersonaRow({ value }: { value: string }) {
 function MemoryRows({ settings }: { settings: Settings }) {
   const t = useT();
   const { save, saved } = useSaveSetting();
+  const review = useSaveSetting();
   const memories = useMemories();
-  const [managing, setManaging] = useState(false);
+  // `?memories=review` (from a "wants to remember" notice) opens the manager straight away.
+  const [params, setParams] = useSearchParams();
+  const location = useLocation();
+  const [managing, setManaging] = useState(() => params.has("memories"));
   const count = memories.data?.length;
+  const waiting = memories.data?.filter((m) => m.status === "unreviewed").length ?? 0;
+  const onManagingChange = (open: boolean) => {
+    setManaging(open);
+    if (!open && params.has("memories")) {
+      const next = new URLSearchParams(params);
+      next.delete("memories");
+      setParams(next, { replace: true, state: location.state });
+    }
+  };
   return (
     <RowGroup label={t.memories}>
       <Row label={t.memorySwitch} hint={t.memorySwitchHint} saved={saved}>
@@ -74,9 +88,23 @@ function MemoryRows({ settings }: { settings: Settings }) {
           <Switch aria-labelledby={labelId} aria-describedby={hintId} checked={settings.memory} onCheckedChange={(memory) => save({ memory })} />
         )}
       </Row>
-      <Row label={t.manageMemories} hint={count === undefined ? t.loading : t.memoryCount(count)}>
+      <Row label={t.memoryReview} hint={t.memoryReviewHint} saved={review.saved}>
+        {({ labelId, hintId }) => (
+          <Switch
+            aria-labelledby={labelId}
+            aria-describedby={hintId}
+            checked={settings.memoryReview}
+            disabled={!settings.memory}
+            onCheckedChange={(memoryReview) => review.save({ memoryReview })}
+          />
+        )}
+      </Row>
+      <Row
+        label={t.manageMemories}
+        hint={count === undefined ? t.loading : waiting > 0 ? `${t.memoryCount(count)} · ${t.awaitingReview}: ${waiting}` : t.memoryCount(count)}
+      >
         {({ labelId }) => (
-          <Dialog.Root open={managing} onOpenChange={setManaging}>
+          <Dialog.Root open={managing} onOpenChange={onManagingChange}>
             <Dialog.Trigger render={<Button size="sm" aria-describedby={labelId} />}>{t.manage}</Dialog.Trigger>
             <Dialog.Content wide title={t.memories}>
               <MemoryManager />

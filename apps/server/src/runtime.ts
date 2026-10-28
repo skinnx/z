@@ -31,10 +31,10 @@ export function createRuntime(env: Env, store: Store, plugins: PluginRegistry, b
     };
   };
 
-  /** Deps for runs only the owner reaches (chat, tasks, watches, briefing): adds long-term memory. */
+  /** Deps for runs only the owner reaches (chat, tasks, watches, briefing): adds long-term memory (active ones only). */
   const ownerDeps = (scope: string) => {
     const d = deps(scope);
-    return { ...d, memories: d.settings.memory ? store.memories.list() : [] };
+    return { ...d, memories: d.settings.memory ? store.memories.recall : undefined };
   };
 
   return { env, store, plugins, bus, models, deps, ownerDeps };

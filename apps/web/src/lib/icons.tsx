@@ -3,6 +3,7 @@ import {
   AtSign,
   Ban,
   Bot,
+  Brain,
   CalendarClock,
   CircleCheck,
   CircleX,
@@ -54,6 +55,7 @@ export const noticeKindIcon: Record<Notice["kind"], LucideIcon> = {
   watch: Radar,
   task: CircleCheck,
   briefing: Sunrise,
+  memory: Brain,
 };
 
 export const briefKindIcon: Record<BriefItem["kind"], LucideIcon> = {
