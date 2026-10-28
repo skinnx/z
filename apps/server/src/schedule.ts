@@ -18,9 +18,10 @@ export function isValidTimezone(timezone: string): boolean {
   }
 }
 
-export function nextRunAt(pattern: string, timezone: string): string | null {
+/** The first run strictly after `from` (default: now), or null for an invalid or exhausted pattern. */
+export function nextRunAt(pattern: string, timezone: string, from: Date = new Date()): string | null {
   try {
-    return new Cron(pattern, { timezone }).nextRun()?.toISOString() ?? null;
+    return new Cron(pattern, { timezone }).nextRun(from)?.toISOString() ?? null;
   } catch {
     return null;
   }

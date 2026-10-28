@@ -13,7 +13,8 @@ import { baseInstructions, joinSections } from "./prompt.ts";
 import { describeError, type ModelCall } from "./providers.ts";
 import { generateStructured } from "./structured.ts";
 import { runSignals, runTools, runToolsHint, runToolsStop } from "./run-tools.ts";
-import { buildTools, toolNotes } from "./tools.ts";
+import { describeOffer, invokedSkill, narrowing, offerTools, pluginLabels, skillOnly, skillPrompt } from "./skills.ts";
+import { buildTools, listTools, toolNotes } from "./tools.ts";
 
 export const MAX_WATCH_STEPS = 8;
 /** How many seen fingerprints a watch keeps for de-duplication. */
@@ -90,7 +91,18 @@ export async function runWatch(task: Task, deps: AgentDeps, opts: RunWatchOption
     opts.onEvent({ type: "tool", at: at(), ...call });
   };
   // Unattended: read tools only, never anything that would wait for an approval.
-  const built = buildTools(deps.plugins, { policy: deps.settings.approvals, only: task.tools, readOnly: true, log: deps.log, onCall });
+  const invoked = invokedSkill(task.instructions, deps.skills);
+  const built = buildTools(deps.plugins, {
+    policy: deps.settings.approvals,
+    only: skillOnly(invoked?.skill, deps.plugins, task.tools),
+    readOnly: true,
+    log: deps.log,
+    onCall,
+  });
+  const zTools = runTools({ ask: false });
+  const offer = offerTools(built, { request: invoked?.rest || task.instructions, skill: invoked?.skill, labels: pluginLabels(deps.plugins), enabled: listTools(deps.plugins).length });
+  deps.log?.(describeOffer(offer));
+  const narrow = narrowing(offer, { always: Object.keys(zTools), log: deps.log });
   const chain = {
     background: true,
     onCall: ({ ref, usage }: ModelCall) => opts.onEvent({ type: "model", at: at(), model: ref, tokens: usage.inputTokens + usage.outputTokens }),
@@ -118,11 +130,14 @@ export async function runWatch(task: Task, deps: AgentDeps, opts: RunWatchOption
             runToolsHint({ ask: false }),
         ),
         memoryPrompt(deps.memories, task.instructions),
+        invoked && skillPrompt(invoked.skill),
         toolNotes(deps.plugins, built),
       ),
       prompt: `What the user wants to be told about:\n${task.instructions}\n\n${seenBlock}\n\nList matching items as short lines "title — URL"; no tables.`,
-      tools: { ...built.tools, ...runTools({ ask: false }) },
+      tools: { ...built.tools, ...zTools },
       toolApproval: built.approval,
+      prepareStep: () => ({ activeTools: narrow.activeTools() }),
+      repairToolCall: narrow.repairToolCall,
       stopWhen: [isStepCount(MAX_WATCH_STEPS), runToolsStop],
       abortSignal: opts.signal,
       maxRetries: 1,

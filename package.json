@@ -9,6 +9,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "node --test --disable-warning=ExperimentalWarning 'apps/server/test/*.test.ts'",
-    "eval:factcheck": "node scripts/eval-factcheck.ts"
+    "eval:factcheck": "node scripts/eval-factcheck.ts",
+    "eval:triage": "node scripts/eval-triage.ts"
   }
 }

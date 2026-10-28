@@ -33,6 +33,8 @@ export type ProviderTest = { ok: boolean; model?: string; latencyMs?: number; er
 export function useTestProvider() {
   return useMutation({
     mutationFn: (id: string) => api<ProviderTest>(`/providers/${encodeURIComponent(id)}/test`, { method: "POST" }),
+    // A test is a live check: the setup checklist reflects it.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.setup }),
   });
 }
 

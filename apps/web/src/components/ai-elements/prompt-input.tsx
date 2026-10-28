@@ -4,8 +4,8 @@
  * Modified for z: the shadcn InputGroup is a styled container in z tokens, Radix Tooltip →
  * z's Tooltip (Base UI), Spinner → z's Spinner; the textarea is labelled, grows with its
  * content and never submits mid-composition (IME, e.g. Vietnamese Telex); submit labels come
- * from z's i18n. Attachments, screenshots, action menus, tabs and the command popover are
- * left out (z's chat takes text).
+ * from z's i18n. Attachments, screenshots, action menus and tabs are left out (z's chat takes
+ * text); the command popover is z's skill slash menu (../skill-menu.tsx).
  */
 import type { ChatStatus } from "ai";
 import { ArrowUp, Square, X } from "lucide-react";
@@ -50,7 +50,7 @@ export type PromptInputTextareaProps = Omit<ComponentProps<"textarea">, "name"> 
   submitOn?: "enter" | "mod-enter";
 };
 
-export const PromptInputTextarea = ({ label, submitOn = "enter", onKeyDown, className, ...props }: PromptInputTextareaProps) => {
+export const PromptInputTextarea = ({ label, submitOn = "enter", onKeyDown, onCompositionStart, onCompositionEnd, className, ...props }: PromptInputTextareaProps) => {
   const composing = useRef(false);
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     onKeyDown?.(e);
@@ -70,8 +70,14 @@ export const PromptInputTextarea = ({ label, submitOn = "enter", onKeyDown, clas
       name="message"
       aria-label={label}
       rows={1}
-      onCompositionStart={() => (composing.current = true)}
-      onCompositionEnd={() => (composing.current = false)}
+      onCompositionStart={(e) => {
+        composing.current = true;
+        onCompositionStart?.(e);
+      }}
+      onCompositionEnd={(e) => {
+        composing.current = false;
+        onCompositionEnd?.(e);
+      }}
       onKeyDown={handleKeyDown}
       className={cn(
         "block max-h-48 min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[0.9375rem] leading-6 outline-none [field-sizing:content] placeholder:text-fg-muted",

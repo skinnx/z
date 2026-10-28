@@ -1,10 +1,11 @@
 import type { ConnectorAuth, ConnectorInput, ConnectorPreset, ConnectorTool, ConnectorView, Risk } from "@z/core";
 import { Form } from "@base-ui/react/form";
-import { Ban, BookOpen, Briefcase, Cable, Check, ChevronDown, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, Trash2, Users, type LucideIcon } from "lucide-react";
+import { Ban, BookOpen, Briefcase, Cable, Check, ChevronDown, ClipboardPaste, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, Trash2, Users, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   connectorInput,
+  useCompleteOAuth,
   useConnectOAuth,
   useConnectorPresets,
   useConnectors,
@@ -232,6 +233,48 @@ function StatusLine({ connector: c, className }: { connector: ConnectorView; cla
   );
 }
 
+/** While a sign-in is pending: finish it by pasting the address the browser ended on, for installs the provider can't redirect back to. */
+function PasteCallback({ connector: c, className }: { connector: ConnectorView; className?: string }) {
+  const t = useT();
+  const complete = useCompleteOAuth();
+  const [url, setUrl] = useState("");
+  if (!c.signInPending && !complete.isPending) return null;
+  const submit = () => {
+    if (!url.trim() || complete.isPending) return;
+    complete.mutate(
+      { id: c.id, url },
+      {
+        onSuccess: () => {
+          setUrl("");
+          notify("success", t.oauthDone, c.label);
+        },
+        onError: notifyError,
+      },
+    );
+  };
+  return (
+    <div className={cn("flex flex-col gap-2", className)}>
+      <Field label={t.pasteCallbackLabel} description={t.pasteCallbackHint}>
+        <Input
+          value={url}
+          onValueChange={setUrl}
+          placeholder="http://localhost:8787/oauth/callback?code=…&state=…"
+          className="font-mono text-xs"
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            submit();
+          }}
+        />
+      </Field>
+      <Button size="sm" className="self-end" disabled={!url.trim() || complete.isPending} onClick={submit}>
+        {complete.isPending ? <Spinner /> : <ClipboardPaste aria-hidden />}
+        {t.pasteCallbackSubmit}
+      </Button>
+    </div>
+  );
+}
+
 function needsSignIn(c: ConnectorView) {
   return c.status === "needs_auth" || (c.auth === "oauth" && c.enabled && !c.oauth?.connected);
 }
@@ -334,6 +377,8 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
             />
           </div>
         </div>
+
+        {c.signInPending && <PasteCallback connector={c} className="border-t border-line p-4" />}
 
         <Collapsible.Panel>
           <ToolList connector={c} />
@@ -584,6 +629,7 @@ function ConnectorForm({
               {needsSignIn(connector) ? t.connect : t.signInAgain}
             </Button>
           )}
+          {connector.auth === "oauth" && <PasteCallback connector={connector} className="basis-full" />}
         </div>
       )}
 

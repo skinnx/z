@@ -14,7 +14,7 @@ import { createConnectors } from "../src/connectors.ts";
 import { createSealer } from "../src/crypto.ts";
 import { openDatabase } from "../src/db.ts";
 import { loadEnv } from "../src/env.ts";
-import { startDelivery } from "../src/notify.ts";
+import { startDelivery, type Transports } from "../src/notify.ts";
 import { createPairing } from "../src/owner.ts";
 import { createPluginRegistry } from "../src/plugins.ts";
 import { createPush } from "../src/push.ts";
@@ -110,8 +110,15 @@ export function testPlugin() {
   };
 }
 
+/**
+ * Options for a booted "process". `now`: a fake clock for the task engine and the outbox (its retry
+ * timers are then off: tests call `outbox.runDue()`). `transports`: stand-ins for the push service
+ * and the owner channel's platform, the network edge only.
+ */
+export type BootOptions = { now?: () => Date; transports?: Partial<Transports> };
+
 /** One "process": runtime + engine over a data dir. Call again on the same dir to simulate a restart. */
-export function boot(dataDir: string, plugins: ZPlugin[], model: MockLanguageModelV4) {
+export function boot(dataDir: string, plugins: ZPlugin[], model: MockLanguageModelV4, options: BootOptions = {}) {
   process.env.Z_DATA_DIR = dataDir;
   const env = loadEnv();
   const store = createStore(openDatabase(env.dataDir), createSealer(env.masterKey));
@@ -126,9 +133,15 @@ export function boot(dataDir: string, plugins: ZPlugin[], model: MockLanguageMod
     deps: (scope: string) => ({ ...real.deps(scope), models }),
     ownerDeps: (scope: string) => ({ ...real.ownerDeps(scope), models }),
   };
-  const tasks = createTasks(rt);
-  startDelivery(rt, createPush(rt), createChannels(rt, tasks, createPairing()));
-  return { rt, store, tasks };
+  const { now } = options;
+  const tasks = createTasks(rt, now ? { now } : {});
+  const outbox = startDelivery(
+    rt,
+    options.transports?.push ?? createPush(rt),
+    options.transports?.channels ?? createChannels(rt, tasks, createPairing()),
+    now ? { now: () => now().getTime(), timers: false } : {},
+  );
+  return { rt, store, tasks, outbox };
 }
 
 export async function until(check: () => boolean, what: string, ms = 5000) {

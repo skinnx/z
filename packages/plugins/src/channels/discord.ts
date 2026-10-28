@@ -134,24 +134,26 @@ async function postReply(runtime: ChannelRuntime, m: DMessage, reply: OutboundRe
   });
 }
 
-async function postMessage(runtime: ChannelRuntime, channelId: string, payload: unknown): Promise<void> {
+/** POST a new message, or PATCH `messageId`; resolves to the message. Waits out short 429s. */
+async function postMessage(runtime: ChannelRuntime, channelId: string, payload: unknown, messageId?: string): Promise<{ id: string }> {
   const body = JSON.stringify(payload);
+  const method = messageId ? "PATCH" : "POST";
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await runtime.fetch(`${API}/channels/${channelId}/messages`, {
-      method: "POST",
+    const res = await runtime.fetch(`${API}/channels/${channelId}/messages${messageId ? `/${messageId}` : ""}`, {
+      method,
       headers: { authorization: `Bot ${config(runtime, "botToken")}`, "content-type": "application/json" },
       body,
     });
-    if (res.ok) return;
+    if (res.ok) return (await res.json().catch(() => ({ id: "" }))) as { id: string };
     if (res.status === 429) {
       const { retry_after } = (await res.json().catch(() => ({ retry_after: 1 }))) as { retry_after: number };
       await sleep(Math.ceil(retry_after * 1000));
       continue;
     }
     const detail = ((await res.json().catch(() => ({}))) as { message?: string }).message ?? res.statusText;
-    throw new Error(`Discord POST message: ${res.status} ${detail}`);
+    throw new Error(`Discord ${method} message: ${res.status} ${detail}`);
   }
-  throw new Error("Discord POST message: rate limited");
+  throw new Error(`Discord ${method} message: rate limited`);
 }
 
 async function onInteraction(runtime: ChannelRuntime, interaction: DInteraction): Promise<void> {
@@ -186,11 +188,15 @@ export const discordAdapter: ChannelAdapter = {
   config: [{ key: "botToken", label: "Bot token", secret: true, required: true }],
   noticeLimit: 2000,
   send: async (runtime, threadId, message) => {
-    await postMessage(runtime, threadId, {
+    const sent = await postMessage(runtime, threadId, {
       content: truncate(message.text, 2000),
       allowed_mentions: { parse: [] },
       ...(message.actions?.length ? { components: discordComponents(message.actions) } : {}),
     });
+    return sent.id ? { ref: sent.id } : undefined;
+  },
+  edit: async (runtime, threadId, ref, text) => {
+    await postMessage(runtime, threadId, { content: truncate(text, 2000), allowed_mentions: { parse: [] }, components: [] }, ref);
   },
   start: async (runtime) => {
     const token = config(runtime, "botToken");

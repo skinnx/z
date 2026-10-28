@@ -1,17 +1,19 @@
 import type { BriefItem, Briefing, Task, TaskStatus } from "@z/core";
 import { ArrowUpRight, Brain, Check, CircleAlert, Hand, KeyRound, Radar, RefreshCw, ShieldAlert, Sparkles, Sunrise } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { usePendingApprovals } from "../api/approvals.ts";
 import { useBriefing, useGenerateBriefing } from "../api/briefing.ts";
 import { useMemories } from "../api/memories.ts";
 import { useMarkRead, useNotices } from "../api/notices.ts";
 import { useProviders } from "../api/providers.ts";
 import { useSettings } from "../api/settings.ts";
+import { useSetup } from "../api/setup.ts";
 import { useCreateTask, useTasks } from "../api/tasks.ts";
 import { ApprovalCard } from "../components/approval-card.tsx";
 import { Source } from "../components/ai-elements/sources.tsx";
 import { Composer } from "../components/composer.tsx";
+import { SetupChecklistView } from "../components/setup-checklist.tsx";
 import { TaskQuestion } from "../components/task-question.tsx";
 import { locale, useT, type Dict } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
@@ -21,12 +23,14 @@ import { briefKindIcon, StatusIcon } from "../lib/icons.tsx";
 import { Button, buttonClass } from "../ui/button.tsx";
 import { MemoryManager } from "../settings/panels/memories.tsx";
 import { Card, Empty, Loading, Section, Spinner } from "../ui/card.tsx";
+import { Disclosure } from "../ui/collapsible.tsx";
 import { Page } from "../ui/page.tsx";
 import { Dialog } from "../ui/dialog.tsx";
 import { IconButton } from "../ui/icon-button.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 
-const FIRST_RUN_KEY = "z.first-run-redirected";
+/** Set when the owner chose to continue past the first-run checklist, for this tab session. */
+const FIRST_RUN_KEY = "z.first-run-skipped";
 /** BriefItem source of tasks the briefing proposes (core `PROPOSED_SOURCE`). */
 const PROPOSED_SOURCE = "proposed";
 /** BriefItem source of the owner's open tasks; core words their text in English. */
@@ -46,10 +50,15 @@ function briefText(item: BriefItem, t: Dict): string {
   return item.text;
 }
 
+/** Reason core gives items no model sorted (core `NOT_CHECKED`); shown in the UI language. */
+const NOT_CHECKED = "Not checked: no model sorted this item.";
+
 export default function Today() {
   const t = useT();
   const approvals = usePendingApprovals();
   const providers = useProviders();
+  const setup = useSetup();
+  const [skipSetup, setSkipSetup] = useState(() => Boolean(sessionStorage.getItem(FIRST_RUN_KEY)));
   const [params, setParams] = useSearchParams();
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -60,17 +69,33 @@ export default function Today() {
     }
   }, [params, setParams]);
 
-  // First run: without a provider nothing works, so the models screen comes first (once).
-  if (providers.data && providers.data.length === 0 && !sessionStorage.getItem(FIRST_RUN_KEY)) {
-    sessionStorage.setItem(FIRST_RUN_KEY, "1");
-    return <Navigate to="/models" replace />;
+  // First run: until a chat model has actually answered, nothing works, so the checklist is the screen.
+  const chat = setup.data?.rows.find((r) => r.id === "chat_model");
+  if (chat && chat.state !== "ready" && !skipSetup) {
+    return (
+      <Page title={t.nav_today} className="gap-4">
+        <SetupChecklistView autoCheck />
+        <p className="text-sm text-fg-muted">{t.setupFirstRun}</p>
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              sessionStorage.setItem(FIRST_RUN_KEY, "1");
+              setSkipSetup(true);
+            }}
+          >
+            {t.continueAnyway}
+          </Button>
+        </div>
+      </Page>
+    );
   }
   const noProviders = providers.data?.length === 0;
   const pending = approvals.data ?? [];
 
   return (
     <Page title={t.nav_today}>
-
       {pending.length > 0 && (
         <Section label={`${t.approvals} (${pending.length})`} icon={<ShieldAlert aria-hidden className="text-warn" />}>
           <div aria-live="polite" className="flex flex-col gap-3">
@@ -255,32 +280,62 @@ function BriefingSection({ canGenerate }: { canGenerate: boolean }) {
   );
 }
 
+/** What needs the owner first, with the reason; z's proposals; then everything that can wait, folded. */
 function BriefingBody({ briefing }: { briefing: Briefing }) {
   const t = useT();
-  const groups = new Map<string, BriefItem[]>();
-  for (const item of briefing.items) groups.set(item.source, [...(groups.get(item.source) ?? []), item]);
+  const proposed = briefing.items.filter((i) => i.source === PROPOSED_SOURCE);
+  const rest = briefing.items.filter((i) => i.source !== PROPOSED_SOURCE);
+  const needs = rest.filter((i) => i.priority !== "can_wait");
+  const canWait = rest.filter((i) => i.priority === "can_wait");
 
   return (
     <div className="flex flex-col gap-4">
       {briefing.summary && <p className="text-[1.0625rem] leading-relaxed text-pretty">{briefing.summary}</p>}
       <div className="@container grid gap-3">
-        {[...groups].map(([source, items]) => (
-          <Card key={source} className="overflow-hidden">
-            {source === PROPOSED_SOURCE ? (
-              <h3 className="flex items-center gap-1.5 border-b border-line bg-accent-soft/60 px-4 py-2 text-xs font-semibold text-accent-text">
-                <Sparkles aria-hidden className="size-3.5" />
-                {t.proposedTasks}
-              </h3>
-            ) : (
-              <h3 className="border-b border-line bg-subtle/60 px-4 py-2 text-xs font-medium text-fg-muted">{source === TASKS_SOURCE ? t.group_tasks : source}</h3>
-            )}
+        {needs.length > 0 ? (
+          <Card className="overflow-hidden border-warn/40">
+            <h3 className="flex items-center gap-1.5 border-b border-line bg-warn-soft/50 px-4 py-2 text-xs font-semibold">
+              <Hand aria-hidden className="size-3.5 text-warn" />
+              {t.needsYou} ({needs.length})
+            </h3>
             <ul className="divide-y divide-line">
-              {items.map((item) => (
+              {needs.map((item) => (
                 <BriefRow key={item.id} item={item} />
               ))}
             </ul>
           </Card>
-        ))}
+        ) : (
+          rest.length > 0 && (
+            <p className="flex items-center gap-2 text-sm text-fg-muted">
+              <Check aria-hidden className="size-4" />
+              {t.nothingNeedsYou}
+            </p>
+          )
+        )}
+        {proposed.length > 0 && (
+          <Card className="overflow-hidden">
+            <h3 className="flex items-center gap-1.5 border-b border-line bg-accent-soft/60 px-4 py-2 text-xs font-semibold text-accent-text">
+              <Sparkles aria-hidden className="size-3.5" />
+              {t.proposedTasks}
+            </h3>
+            <ul className="divide-y divide-line">
+              {proposed.map((item) => (
+                <BriefRow key={item.id} item={item} proposed />
+              ))}
+            </ul>
+          </Card>
+        )}
+        {canWait.length > 0 && (
+          <Disclosure summary={t.canWait(canWait.length)}>
+            <Card className="mt-2 overflow-hidden">
+              <ul className="divide-y divide-line">
+                {canWait.map((item) => (
+                  <BriefRow key={item.id} item={item} />
+                ))}
+              </ul>
+            </Card>
+          </Disclosure>
+        )}
       </div>
       {briefing.couldNotCheck?.length ? (
         <section aria-label={t.couldNotCheck} className="flex flex-col gap-1 text-sm">
@@ -304,16 +359,23 @@ function BriefingBody({ briefing }: { briefing: Briefing }) {
   );
 }
 
-function BriefRow({ item }: { item: BriefItem }) {
+function BriefRow({ item, proposed }: { item: BriefItem; proposed?: boolean }) {
   const t = useT();
   const create = useCreateTask();
   const Icon = briefKindIcon[item.kind];
+  const reason = item.reason === NOT_CHECKED ? t.notChecked : item.reason;
   return (
     <li className="flex flex-col gap-2 px-4 py-3 @lg:flex-row @lg:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">
         <Icon role="img" aria-label={t[`kind_${item.kind}`]} className="mt-0.5 size-4 shrink-0 text-fg-muted" />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <p className="text-sm leading-relaxed break-words">{briefText(item, t)}</p>
+          {!proposed && (
+            <p className="text-xs leading-relaxed break-words text-fg-muted">
+              <span>{item.source === TASKS_SOURCE ? t.group_tasks : item.source}</span>
+              {reason && <> · {reason}</>}
+            </p>
+          )}
           {item.url && <Source href={item.url} className="text-xs" aria-label={`${briefText(item, t)} (${t.openLink})`} />}
         </div>
       </div>
