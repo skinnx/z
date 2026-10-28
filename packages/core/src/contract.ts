@@ -142,7 +142,8 @@ export type TaskStatus =
   | "scheduled" // recurring, idle until next run
   | "done"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | TaskLifecycleStatus; // needs_input | review | interrupted | paused: see "Task engine" below
 
 export const TaskInput = z.object({
   instructions: z.string().min(1).max(8000),
@@ -186,7 +187,7 @@ export type Task = {
   nextRunAt: string | null;
   createdAt: string;
   updatedAt: string;
-};
+} & TaskLifecycleFields;
 
 // ─── Briefing: the morning summary ──────────────────────────────────────────
 
@@ -207,6 +208,8 @@ export type Briefing = {
   date: string;
   summary: string;
   items: BriefItem[];
+  /** Plugin briefing sources that threw (see "Task engine" below); shown at the bottom. */
+  couldNotCheck?: CouldNotCheck[];
   createdAt: string;
 };
 
@@ -362,14 +365,16 @@ export type Memory = {
 
 export type Notice = {
   id: string;
-  /** `memory`: z has memories awaiting review (batched, at most one an hour). */
-  kind: "approval" | "watch" | "task" | "briefing" | "memory";
+  /** `memory`: z has memories awaiting review (batched, at most one an hour). `question`: a task asks the owner. */
+  kind: "approval" | "watch" | "task" | "briefing" | "memory" | "question";
   title: string;
   body: string;
   /** App path to open, e.g. `/tasks?id=…`. */
   path: string;
   /** Present for approvals: lets push and channels offer Approve / Deny. */
   approvalId?: string;
+  /** Present for `question`: simple choices become buttons on push and channels. */
+  question?: NoticeQuestion;
   read: boolean;
   createdAt: string;
 };
@@ -458,6 +463,46 @@ export type LiveEvent =
   | { type: "notice"; notice: Notice }
   | { type: "connector"; connector: ConnectorView };
 
+// ─── Task engine: crash safety, failure reporting, questions & review ───────
+// One block for the task lifecycle; referenced by TaskStatus, Task, Briefing and Notice above.
+
+/**
+ * - needs_input: paused on the agent's `ask_person` question; POST /api/tasks/:id/answer resumes it.
+ * - review:      a one-shot task finished ("Ready for review"); POST /api/tasks/:id/resolve → `done`.
+ * - interrupted: z stopped mid-action (a write/external call started without a recorded result).
+ *                Never re-run automatically; the owner checks and runs it again.
+ * - paused:      a recurring task failed MAX_CONSECUTIVE_FAILURES runs in a row; run it to resume.
+ */
+export type TaskLifecycleStatus = "needs_input" | "review" | "interrupted" | "paused";
+
+/** Consecutive failed runs after which a recurring task is paused. */
+export const MAX_CONSECUTIVE_FAILURES = 10;
+
+/** What the agent asked the owner via `ask_person`. */
+export type TaskQuestion = { question: string; choices: string[]; askedAt: string };
+
+export type TaskLifecycleFields = {
+  /** Present while `needs_input`. */
+  question?: TaskQuestion | null;
+  /** Recurring tasks: failed runs in a row (0 after a success). */
+  failures?: number;
+};
+
+export const TaskAnswer = z.object({ text: z.string().trim().min(1).max(4000) });
+export type TaskAnswer = z.input<typeof TaskAnswer>;
+
+/** A notice for a question: answer buttons on push and the owner channel. */
+export type NoticeQuestion = { taskId: string; choices: string[] };
+
+/** A plugin briefing source that failed. */
+export type CouldNotCheck = { source: string; reason: string };
+
+// Routes (also listed under HTTP API):
+// POST   /api/tasks/:id/answer  TaskAnswer → Task   (needs_input → queued; the answer becomes the tool result)
+// POST   /api/tasks/:id/resolve            → Task   (review | interrupted → done)
+
+// ─── End task engine ────────────────────────────────────────────────────────
+
 // ─── HTTP API ───────────────────────────────────────────────────────────────
 // All JSON. Errors: `{ error: string }` with a 4xx/5xx status.
 //
@@ -481,6 +526,8 @@ export type LiveEvent =
 // POST   /api/tasks         TaskInput      → Task
 // POST   /api/tasks/:id/run                → Task             (run now)
 // POST   /api/tasks/:id/cancel             → Task
+// POST   /api/tasks/:id/answer  TaskAnswer → Task             (see "Task engine")
+// POST   /api/tasks/:id/resolve            → Task             (see "Task engine")
 // DELETE /api/tasks/:id                    → { ok: true }
 // GET    /api/approvals?status=pending     → Approval[]
 // POST   /api/approvals/:id ApprovalDecision → Approval

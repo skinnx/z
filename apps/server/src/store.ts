@@ -23,6 +23,7 @@ import {
   type ProviderConfig,
   type Task,
   type TaskEvent,
+  type TaskQuestion,
 } from "@z/core";
 import type { ModelMessage, UIMessage } from "ai";
 import type { z } from "zod";
@@ -37,6 +38,22 @@ export type ChannelRecord = ChannelConfig & {
   status: "ok" | "error" | "idle";
   statusDetail: string | null;
 };
+
+/** A write/external tool call a task run started (the crash journal). `finishedAt` null: no recorded result. */
+export type TaskCall = {
+  toolCallId: string;
+  tool: string;
+  risk: string;
+  input: unknown;
+  summary: string;
+  output: unknown;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+/** Stored question: the contract's TaskQuestion plus the `ask_person` call it answers. */
+export type StoredQuestion = TaskQuestion & { toolCallId: string };
 
 export type ConnectorConfig = Omit<z.output<typeof ConnectorInput>, "url" | "headers"> & { url: string; headers: Record<string, string> };
 /** Last successful `initialize` + `tools/list`, so views and tool names survive restarts. */
@@ -168,6 +185,22 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     nextRunAt: r.next_run_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    ...publicQuestion(parse<StoredQuestion | null>(r.question, null)),
+    failures: r.failures ?? 0,
+  });
+  const publicQuestion = (q: StoredQuestion | null) =>
+    q ? { question: { question: q.question, choices: q.choices, askedAt: q.askedAt } } : { question: null };
+
+  const toCall = (r: Row): TaskCall => ({
+    toolCallId: r.tool_call_id,
+    tool: r.tool,
+    risk: r.risk,
+    input: parse(r.input, null),
+    summary: r.summary,
+    output: parse(r.output, null),
+    error: r.error,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at,
   });
 
   const tasks = {
@@ -196,8 +229,15 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
         t.createdAt,
         t.updatedAt,
       ),
-    update: (id: string, patch: Partial<Pick<Task, "title" | "status" | "result" | "error" | "nextRunAt">>): Task | null => {
-      const columns: Record<string, string> = { title: "title", status: "status", result: "result", error: "error", nextRunAt: "next_run_at" };
+    update: (id: string, patch: Partial<Pick<Task, "title" | "status" | "result" | "error" | "nextRunAt" | "failures">>): Task | null => {
+      const columns: Record<string, string> = {
+        title: "title",
+        status: "status",
+        result: "result",
+        error: "error",
+        nextRunAt: "next_run_at",
+        failures: "failures",
+      };
       const entries = Object.entries(patch).filter(([k]) => k in columns);
       if (entries.length) {
         run(
@@ -223,6 +263,33 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
       const next = [...tasks.fingerprints(id), ...added].slice(-cap);
       run("UPDATE tasks SET watch = ?, fingerprints = ?, updated_at = ? WHERE id = ?", json(watch), json(next), now(), id);
     },
+    /** The open `ask_person` question, with its tool call id. */
+    question: (id: string): StoredQuestion | null => parse(get("SELECT question FROM tasks WHERE id = ?", id)?.question, null),
+    setQuestion: (id: string, question: StoredQuestion | null) =>
+      run("UPDATE tasks SET question = ?, updated_at = ? WHERE id = ?", question ? json(question) : null, now(), id),
+    /** Crash journal: write/external calls of the current run. */
+    calls: (id: string): TaskCall[] => all("SELECT * FROM task_calls WHERE task_id = ? ORDER BY started_at", id).map(toCall),
+    callStarted: (id: string, c: { toolCallId: string; tool: string; risk: string; input: unknown; summary: string }) =>
+      run(
+        `INSERT OR REPLACE INTO task_calls (task_id, tool_call_id, tool, risk, input, summary, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        c.toolCallId,
+        c.tool,
+        c.risk,
+        json(c.input),
+        c.summary,
+        now(),
+      ),
+    callFinished: (id: string, toolCallId: string, result: { output?: unknown; error?: string }) =>
+      run(
+        "UPDATE task_calls SET output = ?, error = ?, finished_at = ? WHERE task_id = ? AND tool_call_id = ?",
+        result.output === undefined ? null : json(result.output),
+        result.error ?? null,
+        now(),
+        id,
+        toolCallId,
+      ),
+    clearCalls: (id: string) => run("DELETE FROM task_calls WHERE task_id = ?", id),
     byStatus: (...statuses: Task["status"][]) =>
       all(`SELECT * FROM tasks WHERE status IN (${statuses.map(() => "?").join(",")})`, ...statuses).map(toTask),
     delete: (id: string) => run("DELETE FROM tasks WHERE id = ?", id).changes > 0,
@@ -292,6 +359,7 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     date: r.date,
     summary: r.summary,
     items: parse<BriefItem[]>(r.items, []),
+    ...(r.could_not_check ? { couldNotCheck: parse(r.could_not_check, []) } : {}),
     createdAt: r.created_at,
   });
 
@@ -302,7 +370,15 @@ export function createStore(db: DatabaseSync, sealer: Sealer) {
     },
     all: () => all("SELECT * FROM briefings ORDER BY created_at DESC").map(toBriefing),
     insert: (b: Briefing) =>
-      run("INSERT INTO briefings (id, date, summary, items, created_at) VALUES (?, ?, ?, ?, ?)", b.id, b.date, b.summary, json(b.items), b.createdAt),
+      run(
+        "INSERT INTO briefings (id, date, summary, items, could_not_check, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        b.id,
+        b.date,
+        b.summary,
+        json(b.items),
+        b.couldNotCheck?.length ? json(b.couldNotCheck) : null,
+        b.createdAt,
+      ),
   };
 
   // ─── Channels ─────────────────────────────────────────────────────────────

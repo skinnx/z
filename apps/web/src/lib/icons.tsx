@@ -14,6 +14,10 @@ import {
   Hash,
   Hand,
   ListTodo,
+  MessageCircleQuestion,
+  OctagonAlert,
+  PauseCircle,
+  ClipboardCheck,
   LoaderCircle,
   MessageSquare,
   Newspaper,
@@ -56,6 +60,7 @@ export const noticeKindIcon: Record<Notice["kind"], LucideIcon> = {
   task: CircleCheck,
   briefing: Sunrise,
   memory: Brain,
+  question: MessageCircleQuestion,
 };
 
 export const briefKindIcon: Record<BriefItem["kind"], LucideIcon> = {
@@ -73,6 +78,10 @@ const statusIcons: Record<TaskStatus, [LucideIcon, string]> = {
   done: [CircleCheck, "text-ok"],
   failed: [CircleX, "text-danger"],
   cancelled: [Ban, "text-fg-muted"],
+  needs_input: [MessageCircleQuestion, "text-warn"],
+  review: [ClipboardCheck, "text-accent-text"],
+  interrupted: [OctagonAlert, "text-danger"],
+  paused: [PauseCircle, "text-warn"],
 };
 
 export function StatusIcon({ status, t, className }: { status: TaskStatus; t: Dict; className?: string }) {

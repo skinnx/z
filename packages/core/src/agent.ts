@@ -5,7 +5,8 @@ import type { ApprovalPreview, Memory, Risk, Routing, Settings, Task, TaskEvent 
 import { memoryPrompt, type MemoryRecall } from "./memory.ts";
 import { baseInstructions, joinSections, memoryHint } from "./prompt.ts";
 import { describeError, laneConfigured, type ModelResolver } from "./providers.ts";
-import { buildTools, summarizeCall, toolNotes, type ActivePlugin } from "./tools.ts";
+import { pendingQuestion, runSignals, runTools, runToolsHint, runToolsStop, type PendingQuestion } from "./run-tools.ts";
+import { buildTools, summarizeCall, toolNotes, type ActivePlugin, type ToolCallEnd, type ToolCallStart } from "./tools.ts";
 
 export const MAX_AGENT_STEPS = 12;
 
@@ -32,15 +33,23 @@ export type ApprovalRequestInfo = {
 };
 
 export type RunOutcome =
-  | { status: "done"; result: string; messages: ModelMessage[] }
+  /** `quiet`: the agent called no_update, so no completion notice. */
+  | { status: "done"; result: string; quiet: boolean; messages: ModelMessage[] }
   | { status: "waiting"; messages: ModelMessage[]; approvals: ApprovalRequestInfo[] }
+  /** Paused on `ask_person`. */
+  | { status: "needs_input"; messages: ModelMessage[]; question: PendingQuestion }
   | { status: "failed"; error: string; messages: ModelMessage[] };
 
 export type RunTaskOptions = {
-  /** Messages persisted at the last approval pause, with responses appended. Omit for a fresh run. */
+  /** Messages persisted by an earlier step or pause (with responses appended). Omit for a fresh run. */
   messages?: ModelMessage[] | null;
   signal?: AbortSignal;
   onEvent: (event: TaskEvent) => void;
+  /** The whole conversation so far, after every step: persist it to resume after a crash. */
+  onMessages?: (messages: ModelMessage[]) => void;
+  /** Write/external calls only, synchronously before and after they execute: the crash journal. */
+  onToolStart?: (call: ToolCallStart) => void;
+  onToolEnd?: (call: ToolCallEnd) => void;
 };
 
 const at = () => new Date().toISOString();
@@ -61,7 +70,11 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
     },
     log: deps.log,
     onCall: (call) => opts.onEvent({ type: "tool", at: at(), ...call }),
+    onStart: (call) => call.risk !== "read" && opts.onToolStart?.(call),
+    onEnd: (call) => call.risk !== "read" && opts.onToolEnd?.(call),
   });
+  const tools = { ...built.tools, ...runTools({ ask: true }) };
+  let stepInput: ModelMessage[] = messages;
 
   try {
     const result = await generateText({
@@ -78,18 +91,23 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
             "Use the available tools when they help. Some tools need the user's approval; " +
             "if a call is denied, adapt or explain what you could not do. " +
             "Finish with a concise report of what you did and found." +
+            runToolsHint({ ask: true }) +
             memoryHint(built.tools),
         ),
         memoryPrompt(deps.memories, task.instructions),
         toolNotes(deps.plugins, built),
       ),
       messages,
-      tools: built.tools,
+      tools,
       toolApproval: built.approval,
-      stopWhen: stepCountIs(MAX_AGENT_STEPS),
+      stopWhen: [stepCountIs(MAX_AGENT_STEPS), runToolsStop],
       abortSignal: opts.signal,
       maxRetries: 1,
+      onStepStart: (step) => {
+        stepInput = step.messages;
+      },
       onStepEnd: (step) => {
+        opts.onMessages?.([...stepInput, ...step.response.messages]);
         const text = step.text.trim();
         if (text) opts.onEvent({ type: "step", at: at(), text });
       },
@@ -115,7 +133,11 @@ export async function runTask(task: Task, deps: AgentDeps, opts: RunTaskOptions)
       });
 
     if (approvals.length > 0) return { status: "waiting", messages: all, approvals };
-    return { status: "done", result: result.text.trim() || "(finished without a written result)", messages: all };
+    const question = pendingQuestion(all);
+    if (question) return { status: "needs_input", messages: all, question };
+    const signals = runSignals(all);
+    if (signals.failure) return { status: "failed", error: signals.failure, messages: all };
+    return { status: "done", result: result.text.trim() || "(finished without a written result)", quiet: signals.noUpdate, messages: all };
   } catch (error) {
     if (opts.signal?.aborted) return { status: "failed", error: "Cancelled", messages };
     return { status: "failed", error: describeError(error), messages };

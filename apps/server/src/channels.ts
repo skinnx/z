@@ -159,12 +159,14 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
     return "Paired. z will reach you here for approvals and updates.";
   }
 
-  /** A button press from a channel. Only the paired owner, on the paired channel, may decide. */
+  /** A button press from a channel. Only the paired owner, on the paired channel, may decide or answer. */
   async function act(record: ChannelRecord, actionId: string, from: { threadId: string; authorId: string }): Promise<string> {
     const owner = store.settings.get().owner;
     if (!owner || owner.channelId !== record.id || owner.authorId !== from.authorId) {
       throw new Error("Only z's paired owner can do that.");
     }
+    const answer = /^answer:([^:]+):(\d+)$/.exec(actionId);
+    if (answer) return answerFromButton(answer[1]!, Number(answer[2]));
     const match = /^(approve|deny):(.+)$/.exec(actionId);
     if (!match) throw new Error("Unknown action.");
     // Approve only what fits here in full; a long action is reviewed in the app (deny is always fine).
@@ -175,6 +177,19 @@ export function createChannels(rt: Runtime, tasks: Tasks, pairing: Pairing) {
       const approval = tasks.decide(match[2]!, { approve: match[1] === "approve", remember: false });
       if (!approval) return "That approval no longer exists.";
       return `${approval.status === "approved" ? "Approved" : "Denied"}: ${approval.summary}`;
+    } catch (error) {
+      if (error instanceof ConflictError) return `${error.message}.`;
+      throw error;
+    }
+  }
+
+  /** An `ask_person` choice button: the choice text is the answer. */
+  function answerFromButton(taskId: string, index: number): string {
+    const choice = store.tasks.question(taskId)?.choices[index];
+    if (choice === undefined) return "That question was already answered.";
+    try {
+      const task = tasks.answer(taskId, choice);
+      return task ? `Answered: ${choice}` : "That task no longer exists.";
     } catch (error) {
       if (error instanceof ConflictError) return `${error.message}.`;
       throw error;

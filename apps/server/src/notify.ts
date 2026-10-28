@@ -50,8 +50,11 @@ export function pushPayload({ id, kind, title, body, path, approvalId }: Notice)
 }
 
 /** The owner-channel message: buttons only when title, complete body and link fit `limit`. */
-export function channelMessage({ title, body, approvalId }: Notice, link: string, limit: number): Parameters<Channels["send"]>[2] {
+export function channelMessage({ title, body, approvalId, question }: Notice, link: string, limit: number): Parameters<Channels["send"]>[2] {
   const text = `${title}\n${body}${link}`;
+  if (question?.choices.length && previewFits(text, limit)) {
+    return { text, actions: question.choices.map((label, i) => ({ id: `answer:${question.taskId}:${i}`, label })) };
+  }
   if (!approvalId) return { text };
   if (previewFits(text, limit)) {
     return {
