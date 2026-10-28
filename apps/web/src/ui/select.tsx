@@ -14,6 +14,7 @@ export function Select<V extends string>({
   id,
   className,
   "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   disabled,
 }: {
   value: V;
@@ -22,6 +23,7 @@ export function Select<V extends string>({
   id?: string;
   className?: string;
   "aria-label"?: string;
+  "aria-labelledby"?: string;
   disabled?: boolean;
 }) {
   const current = options.find((o) => o.value === value);
@@ -37,6 +39,7 @@ export function Select<V extends string>({
       <BaseSelect.Trigger
         id={id}
         aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledBy}
         className={cn(controlClass, "flex h-10 items-center justify-between gap-2 text-start", className)}
       >
         <span className="flex min-w-0 items-center gap-2 truncate [&_svg]:size-4 [&_svg]:text-fg-muted">

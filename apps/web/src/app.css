@@ -70,6 +70,14 @@
   }
 }
 
+/* A settings section sliding in on phones (reduced motion: see the rule at the end). */
+@keyframes settings-in {
+  from {
+    opacity: 0;
+    translate: 1.5rem 0;
+  }
+}
+
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;

@@ -3,6 +3,15 @@ import { KeyRound, LockKeyholeOpen, LogIn, type LucideIcon } from "lucide-react"
 
 export const CATEGORIES = ["docs", "dev", "work", "aggregator"] as const satisfies readonly ConnectorPreset["category"][];
 
+/** The coloured dot for a connector's status. */
+export const statusDot: Record<ConnectorView["status"], string> = {
+  connected: "bg-ok",
+  connecting: "bg-accent motion-safe:animate-pulse-dot",
+  needs_auth: "bg-warn",
+  error: "bg-danger",
+  disabled: "bg-line-strong",
+};
+
 export const authIcon: Record<ConnectorAuth, LucideIcon> = { none: LockKeyholeOpen, headers: KeyRound, oauth: LogIn };
 
 const PLACEHOLDER = /\{([^{}]+)\}/g;

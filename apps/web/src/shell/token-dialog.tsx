@@ -9,12 +9,38 @@ import { Button } from "../ui/button.tsx";
 import { backdropClass } from "../ui/dialog.tsx";
 import { Field, Input } from "../ui/field.tsx";
 
-/** Opens whenever the server answers 401; the token is kept in localStorage. */
+/** Enter the server's Z_TOKEN; it is kept in this browser's localStorage. */
+export function TokenForm({ onDone, submitLabel }: { onDone?: () => void; submitLabel: string }) {
+  const t = useT();
+  const [value, setValue] = useState("");
+  return (
+    <Form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!value.trim()) return;
+        token.set(value.trim());
+        authRequired.set(false);
+        setValue("");
+        void queryClient.invalidateQueries();
+        onDone?.();
+      }}
+    >
+      <Field label={t.tokenLabel}>
+        <Input type="password" autoComplete="current-password" required autoFocus value={value} onValueChange={setValue} className="font-mono" />
+      </Field>
+      <Button type="submit" variant="primary">
+        {submitLabel}
+      </Button>
+    </Form>
+  );
+}
+
+/** Opens whenever the server answers 401. */
 export function TokenDialog() {
   const t = useT();
   const open = authRequired.use();
   const hadToken = !!token.get();
-  const [value, setValue] = useState("");
 
   return (
     <Dialog.Root open={open} onOpenChange={(o) => authRequired.set(o)} disablePointerDismissal>
@@ -31,24 +57,7 @@ export function TokenDialog() {
                 <Dialog.Description className="text-sm text-fg-muted">{hadToken ? t.tokenWrong : t.tokenHint}</Dialog.Description>
               </div>
             </div>
-            <Form
-              className="flex flex-col gap-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!value.trim()) return;
-                token.set(value.trim());
-                authRequired.set(false);
-                setValue("");
-                void queryClient.invalidateQueries();
-              }}
-            >
-              <Field label={t.tokenLabel}>
-                <Input type="password" autoComplete="current-password" required autoFocus value={value} onValueChange={setValue} />
-              </Field>
-              <Button type="submit" variant="primary">
-                {t.tokenSave}
-              </Button>
-            </Form>
+            <TokenForm submitLabel={t.tokenSave} />
           </Dialog.Popup>
         </Dialog.Viewport>
       </Dialog.Portal>

@@ -10,6 +10,7 @@ type Common = {
   placeholder?: string;
   id?: string;
   "aria-label"?: string;
+  "aria-labelledby"?: string;
   emptyText: string;
   className?: string;
   /** Show a monospace label (model ids, cron, tz). */
@@ -52,6 +53,7 @@ function ComboboxImpl({
   placeholder,
   id,
   "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   emptyText,
   className,
   mono,
@@ -79,10 +81,11 @@ function ComboboxImpl({
         <BaseCombobox.Input
           id={id}
           aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
           placeholder={placeholder}
           className={cn("h-full min-w-0 flex-1 bg-transparent text-[0.9375rem] outline-none placeholder:font-sans placeholder:text-[0.9375rem] placeholder:text-fg-muted", mono && "font-mono text-sm")}
         />
-        <BaseCombobox.Trigger aria-label={ariaLabel} className="flex h-full w-9 items-center justify-center text-fg-muted hover:text-fg">
+        <BaseCombobox.Trigger aria-label={ariaLabel} aria-labelledby={ariaLabelledBy} className="flex h-full w-9 items-center justify-center text-fg-muted hover:text-fg">
           <ChevronsUpDown aria-hidden className="size-4" />
         </BaseCombobox.Trigger>
       </BaseCombobox.InputGroup>

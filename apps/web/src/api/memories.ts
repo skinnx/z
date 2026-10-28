@@ -23,3 +23,10 @@ export function useDeleteMemory() {
     onSuccess: (_, id) => queryClient.setQueryData<Memory[]>(keys.memories, (list) => list?.filter((m) => m.id !== id)),
   });
 }
+
+export function useDeleteAllMemories() {
+  return useMutation({
+    mutationFn: () => api<{ deleted: number }>("/memories", { method: "DELETE" }),
+    onSuccess: () => queryClient.setQueryData<Memory[]>(keys.memories, []),
+  });
+}
