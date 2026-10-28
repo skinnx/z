@@ -1,7 +1,7 @@
 import type { Lane, ModelRef, ProviderInput, ProviderView, Routing } from "@z/core";
 import { ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, Gift, LockKeyhole, Pencil, Plus, Route, Trash2, X, Zap } from "lucide-react";
 import { Form } from "@base-ui/react/form";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   LANES,
@@ -15,8 +15,10 @@ import {
   useTestProvider,
   type ProviderTest,
 } from "../api/providers.ts";
+import { ErrorFix } from "../components/error-fix.tsx";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
+import { classifyError } from "../lib/errors.ts";
 import { compact, slug, usd } from "../lib/format.ts";
 import { laneIcon } from "../lib/icons.tsx";
 import { LLM7_ROUTING, PRESETS, presetFor, splitRef, type ProviderPreset } from "../lib/models.ts";
@@ -35,18 +37,41 @@ import { RadioCards } from "../ui/radio-cards.tsx";
 import { Switch, SwitchRow } from "../ui/switch.tsx";
 import { notify, notifyError } from "../ui/toast.tsx";
 
+/** The field an error's fix opens the provider form on. */
+type FormFocus = "key" | "models" | null;
+
 export default function Models() {
   const t = useT();
   const providers = useProviders();
   const [params, setParams] = useSearchParams();
   const [editing, setEditing] = useState<ProviderView | "new" | null>(null);
+  // Deep links from an error's fix: `?edit=<provider>` opens it on its key, `?lane=<lane>` lands on that routing lane.
+  const [focus, setFocus] = useState<FormFocus>(null);
+  const [focusLane, setFocusLane] = useState<Lane | null>(null);
+  const clearLane = useCallback(() => setFocusLane(null), []);
 
   useEffect(() => {
     if (params.has("add")) {
       setEditing("new");
       setParams({}, { replace: true });
+      return;
     }
-  }, [params, setParams]);
+    const edit = params.get("edit");
+    if (edit !== null && providers.data) {
+      const p = providers.data.find((x) => x.id === edit);
+      if (p) {
+        setFocus("key");
+        setEditing(p);
+      }
+      setParams({}, { replace: true });
+      return;
+    }
+    const lane = params.get("lane");
+    if (lane !== null) {
+      if ((LANES as readonly string[]).includes(lane)) setFocusLane(lane as Lane);
+      setParams({}, { replace: true });
+    }
+  }, [params, setParams, providers.data]);
 
   if (providers.isPending) {
     return (
@@ -83,20 +108,40 @@ export default function Models() {
           >
             <div className="@container grid gap-3">
               {list.map((p) => (
-                <ProviderCard key={p.id} provider={p} onEdit={() => setEditing(p)} />
+                <ProviderCard
+                  key={p.id}
+                  provider={p}
+                  onEdit={(field) => {
+                    setFocus(field ?? null);
+                    setEditing(p);
+                  }}
+                  onPickLane={setFocusLane}
+                />
               ))}
             </div>
           </Section>
-          <RoutingEditor />
+          <RoutingEditor focusLane={focusLane} onFocused={clearLane} />
         </>
       )}
 
-      <Dialog.Root open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+      <Dialog.Root
+        open={editing !== null}
+        onOpenChange={(o) => {
+          if (o) return;
+          setEditing(null);
+          setFocus(null);
+        }}
+      >
         <Dialog.Content title={editing === "new" || editing === null ? t.addProvider : editing.label} wide>
           {editing !== null && (
             <ProviderForm
               key={editing === "new" ? "new" : editing.id}
               provider={editing === "new" ? null : editing}
+              focus={focus}
+              onPickLane={(lane) => {
+                setEditing(null);
+                setFocusLane(lane);
+              }}
               onSaved={(p) => setEditing(p)}
               onDeleted={() => setEditing(null)}
             />
@@ -155,7 +200,7 @@ function FirstRun() {
   );
 }
 
-function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit: () => void }) {
+function ProviderCard({ provider: p, onEdit, onPickLane }: { provider: ProviderView; onEdit: (focus?: FormFocus) => void; onPickLane: (lane: Lane) => void }) {
   const t = useT();
   const test = useTestProvider();
   const save = useSaveProvider();
@@ -200,7 +245,12 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
             </span>
           </p>
         )}
-        <TestResult result={test.data} error={test.error} pending={test.isPending} />
+        <TestResult
+          result={test.data}
+          error={test.error}
+          pending={test.isPending}
+          fixes={{ provider: p, onFixKey: () => onEdit("key"), onPickModel: () => onEdit("models"), onOtherModel: () => onPickLane("chat"), onRetry: () => test.mutate(p.id) }}
+        />
       </div>
 
       <div className="flex items-center gap-1 @xl:ms-2">
@@ -208,7 +258,7 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
           {test.isPending ? <Spinner /> : <Zap aria-hidden />}
           {test.isPending ? t.testing : t.test}
         </Button>
-        <IconButton label={`${t.edit}: ${p.label}`} size="icon-sm" onClick={onEdit}>
+        <IconButton label={`${t.edit}: ${p.label}`} size="icon-sm" onClick={() => onEdit()}>
           <Pencil aria-hidden />
         </IconButton>
         <Switch
@@ -222,17 +272,28 @@ function ProviderCard({ provider: p, onEdit }: { provider: ProviderView; onEdit:
   );
 }
 
-function TestResult({ result, error, pending }: { result?: ProviderTest; error: Error | null; pending: boolean }) {
+/** Where a failed test's fix lands: the key or model list of this provider, or a routing lane. */
+type TestFixes = { provider: ProviderView; onFixKey: () => void; onPickModel: () => void; onOtherModel: () => void; onRetry: () => void };
+
+function TestResult({ result, error, pending, fixes }: { result?: ProviderTest; error: Error | null; pending: boolean; fixes: TestFixes }) {
   const t = useT();
-  const msg = error?.message ?? (result && !result.ok ? result.error : null);
+  const failure: unknown = error ?? (result && !result.ok ? (result.error ?? t.fix_unknown) : null);
+  if (!pending && failure)
+    return (
+      <div aria-live="polite">
+        <ErrorFix
+          variant="inline"
+          error={failure}
+          provider={fixes.provider}
+          onFixKey={fixes.onFixKey}
+          onPickModel={classifyError(failure) === "quota" ? fixes.onOtherModel : fixes.onPickModel}
+          onRetry={fixes.onRetry}
+        />
+      </div>
+    );
   return (
     <p aria-live="polite" className="min-h-4 text-xs">
-      {pending ? null : msg ? (
-        <span className="flex items-start gap-1 text-danger">
-          <CircleAlert aria-hidden className="mt-px size-3.5 shrink-0" />
-          <span className="line-clamp-3 break-words">{msg}</span>
-        </span>
-      ) : result?.ok ? (
+      {pending ? null : result?.ok ? (
         <span className="flex items-center gap-1 text-ok">
           <CircleCheck aria-hidden className="size-3.5 shrink-0" />
           {t.testOk(result.latencyMs ?? 0, result.model ?? "")}
@@ -267,8 +328,13 @@ function ProviderForm({
   onSaved,
   onDeleted,
   defaultPreset = "llm7",
+  focus = null,
+  onPickLane,
 }: {
   defaultPreset?: string;
+  /** Opened as the fix for an error: land on the key or the model list. */
+  focus?: FormFocus;
+  onPickLane?: (lane: Lane) => void;
   provider: ProviderView | null;
   onSaved: (p: ProviderView) => void;
   onDeleted: () => void;
@@ -290,6 +356,19 @@ function ProviderForm({
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
   const [command, setCommand] = useState(provider?.command ?? "");
   const live = useProviderModels(provider?.id ?? null);
+  const keyRef = useRef<HTMLInputElement>(null);
+  const modelsRef = useRef<HTMLFieldSetElement>(null);
+  const focusField = (field: FormFocus) => {
+    const el = field === "key" ? keyRef.current : field === "models" ? modelsRef.current?.querySelector("input") : null;
+    el?.scrollIntoView({ block: "center" });
+    el?.focus();
+  };
+  useEffect(() => {
+    // After the dialog's own initial focus.
+    if (!focus) return;
+    const id = setTimeout(() => focusField(focus), 50);
+    return () => clearTimeout(id);
+  }, [focus]);
 
   const choosePreset = (key: string) => {
     const next = PRESETS.find((p) => p.key === key)!;
@@ -393,6 +472,7 @@ function ProviderForm({
           <Field label={t.apiKey} description={provider?.hasKey ? `${t.keepSecret} ••••${provider.keyHint ?? ""}` : `${preset.needsKey ? `${t.keyNeeded} ` : ""}${t.keyStaysHere}`}>
             <div className="flex gap-2">
               <Input
+                ref={keyRef}
                 type="password"
                 autoComplete="off"
                 value={apiKey}
@@ -419,7 +499,7 @@ function ProviderForm({
       )}
 
       {/* min-w-0: a fieldset is min-content wide by default, so one long model id would widen the dialog. */}
-      <fieldset className="flex min-w-0 flex-col gap-2">
+      <fieldset ref={modelsRef} className="flex min-w-0 flex-col gap-2">
         <legend className="mb-1.5 flex w-full items-center justify-between text-sm font-medium">
           {t.models}
           {provider && live.data && <span className="text-xs font-normal text-fg-muted">{t.modelsLoaded(live.data.length)}</span>}
@@ -473,7 +553,20 @@ function ProviderForm({
         </div>
       </div>
 
-      {provider && <TestResult result={test.data} error={test.error} pending={test.isPending} />}
+      {provider && (
+        <TestResult
+          result={test.data}
+          error={test.error}
+          pending={test.isPending}
+          fixes={{
+            provider,
+            onFixKey: () => focusField("key"),
+            onPickModel: () => focusField("models"),
+            onOtherModel: () => onPickLane?.("chat"),
+            onRetry: () => test.mutate(provider.id),
+          }}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
         {provider && (
@@ -512,13 +605,32 @@ function uniqueId(base: string, existing: ProviderView[]): string {
   for (let i = 2; ; i++) if (!existing.some((p) => p.id === `${root}-${i}`)) return `${root}-${i}`;
 }
 
-function RoutingEditor() {
+function RoutingEditor({ focusLane, onFocused }: { focusLane: Lane | null; onFocused: () => void }) {
   const t = useT();
   const routing = useRouting();
   const save = useSaveRouting();
   const refs = useModelRefs();
   const providers = useProviders().data ?? [];
   const current = routing.data;
+  const laneRefs = useRef<Partial<Record<Lane, HTMLDivElement | null>>>({});
+  const [highlight, setHighlight] = useState<Lane | null>(null);
+
+  // Landed here to pick another model: show the lane and put the cursor in its "add" box.
+  useEffect(() => {
+    if (!focusLane || !current) return;
+    const el = laneRefs.current[focusLane];
+    if (!el) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    el.querySelector("input")?.focus({ preventScroll: true });
+    setHighlight(focusLane);
+    onFocused();
+  }, [focusLane, current, onFocused]);
+  useEffect(() => {
+    if (!highlight) return;
+    const id = setTimeout(() => setHighlight(null), 2500);
+    return () => clearTimeout(id);
+  }, [highlight]);
 
   const update = (lane: Lane, chain: ModelRef[]) => {
     if (!current) return;
@@ -538,7 +650,14 @@ function RoutingEditor() {
             const chain = current[lane] ?? [];
             const Icon = laneIcon[lane];
             return (
-              <Card key={lane} className="flex min-w-0 flex-col p-3">
+              <Card
+                key={lane}
+                ref={(el) => {
+                  laneRefs.current[lane] = el;
+                }}
+                data-lane={lane}
+                className={cn("flex min-w-0 flex-col p-3 transition-shadow", highlight === lane && "ring-2 ring-accent")}
+              >
                 <h3 className="flex items-center gap-2 px-1 pb-2 text-sm font-semibold">
                   <Icon aria-hidden className="size-4 text-fg-muted" />
                   {t[`lane_${lane}`]}

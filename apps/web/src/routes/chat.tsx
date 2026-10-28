@@ -13,7 +13,7 @@ import {
 import { Check, ChevronsUpDown, CircleAlert, Copy, Cpu, KeyRound, ListCollapse, MessageSquarePlus, RefreshCw, ShieldCheck, Sparkles, SquareSlash, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, NavLink, useLocation, useNavigate, useParams } from "react-router";
-import { authHeaders, authRequired } from "../api/client.ts";
+import { authHeaders, authRequired, unreachable } from "../api/client.ts";
 import { useConnectors } from "../api/connectors.ts";
 import { usePlugins } from "../api/plugins.ts";
 import { keys, queryClient } from "../api/query.ts";
@@ -50,12 +50,14 @@ import { Shimmer } from "../components/ai-elements/shimmer.tsx";
 import { Source, Sources, SourcesContent, SourcesTrigger } from "../components/ai-elements/sources.tsx";
 import { Suggestion, Suggestions } from "../components/ai-elements/suggestion.tsx";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "../components/ai-elements/tool.tsx";
+import { ErrorFix } from "../components/error-fix.tsx";
 import { SkillTextarea, withSkill } from "../components/skill-menu.tsx";
 import { splitSkill, useSkills } from "../api/skills.ts";
 import type { Skill } from "@z/core";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { relativeTime } from "../lib/format.ts";
+import { providerForError } from "../lib/errors.ts";
 import { splitRef } from "../lib/models.ts";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Button, buttonClass } from "../ui/button.tsx";
@@ -173,7 +175,9 @@ const textOf = (m: UIMessage) => m.parts.map((p) => (p.type === "text" ? p.text 
 function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessage[]; onOpenThreads: () => void }) {
   const t = useT();
   const providers = useProviders();
+  const routing = useRouting();
   const [model, setModel] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const modelRef = useRef<string | null>(null);
   modelRef.current = model;
 
@@ -184,7 +188,15 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
         headers: () => authHeaders(),
         body: () => (modelRef.current ? { model: modelRef.current } : {}),
         fetch: async (input, init) => {
-          const res = await fetch(input, init);
+          let res: Response;
+          try {
+            res = await fetch(input, init);
+          } catch (cause) {
+            // The shell's offline bar says so; the failed turn offers Retry.
+            if (!(cause instanceof DOMException && cause.name === "AbortError")) unreachable.set(true);
+            throw cause;
+          }
+          unreachable.set(false);
           if (res.status === 401) authRequired.set(true);
           return res;
         },
@@ -271,7 +283,8 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
               streaming={busy && m === last}
               onApprove={(approvalId, approved) => void addToolApprovalResponse({ id: approvalId, approved })}
               actions={
-                m === lastAssistant && !busy && !m.parts.some((p) => isToolUIPart(p) && p.state === "approval-requested") ? (
+                // A reply that failed before saying anything has nothing to copy or regenerate: the error below offers the fix.
+                m === lastAssistant && !busy && m.parts.some(visiblePart) && !m.parts.some((p) => isToolUIPart(p) && p.state === "approval-requested") ? (
                   <ReplyActions
                     text={textOf(m)}
                     onRegenerate={() => {
@@ -290,20 +303,16 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
             </div>
           )}
           {error && (
-            <div role="alert" className="flex items-start gap-3 rounded-xl border border-danger/40 bg-danger-soft p-3 text-sm text-danger">
-              <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
-              <p className="min-w-0 flex-1 break-words">{error.message}</p>
-              <Button
-                size="sm"
-                onClick={() => {
-                  clearError();
-                  void regenerate();
-                }}
-              >
-                <RefreshCw aria-hidden />
-                {t.retry}
-              </Button>
-            </div>
+            <ErrorFix
+              error={error}
+              provider={providerForError(error, model ? [model] : (routing.data?.chat ?? []), providers.data ?? [])}
+              lane="chat"
+              onPickModel={() => setPickerOpen(true)}
+              onRetry={() => {
+                clearError();
+                void regenerate();
+              }}
+            />
           )}
         </ConversationContent>
         <ConversationScrollButton />
@@ -330,10 +339,20 @@ function ChatView({ id, initial, onOpenThreads }: { id: string; initial: UIMessa
           </span>
           <PromptInputFooter>
             <PromptInputTools>
-              <ModelPicker value={model} onChange={setModel} />
+              <ModelPicker
+                value={model}
+                open={pickerOpen}
+                onOpenChange={setPickerOpen}
+                onChange={(next) => {
+                  setModel(next);
+                  // Picked as the fix for a failed turn: the next send goes to the new model.
+                  if (error) clearError();
+                }}
+              />
             </PromptInputTools>
             <PromptInputSubmit
-              status={status}
+              // A failed turn shows its fix above; the composer goes back to sending.
+              status={status === "error" ? "ready" : status}
               onStop={() => {
                 setStopped(true);
                 void stop();
@@ -595,11 +614,20 @@ function ToolCall({ part, onApprove }: { part: ToolUIPart | DynamicToolUIPart; o
 }
 
 /** Model picker for this chat: the chat lane's default, or any model of an enabled provider. */
-function ModelPicker({ value, onChange }: { value: string | null; onChange: (value: string | null) => void }) {
+function ModelPicker({
+  value,
+  onChange,
+  open,
+  onOpenChange: setOpen,
+}: {
+  value: string | null;
+  onChange: (value: string | null) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const t = useT();
   const providers = useProviders();
   const routing = useRouting();
-  const [open, setOpen] = useState(false);
   const defaultRef = routing.data?.chat?.[0] ?? null;
 
   const groups = useMemo<ModelSelectorGroupData[]>(() => {

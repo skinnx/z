@@ -13,6 +13,8 @@ import * as settings from "./i18n/settings.ts";
 import * as setup from "./i18n/setup.ts";
 import * as skills from "./i18n/skills.ts";
 import * as notices from "./i18n/notices.ts";
+import * as approvals from "./i18n/approvals.ts";
+import * as recovery from "./i18n/recovery.ts";
 
 // Strings live per app area in ./i18n/<area>.ts (en + vi each); keys are unique across areas (`pnpm check:i18n`).
 const en = {
@@ -29,6 +31,8 @@ const en = {
   ...setup.en,
   ...skills.en,
   ...notices.en,
+  ...approvals.en,
+  ...recovery.en,
 } as const;
 
 export type Dict = { [K in keyof typeof en]: Widen<(typeof en)[K]> };
@@ -47,6 +51,8 @@ const vi: Dict = {
   ...setup.vi,
   ...skills.vi,
   ...notices.vi,
+  ...approvals.vi,
+  ...recovery.vi,
 };
 
 export type Locale = "en" | "vi";

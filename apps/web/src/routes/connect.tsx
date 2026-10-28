@@ -1,6 +1,6 @@
 import type { ConnectorAuth, ConnectorInput, ConnectorPreset, ConnectorTool, ConnectorView, Risk } from "@z/core";
 import { Form } from "@base-ui/react/form";
-import { Ban, BookOpen, Briefcase, Cable, Check, ChevronDown, ClipboardPaste, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, Trash2, Users, type LucideIcon } from "lucide-react";
+import { Ban, BookOpen, Briefcase, Cable, Check, ChevronDown, ClipboardPaste, CodeXml, ExternalLink, Info, Layers, Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, SlidersHorizontal, Trash2, Users, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
@@ -14,13 +14,16 @@ import {
   useSaveConnector,
   useSetToolRisk,
 } from "../api/connectors.ts";
-import { effectivePolicy, LivePolicyControl } from "../components/tool-policy.tsx";
+import { ErrorFix } from "../components/error-fix.tsx";
+import { BulkPolicyMenu, effectivePolicy, QuickCheckRow, ToolPolicyRow, type PolicyTool } from "../components/tool-policy.tsx";
+import { connectorFailure } from "../lib/errors.ts";
+import { Menu, MenuItem, MenuSeparator } from "../ui/menu.tsx";
 import { useSettings } from "../api/settings.ts";
 import { useT } from "../i18n.ts";
 import { cn } from "../lib/cn.ts";
 import { authIcon, CATEGORIES, statusDot as dot, fillTemplate, headerValue, isSecretName, placeholders, presetOf, templateParts, uniqueId, urlHost } from "../lib/connectors.ts";
 import { slug } from "../lib/format.ts";
-import { riskIcon, RiskIcon } from "../lib/icons.tsx";
+import { riskIcon } from "../lib/icons.tsx";
 import { Confirm } from "../ui/alert-dialog.tsx";
 import { Monogram } from "../ui/avatar.tsx";
 import { Button, ExternalLinkButton, Tile } from "../ui/button.tsx";
@@ -220,14 +223,15 @@ function PresetTile({ preset: p, connected, onClick }: { preset: ConnectorPreset
   );
 }
 
-function StatusLine({ connector: c, className }: { connector: ConnectorView; className?: string }) {
+/** `hideDetail`: the fix below the line already shows the server's words. */
+function StatusLine({ connector: c, hideDetail, className }: { connector: ConnectorView; hideDetail?: boolean; className?: string }) {
   const t = useT();
   return (
     <p className={cn("flex items-start gap-2 text-xs", className)} aria-live="polite">
       <span aria-hidden className={cn("mt-1 size-2 shrink-0 rounded-full", dot[c.status])} />
       <span className="min-w-0 break-words">
         <span className={cn("font-medium", c.status === "error" ? "text-danger" : c.status === "needs_auth" ? "text-warn" : "text-fg")}>{t[`cst_${c.status}`]}</span>
-        {c.statusDetail && <span className="text-fg-muted"> · {c.statusDetail}</span>}
+        {c.statusDetail && !hideDetail && <span className="text-fg-muted"> · {c.statusDetail}</span>}
       </span>
     </p>
   );
@@ -298,7 +302,7 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
     onFocused();
   }, [focus, c.tools.length, onFocused]);
 
-  const signIn = needsSignIn(c);
+  const failure = connectorFailure(c);
   const busy = refresh.isPending || c.status === "connecting";
 
   return (
@@ -325,7 +329,21 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
             <p className="truncate font-mono text-xs text-fg-muted" title={c.urlDisplay}>
               {c.urlDisplay}
             </p>
-            <StatusLine connector={c} className="mt-1.5" />
+            <StatusLine connector={c} hideDetail={Boolean(failure)} className="mt-1.5" />
+            {failure && (
+              <ErrorFix
+                variant="inline"
+                className="mt-2"
+                kind={failure}
+                error={c.statusDetail ?? ""}
+                provider={{ id: c.id, label: c.label }}
+                source={c.label}
+                pending={oauth.isPending}
+                onSignIn={() => oauth.mutate(c.id, { onError: notifyError })}
+                onFixKey={onEdit}
+                onRetry={c.enabled ? () => refresh.mutate(c.id, { onError: notifyError }) : undefined}
+              />
+            )}
             {c.server && (
               <p className="mt-1 truncate text-xs text-fg-muted">
                 {c.server.name} <span className="font-mono">{c.server.version}</span>
@@ -347,12 +365,6 @@ function ConnectorCard({ connector: c, focus, onFocused, onEdit }: { connector: 
             <span className="text-xs text-fg-muted">{c.status === "connected" ? t.noToolsListed : t.toolsAfterConnect}</span>
           )}
           <div className="ms-auto flex items-center gap-1">
-            {signIn && (
-              <Button variant="primary" size="sm" disabled={oauth.isPending} onClick={() => oauth.mutate(c.id, { onError: notifyError })}>
-                {oauth.isPending ? <Spinner /> : <ExternalLink aria-hidden />}
-                {t.connect}
-              </Button>
-            )}
             <IconButton
               label={`${t.refresh}: ${c.label}`}
               size="icon-sm"
@@ -405,6 +417,8 @@ function ToolList({ connector: c }: { connector: ConnectorView }) {
     : c.tools;
   const hidden = c.tools.filter((x) => effectivePolicy(x.risk, approvals[x.toolName]) === "deny").length;
   const shown = matches.slice(0, limit);
+  const policyTools = useMemo(() => c.tools.map(policyTool), [c.tools]);
+  const save = useSaveConnector();
 
   return (
     <div className="border-t border-line">
@@ -430,13 +444,25 @@ function ToolList({ connector: c }: { connector: ConnectorView }) {
             </span>
           </div>
         )}
-        <p className="flex items-start gap-1.5 text-xs text-fg-muted">
-          <Ban aria-hidden className="mt-px size-3.5 shrink-0" />
-          <span>
-            {t.denyTrims}
-            {hidden > 0 && <span className="font-medium text-fg"> {t.toolsHidden(hidden)}</span>}
-          </span>
-        </p>
+        <div className="flex items-start gap-2">
+          <p className="flex min-w-0 flex-1 items-start gap-1.5 pt-1.5 text-xs text-fg-muted">
+            <Ban aria-hidden className="mt-px size-3.5 shrink-0" />
+            <span>
+              {t.neverHint}
+              {hidden > 0 && <span className="font-medium text-fg"> {t.toolsHidden(hidden)}</span>}
+            </span>
+          </p>
+          <BulkPolicyMenu
+            source={c.label}
+            tools={policyTools}
+            onMarkAllRead={() =>
+              save.mutate(connectorInput(c, { risks: { ...c.risks, ...Object.fromEntries(c.tools.map((x) => [x.name, "read" as const])) } }), {
+                onSuccess: () => notify("success", t.bulkDone(c.label)),
+                onError: notifyError,
+              })
+            }
+          />
+        </div>
       </div>
       {matches.length === 0 ? (
         <div className="flex items-center gap-3 px-4 py-4 text-sm text-fg-muted">
@@ -448,7 +474,7 @@ function ToolList({ connector: c }: { connector: ConnectorView }) {
       ) : (
         <ul aria-label={t.toolsOf(c.label)} className="divide-y divide-line">
           {shown.map((tool) => (
-            <ToolRow key={tool.name} connector={c} tool={tool} denied={effectivePolicy(tool.risk, approvals[tool.toolName]) === "deny"} />
+            <ToolRow key={tool.name} connector={c} tool={tool} />
           ))}
         </ul>
       )}
@@ -460,62 +486,72 @@ function ToolList({ connector: c }: { connector: ConnectorView }) {
           </Button>
         </div>
       )}
+      <div className="border-t border-line px-4">
+        <QuickCheckRow />
+      </div>
     </div>
   );
 }
 
-function ToolRow({ connector, tool, denied }: { connector: ConnectorView; tool: ConnectorTool; denied: boolean }) {
+const policyTool = (tool: ConnectorTool): PolicyTool => ({ key: tool.toolName, name: tool.title || tool.name, risk: tool.risk });
+
+/** One tool: the shared approval row, plus a menu to correct what the server says the tool does. */
+function ToolRow({ connector, tool }: { connector: ConnectorView; tool: ConnectorTool }) {
   const t = useT();
   const setRisk = useSetToolRisk();
+  const approvals = useSettings().data?.approvals ?? {};
+  const denied = effectivePolicy(tool.risk, approvals[tool.toolName]) === "deny";
   const name = tool.title || tool.name;
   return (
-    <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
-      {/* Denied reads as struck through plus a badge, never dimmed: dimming fails text contrast. */}
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <RiskIcon risk={tool.risk} t={t} />
-          <span className={cn("min-w-0 truncate text-sm font-medium", denied && "line-through decoration-danger decoration-2")} title={name}>
-            {name}
-          </span>
-          {tool.title && <code className="min-w-0 truncate font-mono text-xs text-fg-muted">{tool.name}</code>}
-          <Badge tone={tool.riskSource === "user" ? "accent" : "neutral"} className="h-5">
-            {t[`rsrc_${tool.riskSource}`]}
-          </Badge>
+    <ToolPolicyRow
+      as="li"
+      className="px-4"
+      tool={policyTool(tool)}
+      description={tool.description}
+      code={tool.title ? tool.name : undefined}
+      badges={
+        <>
+          {tool.riskSource === "user" && (
+            <Badge tone="accent" className="h-5">
+              {t.rsrc_user}
+            </Badge>
+          )}
           {denied && (
             <Badge tone="danger" className="h-5">
               <Ban aria-hidden />
               {t.toolHidden}
             </Badge>
           )}
-        </p>
-        {tool.description && (
-          <p className="mt-1 line-clamp-2 text-xs break-words text-fg-muted" title={tool.description}>
-            {tool.description}
-          </p>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-        <Segmented<Risk>
-          label={`${t.riskLabel}: ${name}`}
-          size="sm"
-          value={tool.risk}
-          onChange={(risk) => setRisk.mutate({ connector, tool: tool.name, risk }, { onError: notifyError })}
-          options={RISKS.map((r) => {
+        </>
+      }
+      menu={
+        <Menu
+          trigger={
+            <IconButton label={`${t.editRisk}: ${name}`} size="icon-sm">
+              <SlidersHorizontal aria-hidden />
+            </IconButton>
+          }
+        >
+          {RISKS.map((r) => {
             const Icon = riskIcon[r];
-            return { value: r, label: <span className="max-[30rem]:sr-only">{t[`riskShort_${r}`]}</span>, icon: <Icon aria-hidden />, ariaLabel: t[`risk_${r}`] };
+            return (
+              <MenuItem key={r} icon={<Icon aria-hidden className="size-4" />} onClick={() => r !== tool.risk && setRisk.mutate({ connector, tool: tool.name, risk: r }, { onError: notifyError })}>
+                <span className="flex-1">{t.treatAs(t[`riskPhrase_${r}`])}</span>
+                {r === tool.risk && <Check aria-hidden className="size-4 text-accent-text" />}
+              </MenuItem>
+            );
           })}
-        />
-        <LivePolicyControl toolKey={tool.toolName} risk={tool.risk} className="sm:w-48" />
-        {tool.riskSource === "user" ? (
-          <IconButton label={`${t.resetRisk}: ${name}`} size="icon-sm" onClick={() => setRisk.mutate({ connector, tool: tool.name, risk: null }, { onError: notifyError })}>
-            <RotateCcw aria-hidden />
-          </IconButton>
-        ) : (
-          // Keeps the controls of every row in one column.
-          <span aria-hidden className="hidden size-8 sm:block" />
-        )}
-      </div>
-    </li>
+          {tool.riskSource === "user" && (
+            <>
+              <MenuSeparator />
+              <MenuItem icon={<RotateCcw aria-hidden className="size-4" />} onClick={() => setRisk.mutate({ connector, tool: tool.name, risk: null }, { onError: notifyError })}>
+                {t.resetRisk}
+              </MenuItem>
+            </>
+          )}
+        </Menu>
+      }
+    />
   );
 }
 

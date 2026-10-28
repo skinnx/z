@@ -1,23 +1,45 @@
 /** The one offline/error path: a bar while the server can't be reached, and the view for a screen that failed to load. */
-import { CloudOff, RotateCw } from "lucide-react";
-import { Component, type ReactNode } from "react";
+import { RotateCw, ServerCrash, WifiOff } from "lucide-react";
+import { Component, useEffect, useRef, type ReactNode } from "react";
 import { useRouteError } from "react-router";
-import { unreachable } from "../api/client.ts";
+import { deviceOffline, unreachable } from "../api/client.ts";
 import { queryClient } from "../api/query.ts";
 import { useT } from "../i18n.ts";
 import { Button } from "../ui/button.tsx";
 import { LoadError } from "../ui/card.tsx";
 
-/** Shown above every screen while the z server can't be reached; it clears itself on the next answer. */
+const SERVER_RETRY_MS = 10_000;
+const refetchActive = () => void queryClient.refetchQueries({ type: "active" });
+
+/**
+ * Shown above every screen while the z server can't be reached; it clears itself on the next answer.
+ * It says whether the device is offline or the server is down, refetches as soon as the device is
+ * back online, and while the server is down retries on its own every 10 s.
+ */
 export function OfflineBar() {
   const t = useT();
   const down = unreachable.use();
+  const offline = deviceOffline.use();
+  const wasOffline = useRef(offline);
+
+  useEffect(() => {
+    if (wasOffline.current && !offline) refetchActive();
+    wasOffline.current = offline;
+  }, [offline]);
+
+  useEffect(() => {
+    if (!down || offline) return;
+    const id = setInterval(refetchActive, SERVER_RETRY_MS);
+    return () => clearInterval(id);
+  }, [down, offline]);
+
   if (!down) return null;
+  const Icon = offline ? WifiOff : ServerCrash;
   return (
-    <div role="status" className="sticky top-0 z-20 flex items-center gap-3 border-b border-warn/40 bg-warn-soft px-4 py-2 text-sm text-fg">
-      <CloudOff aria-hidden className="size-4 shrink-0 text-warn" />
-      <p className="min-w-0 flex-1">{t.offline}</p>
-      <Button size="sm" onClick={() => void queryClient.refetchQueries({ type: "active" })}>
+    <div role="status" data-offline={offline ? "device" : "server"} className="sticky top-0 z-20 flex items-center gap-3 border-b border-warn/40 bg-warn-soft px-4 py-2 text-sm text-fg">
+      <Icon aria-hidden className="size-4 shrink-0 text-warn" />
+      <p className="min-w-0 flex-1">{offline ? t.offlineDevice : t.offlineServer}</p>
+      <Button size="sm" onClick={refetchActive}>
         <RotateCw aria-hidden />
         {t.retry}
       </Button>
