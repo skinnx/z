@@ -177,6 +177,12 @@ const MIGRATIONS: string[] = [
   );
   `,
   // ─── End connectors ───────────────────────────────────────────────────────
+  // ─── Approvals: full preview and why it asks ──────────────────────────────
+  `
+  ALTER TABLE approvals ADD COLUMN preview TEXT;    -- JSON ApprovalPreview
+  ALTER TABLE approvals ADD COLUMN reason TEXT;
+  `,
+  // ─── End approvals ────────────────────────────────────────────────────────
 ];
 
 export function openDatabase(dataDir: string): DatabaseSync {

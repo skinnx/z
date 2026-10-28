@@ -437,6 +437,9 @@ function ToolCall({ part, onApprove }: { part: ToolUIPart | DynamicToolUIPart; o
             {json(part.state === "output-available" ? { input: part.input, output: part.output } : part.state === "output-error" ? { input: part.input, error: part.errorText } : { input: part.input })}
           </pre>
         </Disclosure>
+        {state === "approval-requested" && part.approval?.requestReason && (
+          <p className="mt-1 text-xs text-warn">{t.askingBecause(part.approval.requestReason)}</p>
+        )}
         {state === "approval-requested" && part.approval && (
           <div className="mt-1 flex flex-wrap gap-2">
             <Button size="sm" variant="primary" onClick={() => onApprove(part.approval!.id, true)}>

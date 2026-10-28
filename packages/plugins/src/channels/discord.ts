@@ -184,6 +184,7 @@ export const discordAdapter: ChannelAdapter = {
   kind: "discord",
   label: "Discord",
   config: [{ key: "botToken", label: "Bot token", secret: true, required: true }],
+  noticeLimit: 2000,
   send: async (runtime, threadId, message) => {
     await postMessage(runtime, threadId, {
       content: truncate(message.text, 2000),

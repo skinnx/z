@@ -1,4 +1,4 @@
-import type { Approval } from "@z/core";
+import type { Approval, ApprovalPreview } from "@z/core";
 import { Check, ShieldCheck, X } from "lucide-react";
 import { useDecide } from "../api/approvals.ts";
 import { useT } from "../i18n.ts";
@@ -37,6 +37,8 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
             <span aria-hidden>·</span>
             <time dateTime={approval.createdAt}>{relativeTime(approval.createdAt)}</time>
           </p>
+          {approval.reason && <p className="mt-2 text-sm text-warn">{t.askingBecause(approval.reason)}</p>}
+          <ApprovalPreviewView preview={approval.preview} />
           <Disclosure summary={t.input} className="mt-1">
             <pre className="mt-1 max-h-60 overflow-auto rounded-lg bg-subtle p-3 font-mono text-xs leading-relaxed">{json(approval.input)}</pre>
           </Disclosure>
@@ -59,5 +61,21 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
         </Button>
       </div>
     </article>
+  );
+}
+
+/** Everything the approval acts on, nothing cut: short fields inline, long ones (the body) as scrollable text. */
+function ApprovalPreviewView({ preview }: { preview: ApprovalPreview }) {
+  if (!preview.fields.length) return null;
+  const long = (value: string) => value.includes("\n") || value.length > 80;
+  return (
+    <dl className="mt-3 flex flex-col gap-2 rounded-lg bg-subtle p-3 text-sm">
+      {preview.fields.map((field, i) => (
+        <div key={i} className={long(field.value) ? "flex flex-col gap-1" : "flex flex-wrap items-baseline gap-x-2"}>
+          <dt className="text-xs font-medium text-fg-muted">{field.label}</dt>
+          <dd className={cn("min-w-0 break-words", long(field.value) && "max-h-80 overflow-auto whitespace-pre-wrap")}>{field.value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

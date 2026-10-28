@@ -10,7 +10,9 @@ import { RiskIcon } from "../../lib/icons.tsx";
 import { Button } from "../../ui/button.tsx";
 import { Empty, Loading } from "../../ui/card.tsx";
 import { Input } from "../../ui/field.tsx";
-import { RowGroup } from "../../ui/row.tsx";
+import { useSaveSetting, useSettings } from "../../api/settings.ts";
+import { Row, RowGroup } from "../../ui/row.tsx";
+import { Switch } from "../../ui/switch.tsx";
 
 type Tool = { key: string; name: string; description: string; risk: Risk; declared?: Policy };
 type Group = { id: string; label: string; tools: Tool[] };
@@ -57,6 +59,7 @@ export function ApprovalsPanel() {
 
   return (
     <div className="flex flex-col gap-1">
+      <ReviewerRow />
       <p className="pt-3 text-xs text-fg-muted">{t.approvalsHint}</p>
       <div className="sticky top-0 z-10 -mx-5 flex items-center gap-3 bg-surface px-5 py-3">
         <div className="relative min-w-0 flex-1">
@@ -79,6 +82,28 @@ export function ApprovalsPanel() {
         filtered.map((g) => <ToolGroup key={`${g.id}|${q}`} group={g} />)
       )}
     </div>
+  );
+}
+
+/** The action reviewer: off, every change set to Ask asks; auto, what the owner explicitly asked for runs. */
+function ReviewerRow() {
+  const t = useT();
+  const settings = useSettings();
+  const { save, saved } = useSaveSetting();
+  if (!settings.data) return null;
+  return (
+    <RowGroup>
+      <Row label={t.reviewer} hint={t.reviewerHint} saved={saved}>
+        {({ labelId, hintId }) => (
+          <Switch
+            aria-labelledby={labelId}
+            aria-describedby={hintId}
+            checked={settings.data.reviewer === "auto"}
+            onCheckedChange={(on) => save({ reviewer: on ? "auto" : "off" })}
+          />
+        )}
+      </Row>
+    </RowGroup>
   );
 }
 
