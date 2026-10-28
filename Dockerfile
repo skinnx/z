@@ -7,7 +7,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile && pnpm --filter @z/web build
 
 FROM base
-ENV NODE_ENV=production Z_DATA_DIR=/data PORT=8787
+ENV NODE_ENV=production Z_DATA_DIR=/data PORT=8787 Z_HOST=0.0.0.0
 COPY --from=build /app /app
 VOLUME /data
 EXPOSE 8787

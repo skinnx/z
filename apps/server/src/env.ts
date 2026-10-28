@@ -4,6 +4,8 @@ import { join, resolve } from "node:path";
 
 export type Env = {
   port: number;
+  /** Interface to listen on. Loopback unless Z_HOST says otherwise. */
+  host: string;
   dataDir: string;
   masterKey: Buffer;
   token: string | null;
@@ -16,11 +18,13 @@ export type Env = {
 export function loadEnv(): Env {
   const dataDir = resolve(process.env.Z_DATA_DIR ?? "./.data");
   mkdirSync(dataDir, { recursive: true });
+  const host = process.env.Z_HOST?.trim() || "127.0.0.1";
   return {
     port: Number(process.env.PORT ?? 8787),
+    host,
     dataDir,
     masterKey: loadMasterKey(dataDir),
-    token: process.env.Z_TOKEN || null,
+    token: process.env.Z_TOKEN || (isLoopback(host) ? null : loadAccessToken(dataDir)),
     publicUrl: process.env.Z_PUBLIC_URL?.replace(/\/+$/, "") || null,
     plugins: (process.env.Z_PLUGINS ?? "")
       .split(",")
@@ -28,6 +32,21 @@ export function loadEnv(): Env {
       .filter(Boolean),
     allowPrivateMcp: process.env.Z_ALLOW_PRIVATE_MCP === "1",
   };
+}
+
+export const isLoopback = (host: string) => host === "localhost" || host === "::1" || host.startsWith("127.");
+
+/**
+ * Reachable beyond this machine without Z_TOKEN: never run open. Use (or create) a random token in the
+ * data dir; the log names the file, never the token.
+ */
+function loadAccessToken(dataDir: string): string {
+  const file = join(dataDir, "access.token");
+  if (existsSync(file)) return readFileSync(file, "utf8").trim();
+  const token = randomBytes(24).toString("base64url");
+  writeFileSync(file, `${token}\n`, { mode: 0o600 });
+  console.log(`[z] Listening beyond localhost without Z_TOKEN: generated an access token in ${file}. Enter it in the web app.`);
+  return token;
 }
 
 function loadMasterKey(dataDir: string): Buffer {
