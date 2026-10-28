@@ -119,6 +119,39 @@ test("outbox: gives up after MAX_DELIVERY_ATTEMPTS and marks the delivery failed
   assert.equal(channel.sends.length, MAX_DELIVERY_ATTEMPTS, "nothing after giving up");
 });
 
+test("outbox: a channel send slower than the lease is not sent again; its lease is renewed meanwhile", async () => {
+  const time = clock();
+  const sends: string[] = [];
+  let releaseFirst!: () => void;
+  const channels: Transports["channels"] = {
+    noticeLimit: () => 4000,
+    // The first send stalls (a 429 retry_after, a hung connection) past the 60 s lease.
+    send: async (_id, _thread, message) => {
+      const n = sends.push(message.text);
+      if (n === 1) await new Promise<void>((r) => (releaseFirst = r));
+      return `msg-${n}`;
+    },
+    edit: async () => true,
+  };
+  const z = setup({ now: time.now, transports: { push: noPush, channels } });
+  pairOwner(z.store);
+
+  const first = notify({ kind: "task", title: "Ready for review · report", body: "All green.", path: "/" });
+  await until(() => sends.length === 1, "the first send to start");
+  time.advance(61_000);
+  notify({ kind: "task", title: "Ready for review · other", body: "x", path: "/" }); // runs every due delivery
+  await until(() => sends.length === 2, "the second notice to send");
+  const leased = channelDelivery(z.store, first);
+  assert.equal(leased.status, "pending");
+  assert.ok(Date.parse(leased.nextAttemptAt!) > time.now().getTime(), "the in-flight delivery's lease was renewed");
+  await z.outbox.runDue();
+
+  releaseFirst();
+  await z.outbox.drain();
+  assert.equal(sends.filter((s) => s.includes("report")).length, 1, "the slow notice is sent once");
+  assert.deepEqual([channelDelivery(z.store, first).status, channelDelivery(z.store, first).ref], ["sent", "msg-1"]);
+});
+
 test("outbox: a restart mid-backoff resumes the waiting delivery when it is due", async () => {
   const time = clock();
   const before = fakeChannel(1);

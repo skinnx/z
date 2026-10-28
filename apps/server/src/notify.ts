@@ -138,6 +138,8 @@ export function createOutbox(rt: Pick<Runtime, "store" | "env">, { push, channel
   const { store } = rt;
   const iso = (ms: number) => new Date(ms).toISOString();
   const flights = new Set<Promise<void>>();
+  /** Deliveries being attempted by this process: never attempted twice, however long a send takes. */
+  const attempting = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
 
@@ -205,12 +207,21 @@ export function createOutbox(rt: Pick<Runtime, "store" | "env">, { push, channel
     }
   }
 
-  /** Attempt every due delivery once (each is leased first, so overlapping calls never double-send). */
+  /**
+   * Attempt every due delivery once. Each is leased first, so a crash mid-attempt retries it after a
+   * restart; one still in flight here (a send slower than the lease) only has its lease renewed.
+   */
   function runDue(): Promise<void> {
     const at = now();
     const due = store.outbox.due(iso(at));
     for (const d of due) store.outbox.update(d.id, { nextAttemptAt: iso(at + LEASE_MS) }, iso(at));
-    const flight = Promise.all(due.map((d) => attempt(d).catch((error) => console.error(`[z:outbox] ${describeError(error)}`)))).then(() => {
+    const fresh = due.filter((d) => !attempting.has(d.id));
+    for (const d of fresh) attempting.add(d.id);
+    const run = (d: DeliveryRecord) =>
+      attempt(d)
+        .catch((error) => console.error(`[z:outbox] ${describeError(error)}`))
+        .finally(() => attempting.delete(d.id));
+    const flight = Promise.all(fresh.map(run)).then(() => {
       flights.delete(flight);
       arm();
     });
